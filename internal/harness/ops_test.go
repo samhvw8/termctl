@@ -278,3 +278,28 @@ func TestInterrupt(t *testing.T) {
 		t.Fatal("opencode is not verified")
 	}
 }
+
+func TestSubmitPressesEnterAgainWhenTheTextStays(t *testing.T) {
+	r := newOps(t)
+	r.b.DropEnters = 1
+	if _, err := r.ops.Msg(r.t, "long text", MsgOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"text:" + tag + " long text", "key:enter", "key:enter"}
+	if !reflect.DeepEqual(typed(r), want) {
+		t.Fatal(typed(r))
+	}
+	if r.b.State[r.t.ID].Input != "" {
+		t.Fatal("still in the input line")
+	}
+}
+
+func TestSubmitFailsLoudlyWhenTheTextNeverGoes(t *testing.T) {
+	r := newOps(t)
+	r.b.DropEnters = 100
+	_, err := r.ops.Msg(r.t, "stuck", MsgOpts{})
+	wantCode(t, err, 4)
+	if !strings.Contains(err.Error(), "not submitted") {
+		t.Fatal(err)
+	}
+}

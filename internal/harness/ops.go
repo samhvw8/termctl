@@ -16,6 +16,8 @@ const (
 	MaxInline      = 800 // longer messages, or multi-line ones, go through a file
 	enterDelay     = 0.4 // TUIs drop an Enter that arrives with the pasted text
 	settle         = 0.5 // let the screen react to what we sent before judging it
+	submitSettle = 0.7 // how long a TUI gets to take a submitted line off its input
+	submitRetries = 3
 	poll           = 0.25
 	DefaultTimeout = 120.0
 	captureLines   = 200
@@ -138,13 +140,35 @@ func (o *Ops) assertAlone(p *term.Pane, prof *Profile, force bool) error {
 	return nil
 }
 
-// Submit types one line and presses Enter.
-func (o *Ops) Submit(p *term.Pane, line string) error {
+// Submit types one line and presses Enter. A TUI can drop an Enter that arrives while long text
+// is still being taken in, so it checks that the text left the input line and presses Enter again.
+func (o *Ops) Submit(p *term.Pane, line string, prof *Profile) error {
+	if prof == nil {
+		prof = ForProcess(p.Process)
+	}
 	if err := o.Backend.SendText(p, line); err != nil {
 		return err
 	}
 	o.Clock.Sleep(enterDelay)
-	return o.Backend.SendKey(p, "enter")
+	if err := o.Backend.SendKey(p, "enter"); err != nil {
+		return err
+	}
+	for try := 0; ; try++ {
+		o.Clock.Sleep(submitSettle)
+		d, err := o.draft(p, prof)
+		if err != nil {
+			return err
+		}
+		if d == nil || *d == "" {
+			return nil
+		}
+		if try == submitRetries {
+			return term.Errf(term.CodeDraft, "%s: %q was typed but not submitted; it is still on the input line", p.Address(), term.Cut(line, 80))
+		}
+		if err := o.Backend.SendKey(p, "enter"); err != nil {
+			return err
+		}
+	}
 }
 
 // Interrupt stops the harness's current turn; it returns the keys sent and whether they are known to work.
@@ -218,7 +242,7 @@ func (o *Ops) Slash(p *term.Pane, command string, force, wait bool, timeout floa
 	if err := o.assertAlone(p, prof, force); err != nil {
 		return err
 	}
-	if err := o.Submit(p, command); err != nil {
+	if err := o.Submit(p, command, prof); err != nil {
 		return err
 	}
 	if wait {
@@ -322,7 +346,7 @@ func (o *Ops) Msg(p *term.Pane, text string, opts MsgOpts) (string, error) {
 		line = tag + " " + text
 	}
 	line = Flat(line)
-	return line, o.Submit(p, line)
+	return line, o.Submit(p, line, prof)
 }
 
 // Flat removes what would end or corrupt a typed line.
@@ -394,7 +418,7 @@ func (o *Ops) Spawn(harness, where, cwd string, opts SpawnOpts) (*term.Pane, err
 		if err != nil {
 			return p, err
 		}
-		if err := o.Submit(p, line); err != nil {
+		if err := o.Submit(p, line, prof); err != nil {
 			return p, err
 		}
 	}

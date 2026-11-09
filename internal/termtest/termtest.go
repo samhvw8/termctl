@@ -36,6 +36,7 @@ type Fake struct {
 	KeepClearText bool
 	FailList      bool
 	FailSpawn     bool
+	DropEnters    int // this many Enters are ignored, as a TUI does when text is still pasting
 	Ref           map[string]string
 	Spawned       []string
 }
@@ -93,6 +94,10 @@ func (f *Fake) SendKey(p *term.Pane, key string) error {
 	f.Events = append(f.Events, Event{Kind: "key", Pane: p.ID, Text: key, Busy: st.Busy})
 	switch key {
 	case "enter":
+		if f.DropEnters > 0 {
+			f.DropEnters--
+			return nil
+		}
 		line := st.Input
 		st.Input = ""
 		if line == "/clear" {

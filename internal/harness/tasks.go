@@ -406,7 +406,11 @@ func (t *Tasks) start(ops *Ops, owner *term.Pane, o NewOpts, id, brief string, p
 			return err
 		}
 	}
-	return ops.Submit(pane, prompt(id, owner, brief, path))
+	prof := Profiles[o.Harness] // a just-spawned pane's process is not known yet
+	if prof == nil {
+		prof = Profiles["generic"]
+	}
+	return ops.Submit(pane, prompt(id, owner, brief, path), prof)
 }
 
 func (t *Tasks) record(d *Data, p *term.Pane, harness, label, cwd string, ref map[string]string) {
