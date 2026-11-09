@@ -78,10 +78,18 @@ class Ops:
 
     # --- typing --------------------------------------------------------
 
-    def _submit(self, pane: Pane, line: str) -> None:
+    def submit(self, pane: Pane, line: str) -> None:
         self.backend.send_text(pane, line)
         self.sleep(ENTER_DELAY)
         self.backend.send_key(pane, "enter")
+
+    def interrupt(self, pane: Pane, key: str | None = None) -> tuple[tuple[str, ...], bool]:
+        """Stop the harness's current turn. Returns (keys sent, whether those keys are known to work)."""
+        prof = for_process(pane.process)
+        keys = (key,) if key else prof.interrupt_keys
+        for k in keys:
+            self.backend.send_key(pane, k)
+        return keys, bool(key) or prof.interrupt_verified
 
     # --- idle ----------------------------------------------------------
 
@@ -115,7 +123,7 @@ class Ops:
         if not prof.slash:
             raise UsageError(f"{prof.name} has no slash commands")
         self._assert_alone(pane, prof, force)
-        self._submit(pane, command)
+        self.submit(pane, command)
         if wait:
             self.wait_idle(pane, timeout, prof)
 
@@ -140,19 +148,22 @@ class Ops:
         f.write_text(body)
         return f
 
-    def msg(self, pane: Pane, text: str, force: bool = False, clear_first: bool = False, timeout: float = DEFAULT_TIMEOUT) -> str:
+    def assert_cleared(self, pane: Pane, prof: Profile) -> None:
+        """Leftover text means /clear never ran; typing now would rebuild the joined line."""
+        left = self._draft(pane, prof)
+        if left:
+            raise DraftError(f"input line of {pane.address} still holds {left[:80]!r} after /clear; message not sent")
+
+    def msg(self, pane: Pane, text: str, force: bool = False, clear_first: bool = False, timeout: float = DEFAULT_TIMEOUT,
+            tag: str | None = None) -> str:
         text = text.strip()
         if not text:
             raise UsageError("empty message")
-        tag = self._tag()
+        tag = tag or self._tag()
         prof = for_process(pane.process)
         if clear_first:
             self.clear(pane, force=force, timeout=timeout)
-            # Even with --force: leftover text here means /clear never ran, and
-            # typing now would rebuild the joined line this option exists to stop.
-            left = self._draft(pane, prof)
-            if left:
-                raise DraftError(f"input line of {pane.address} still holds {left[:80]!r} after /clear; message not sent")
+            self.assert_cleared(pane, prof)  # even with --force
         else:
             self._check_draft(pane, prof, force)
         if "\n" in text or len(text) > MAX_INLINE:
@@ -161,13 +172,14 @@ class Ops:
         else:
             line = f"{tag} {text}"
         line = line.replace("\r", " ").replace("\x1b", "")
-        self._submit(pane, line)
+        self.submit(pane, line)
         return line
 
     # --- spawn ---------------------------------------------------------
 
     def spawn(self, harness: str, where: str, cwd: str | None, prompt: str | None = None, prompt_file: str | None = None,
-              label: str | None = None, command: str | None = None, timeout: float = DEFAULT_TIMEOUT) -> Pane:
+              label: str | None = None, command: str | None = None, timeout: float = DEFAULT_TIMEOUT,
+              title: str | None = None, on_created=None) -> Pane:
         if prompt is not None and prompt_file is not None:
             raise UsageError("use --prompt or --prompt-file, not both")
         if harness not in PROFILES and not command:
@@ -181,12 +193,14 @@ class Ops:
             if not path.is_file():
                 raise UsageError(f"--prompt-file: no such file: {path}")
             prompt = path.read_text()
-        pane = self.backend.spawn(where, cmd, cwd=cwd, title=label)
+        pane = self.backend.spawn(where, cmd, cwd=cwd, title=title or label)
+        if on_created:  # before the wait: a harness that never gets ready must stay closable
+            on_created(pane)
         if label:
             self.backend.set_label(pane, label)
         self.wait_idle(pane, timeout, prof)
         if prompt is not None and prompt.strip():
-            self._submit(pane, self._first_line(prompt, prompt_file, pane))
+            self.submit(pane, self._first_line(prompt, prompt_file, pane))
         return pane
 
     def _first_line(self, prompt: str, prompt_file: str | None, pane: Pane) -> str:

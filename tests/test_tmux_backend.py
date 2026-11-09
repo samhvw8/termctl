@@ -99,3 +99,18 @@ def test_missing_server_is_a_backend_error():
     assert b.available() is False
     with pytest.raises(BackendError):
         b.capture(type("P", (), {"native": "%0", "id": "tmux:%0"})(), 5)
+
+
+def test_no_server_means_no_panes():
+    b = TmuxBackend(socket="termctl-test-none")
+    subprocess.run(["tmux", "-L", "termctl-test-none", "kill-server"], capture_output=True)
+    assert b.list_panes() == []
+
+
+def test_server_ref_reopens_the_same_server(backend):
+    p = backend.spawn("tab", "sleep 30", title="reach")
+    ref = backend.server_ref()
+    assert ref["socket_path"] and ref["pid"]
+    again = TmuxBackend(socket_path=ref["socket_path"])
+    assert p.id in {x.id for x in again.list_panes()}
+    assert again.server_ref() == ref

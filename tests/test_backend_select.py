@@ -50,3 +50,8 @@ def test_backend_is_abstract():
 def test_trim_screen_turns_nul_cells_into_spaces():
     # iTerm2 returns NUL for cells a TUI never wrote (Claude's input box, seen 2026-11-09).
     assert trim_screen(["half\x00typed\x00draft", ""], 10) == ["half typed draft"]
+
+
+def test_iterm2_backend_is_one_per_process():
+    """A second instance would hang: iTerm's library binds its global App to the first connection."""
+    assert make("iterm2") is make("iterm2")

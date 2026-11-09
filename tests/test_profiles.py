@@ -158,3 +158,15 @@ def test_opencode_draft():
 
 def test_opencode_no_box():
     assert PROFILES["opencode"].read_input(["nothing here"]) is None
+
+
+def test_claude_working_line_from_a_real_turn():
+    p = PROFILES["claude"]
+    assert p.busy(["✽ Gesticulating… (6s · ↓ 243 tokens · thought for 3s)", RULE, "❯", RULE, "  status"])
+    assert p.busy(["· Forming… (running Stop hook · 12s · ↓ 329 tokens)", RULE, "❯", RULE])
+    assert p.busy(["· Pouncing… (6s · ↓ 82 tokens · thinking)", RULE, "❯", RULE])
+    assert not p.busy(["✻ Churned for 50s · done 7:22 PM", RULE, "❯", RULE])
+
+
+def test_omp_working_line_from_a_real_turn():
+    assert PROFILES["omp"].busy(["  󱊷 Working…", "╰─"])

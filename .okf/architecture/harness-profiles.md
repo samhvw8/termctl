@@ -3,7 +3,7 @@ type: Architecture
 title: Harness profiles
 description: How harness-ops recognises a harness, reads its input line and decides it is idle.
 tags: [architecture, harness]
-generated: { by: claude-code/opus-5.5, at: '2026-11-09T01:30:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-09T03:40:00Z' }
 ---
 
 # Profile fields
@@ -22,6 +22,10 @@ Parsers were checked against screens of real harnesses on 2026-11-09. A scratch 
 | omp | `╰─` | Calibrated. ctrl-u clears. Braille spinner marks busy. |
 | opencode | `┃` box above `╹▀` | Read on a fresh screen only. Placeholder `Ask anything…` is treated as empty. Not marked calibrated. |
 | codex, gemini, aider, pi | generic | Not installed or not checked. Uncalibrated: warn and proceed. |
+
+# Busy lines from real turns
+
+Claude shows `✽ Gesticulating… (6s · ↓ 243 tokens)`, and the wording changes; `esc to interrupt` did not appear. The match is a word, `…`, then `(`. omp shows `Working…` or a braille spinner.
 
 # Idle rule
 

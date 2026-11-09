@@ -14,6 +14,7 @@ from .base import WHERE, Backend, check_text, normalize_key, trim_screen
 
 NATIVE_IT2 = "/Applications/iTerm.app/Contents/Resources/utilities/it2"
 LABEL_VAR = "user.agent"
+API_TIMEOUT = 30.0  # a stalled API call must fail, not hang every caller
 KEYS = {
     "enter": "\r", "escape": "\x1b", "tab": "\t", "backspace": "\x7f",
     "up": "\x1b[A", "down": "\x1b[B", "right": "\x1b[C", "left": "\x1b[D",
@@ -48,7 +49,7 @@ class ITerm2Backend(Backend):
                     "(Settings > General > Magic > Enable Python API)?"
                 ) from e
         try:
-            return self._loop.run_until_complete(coro_fn(iterm2, self._conn))
+            return self._loop.run_until_complete(asyncio.wait_for(coro_fn(iterm2, self._conn), API_TIMEOUT))
         except (BackendError, UsageError):
             raise
         except Exception as e:

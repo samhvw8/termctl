@@ -9,6 +9,7 @@ from .base import Backend
 
 NAMES = ("iterm2", "tmux", "rex", "ghostty")
 ITERM_APP = Path("/Applications/iTerm.app")
+_iterm2_instance: Backend | None = None
 
 
 def detect(env=None, iterm_installed: bool | None = None) -> str | None:
@@ -24,15 +25,23 @@ def detect(env=None, iterm_installed: bool | None = None) -> str | None:
     return "iterm2" if installed else None
 
 
-def make(name: str, socket: str | None = None) -> Backend:
-    if name == "iterm2":
+def _iterm2() -> Backend:
+    """One per process: iTerm's library keeps a global App tied to the first connection."""
+    global _iterm2_instance
+    if _iterm2_instance is None:
         from .iterm2_backend import ITerm2Backend
 
-        return ITerm2Backend()
+        _iterm2_instance = ITerm2Backend()
+    return _iterm2_instance
+
+
+def make(name: str, socket: str | None = None, socket_path: str | None = None) -> Backend:
+    if name == "iterm2":
+        return _iterm2()
     if name == "tmux":
         from .tmux import TmuxBackend
 
-        return TmuxBackend(socket=socket)
+        return TmuxBackend(socket=socket, socket_path=socket_path)
     if name == "rex":
         from .rex import RexBackend
 

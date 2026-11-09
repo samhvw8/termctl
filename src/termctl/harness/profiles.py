@@ -12,6 +12,8 @@ from typing import Callable
 RULE = re.compile(r"^─{10,}$")
 # An empty Claude Code box shows a suggestion ("Try ..."). It is not a draft.
 CLAUDE_PLACEHOLDER = re.compile(r'Try ".*"')
+# "✽ Gesticulating… (6s · ↓ 243 tokens)" while a turn runs; a finished turn has no "…(".
+CLAUDE_WORKING = re.compile(r"^\s*\S\s+\S+…\s*\(", re.M)
 OPENCODE_PLACEHOLDER = re.compile(r"Ask anything….*")
 
 
@@ -96,6 +98,8 @@ class Profile:
     read_input: Callable[[list[str]], str | None] = generic_input
     stable_view: Callable[[list[str]], list[str]] = _same
     busy_patterns: tuple[re.Pattern, ...] = field(default=())
+    interrupt_keys: tuple[str, ...] = ("escape",)
+    interrupt_verified: bool = False  # the keys were seen to stop a real turn
 
     def busy(self, lines: list[str]) -> bool:
         tail = _bottom(lines, 12)
@@ -106,20 +110,22 @@ PROFILES: dict[str, Profile] = {
     "claude": Profile(
         "claude", ("claude",), "claude", calibrated=True, prompt_required=True,
         read_input=claude_input, stable_view=claude_stable_view,
-        busy_patterns=(re.compile(r"esc to interrupt", re.I),),
+        busy_patterns=(re.compile(r"esc to interrupt", re.I), CLAUDE_WORKING),
+        interrupt_verified=True,
     ),
     "omp": Profile(
         "omp", ("omp",), "omp", calibrated=True, prompt_required=True,
         read_input=omp_input, stable_view=omp_stable_view,
-        busy_patterns=(re.compile(r"^\s*[⠀-⣿]\s", re.M),),
+        busy_patterns=(re.compile(r"^\s*[⠀-⣿]\s", re.M), re.compile(r"Working…")),
+        interrupt_verified=True,
     ),
     # Input box read on a fresh screen only; not calibrated once a conversation is on screen.
     "opencode": Profile("opencode", ("opencode",), "opencode", read_input=opencode_input),
     "codex": Profile("codex", ("codex",), "codex"),
     "gemini": Profile("gemini", ("gemini",), "gemini"),
-    "aider": Profile("aider", ("aider",), "aider"),
+    "aider": Profile("aider", ("aider",), "aider", interrupt_keys=("ctrl-c",)),
     "pi": Profile("pi", ("pi",), "pi"),
-    "generic": Profile("generic", prompt_required=True),
+    "generic": Profile("generic", prompt_required=True, interrupt_keys=("ctrl-c",)),
 }
 
 _BY_PROCESS = {proc: prof for prof in PROFILES.values() for proc in prof.processes}

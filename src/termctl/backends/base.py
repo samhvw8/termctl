@@ -58,6 +58,10 @@ class Backend(ABC):
     def available(self) -> bool:
         return True
 
+    def server_ref(self) -> dict:
+        """What identifies this terminal server: enough to reopen it, and to notice a restart."""
+        return {}
+
 
 def trim_screen(lines: list[str], n: int) -> list[str]:
     lines = [ln.replace("\x00", " ").rstrip() for ln in lines]  # iTerm2 gives NUL for cells a TUI never wrote

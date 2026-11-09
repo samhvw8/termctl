@@ -29,3 +29,9 @@ class DraftError(TermctlError):
 
 class WaitTimeout(TermctlError):
     code = 5
+
+
+class GuardError(TermctlError):
+    """A safety limit refused this: task caps, spawn depth, or closing a pane that is not ours or is busy."""
+
+    code = 6

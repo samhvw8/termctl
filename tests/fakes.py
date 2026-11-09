@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from termctl.backends.base import Backend
+from termctl.errors import BackendError
 from termctl.pane import Pane
 
 
@@ -34,14 +35,24 @@ class FakeBackend(Backend):
         self.events: list[tuple] = []
         self.busy_after_clear = busy_after_clear
         self.keep_clear_text = False  # simulate an Enter that the harness ignored
+        self.natives: dict[str, str] = {}  # pane id -> terminal-reported status
+        self.fail_list = False  # list_panes raises BackendError
+        self.fail_spawn = False
 
     def list_panes(self):
+        if self.fail_list:
+            raise BackendError("backend down")
         return list(self.panes)
+
+    def native_status(self, pane):
+        return self.natives.get(pane.id)
 
     def self_pane(self):
         return self.me
 
     def spawn(self, where, cmd, cwd=None, title=None):
+        if self.fail_spawn:
+            raise BackendError("spawn failed")
         p = Pane(id=f"fake:{len(self.panes)}", backend="fake", native=str(len(self.panes)), title=title or "", folder=cwd or "", process="sh")
         self.panes.append(p)
         self.state[p.id] = FakePane()
@@ -76,6 +87,7 @@ class FakeBackend(Backend):
 
     def close(self, pane):
         self.events.append(("close", pane.id))
+        self.panes[:] = [p for p in self.panes if p.id != pane.id]
 
     def set_label(self, pane, label):
         self.events.append(("label", pane.id, label))

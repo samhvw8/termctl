@@ -23,10 +23,13 @@ KEYS = {
 class TmuxBackend(Backend):
     name = "tmux"
 
-    def __init__(self, socket: str | None = None):
+    def __init__(self, socket: str | None = None, socket_path: str | None = None):
         self.socket = socket
+        self.socket_path = socket_path
 
     def _argv(self, *args) -> list[str]:
+        if self.socket_path:
+            return ["tmux", "-S", self.socket_path, *args]
         return ["tmux", *(["-L", self.socket] if self.socket else []), *args]
 
     def _run(self, *args) -> str:
@@ -43,6 +46,13 @@ class TmuxBackend(Backend):
             return False
         return subprocess.run(self._argv("list-sessions"), capture_output=True).returncode == 0
 
+    def server_ref(self) -> dict:
+        try:
+            path, pid = self._run("display-message", "-p", "#{socket_path}" + SEP + "#{pid}").strip().split(SEP)
+        except (BackendError, ValueError):
+            return {}
+        return {"socket_path": path, "pid": pid}
+
     def _self_native(self) -> str:
         pane = os.environ.get("TMUX_PANE", "")
         tmux_env = os.environ.get("TMUX", "")
@@ -58,7 +68,12 @@ class TmuxBackend(Backend):
 
     def list_panes(self) -> list[Pane]:
         fmt = SEP.join("#{" + f + "}" for f in FIELDS)
-        out = self._run("list-panes", "-a", "-F", fmt)
+        try:
+            out = self._run("list-panes", "-a", "-F", fmt)
+        except BackendError as e:
+            if "no server running" in str(e) or "error connecting" in str(e):
+                return []  # a server that is not running has no panes
+            raise
         procs = processes_by_tty()
         me = self._self_native()
         panes: list[Pane] = []

@@ -13,7 +13,9 @@ from ..backends import NAMES, detect, make
 from ..backends.base import WHERE
 from ..errors import TermctlError, UsageError
 from ..resolve import resolve
-from .ops import DEFAULT_TIMEOUT, Ops, harness_name
+from .ops import DEFAULT_TIMEOUT, Ops, harness_name, warn
+from .registry import Registry
+from .tasks import WAIT_TIMEOUT, Tasks
 
 MSG_FLAGS = {"--force", "--clear-first", "--timeout", "--backend", "-L"}
 SLASH_FLAGS = {"--force", "--wait", "--timeout", "--backend", "-L"}
@@ -79,7 +81,7 @@ def _common(parser, suppress=True):
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="harness-ops", description="Talk to coding-agent panes.",
-                                 epilog="Exit codes: 0 ok, 1 backend error, 2 refused target/usage, 4 draft on input line, 5 wait timed out.")
+                                 epilog="Exit codes: 0 ok, 1 backend error, 2 refused target/usage, 4 draft on input line, 5 wait timed out, 6 refused by a safety limit.")
     _common(ap, suppress=False)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -136,6 +138,62 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--label", default=None)
     p.add_argument("--command", default=None, help="override the harness's start command")
     p.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
+
+    p = add("close", "close a pane created through spawn or task new")
+    p.add_argument("--force", action="store_true", help="also close panes that are busy or not ours; never your own")
+    p.add_argument("target")
+
+    p = add("interrupt", "stop a harness's current turn")
+    p.add_argument("--key", default=None, help="key to press instead of the harness's own (e.g. ctrl-c)")
+    p.add_argument("target")
+
+    task = sub.add_parser("task", help="one harness session doing one job, tracked in a registry")
+    tsub = task.add_subparsers(dest="task_cmd", required=True)
+
+    def tadd(name, helptext):
+        tp = tsub.add_parser(name, help=helptext)
+        _common(tp)
+        return tp
+
+    tp = tadd("new", "start a task and print its id")
+    tp.add_argument("harness")
+    tp.add_argument("--title", required=True)
+    tp.add_argument("--brief", default=None)
+    tp.add_argument("--brief-file", default=None)
+    tp.add_argument("--cwd", default=None)
+    tp.add_argument("--where", choices=WHERE, default="tab")
+    tp.add_argument("--reuse", default=None, metavar="TARGET", help="use this idle pane: /clear, then the brief")
+    tp.add_argument("--command", default=None, help="override the harness's start command")
+    tp.add_argument("--max", type=int, default=None, dest="max_tasks", help="running tasks allowed for this owner")
+    tp.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="seconds to wait for the harness")
+
+    tp = tadd("ls", "list tasks")
+    tp.add_argument("--all", action="store_true", help="every owner, and closed tasks")
+    tp.add_argument("--json", action="store_true")
+
+    tp = tadd("show", "show one task")
+    tp.add_argument("id")
+    tp.add_argument("--json", action="store_true")
+
+    tp = tadd("send", "send a message to a task's pane")
+    tp.add_argument("--force", action="store_true", help="send even when the input line holds a draft")
+    tp.add_argument("id")
+    tp.add_argument("text", nargs=argparse.REMAINDER)
+
+    tp = tadd("wait", "wait until a task stops running")
+    tp.add_argument("id", nargs="?", default=None)
+    tp.add_argument("--any", action="store_true", dest="any_task", help="the first of your running tasks to stop")
+    tp.add_argument("--timeout", type=float, default=WAIT_TIMEOUT)
+
+    tp = tadd("done", "report a task's result (called by the worker)")
+    tp.add_argument("id")
+    tp.add_argument("--status", required=True, choices=("ok", "failed", "blocked"))
+    tp.add_argument("--summary", default=None)
+    tp.add_argument("--summary-file", default=None)
+
+    tp = tadd("close", "close a task's pane")
+    tp.add_argument("--force", action="store_true", help="also close a running task")
+    tp.add_argument("id")
     return ap
 
 
@@ -149,8 +207,79 @@ def _message_text(args) -> str:
     return " ".join(words)
 
 
+def _sender_ref(args, backend, sender) -> dict:
+    if sender is None:
+        return {}
+    if sender.backend == backend.name:
+        return backend.server_ref()
+    return make(sender.backend, socket=getattr(args, "socket", None)).server_ref()
+
+
+def open_tasks(args, backend) -> Tasks:
+    sender = open_sender(args, backend)
+    return Tasks(Registry(), backend, sender=sender, sender_ref=_sender_ref(args, backend, sender))
+
+
+def _when(ts) -> str:
+    return time.strftime("%m-%d %H:%M", time.localtime(ts)) if ts else "-"
+
+
+def print_tasks(tasks: list[dict]) -> None:
+    print(f"{'ID':<9} {'STATUS':<8} {'HARNESS':<9} {'STARTED':<12} {'TITLE':<28} SUMMARY")
+    for t in tasks:
+        pending = " (owner not told yet)" if t.get("notify") == "pending" else ""
+        closed = " [closed]" if t.get("closed") else ""
+        summary = (t.get("summary") or "").replace("\n", " ")[:60]
+        print(f"{t['id']:<9} {t['status']:<8} {t.get('harness', ''):<9} {_when(t.get('started')):<12} "
+              f"{t.get('title', '')[:28]:<28} {summary}{pending}{closed}")
+
+
+def run_task(args) -> int:
+    cmd = args.task_cmd
+    tasks = open_tasks(args, open_backend(args, getattr(args, "reuse", None)))
+    if cmd == "new":
+        t = tasks.new(args.harness, title=args.title, brief=args.brief, brief_file=args.brief_file,
+                      cwd=args.cwd or os.getcwd(), where=args.where, reuse=args.reuse, command=args.command,
+                      max_tasks=args.max_tasks, timeout=args.timeout)
+        print(t["id"])
+    elif cmd == "ls":
+        found = tasks.ls(all=args.all)
+        if args.json:
+            print(json.dumps(found, indent=1, ensure_ascii=False))
+        else:
+            print_tasks(found)
+    elif cmd == "show":
+        t = tasks.get(args.id)
+        if args.json:
+            print(json.dumps(t, indent=1, ensure_ascii=False))
+        else:
+            for k in ("id", "status", "title", "harness", "pane", "owner", "cwd", "brief", "depth", "notify", "summary"):
+                print(f"{k + ':':<9} {t.get(k)}")
+            print(f"{'started:':<9} {_when(t.get('started'))}")
+            print(f"{'ended:':<9} {_when(t.get('ended'))}")
+    elif cmd == "send":
+        tasks.send(args.id, _message_text(args), force=args.force)
+        print(f"sent to task {args.id}")
+    elif cmd == "wait":
+        if bool(args.id) == bool(args.any_task):
+            raise UsageError("task wait needs a task id or --any, not both")
+        t = tasks.wait(args.id, any_task=args.any_task, timeout=args.timeout)
+        print_tasks([t])
+    elif cmd == "done":
+        t = tasks.done(args.id, args.status, summary=args.summary, summary_file=args.summary_file)
+        note = {"delivered": "owner told", "pending": "owner busy: notification pending",
+                "owner-gone": "owner pane is gone"}.get(t["notify"], t["notify"])
+        print(f"task {t['id']}: {t['status']} ({note})")
+    elif cmd == "close":
+        t = tasks.close(args.id, force=args.force)
+        print(f"closed task {t['id']}" + ("" if t.get("owned") else " (pane left open: it was not created for this task)"))
+    return 0
+
+
 def run(args) -> int:
     cmd = args.cmd
+    if cmd == "task":
+        return run_task(args)
     if cmd == "ls":
         names = [n for n in NAMES if n != "ghostty"] if args.all else [_backend_name(args)]
         panes = []
@@ -223,9 +352,21 @@ def run(args) -> int:
         print(f"cleared {pane.address[:8]}")
         return 0
     if cmd == "spawn":
-        pane = ops.spawn(args.harness, args.where, args.cwd or os.getcwd(), prompt=args.prompt,
-                         prompt_file=args.prompt_file, label=args.label, command=args.command, timeout=args.timeout)
+        pane = open_tasks(args, backend).spawn(args.harness, args.where, args.cwd or os.getcwd(), prompt=args.prompt,
+                                               prompt_file=args.prompt_file, label=args.label, command=args.command,
+                                               timeout=args.timeout)
         print(pane.id)
+        return 0
+    if cmd == "close":
+        pane = open_tasks(args, backend).close_pane(target, force=args.force)
+        print(f"closed {pane.address[:8]} ({harness_name(pane)}, {pane.title or pane.folder})")
+        return 0
+    if cmd == "interrupt":
+        pane = ops.pick(target)
+        keys, verified = ops.interrupt(pane, key=args.key)
+        print(f"sent {'+'.join(keys)} to {pane.address[:8]} ({harness_name(pane)})")
+        if not verified:
+            warn(f"{'+'.join(keys)} has not been verified to stop {harness_name(pane)}; check with read")
         return 0
     raise UsageError(f"unknown command '{cmd}'")
 
@@ -254,6 +395,16 @@ def _attach_literal(args, tail: list[str] | None) -> None:
         args.literal = True
 
 
+def _deliver_pending() -> None:
+    """Any harness-ops call delivers task results that were held back. Never changes the exit code."""
+    try:
+        registry = Registry()
+        if registry.read()["pending"]:
+            Tasks(registry, None).flush_pending()
+    except Exception as e:
+        warn(f"could not deliver pending task results: {type(e).__name__}: {e}")
+
+
 def main(argv=None) -> int:
     parser = build_parser()
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -270,6 +421,8 @@ def main(argv=None) -> int:
         return e.code
     except BrokenPipeError:
         return 0
+    finally:
+        _deliver_pending()
 
 
 def entry() -> None:

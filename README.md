@@ -19,8 +19,34 @@ harness-ops slash [--force] [--wait] <target> </command>
 harness-ops clear [--force] <target>         # /clear alone, then wait for idle
 harness-ops wait-idle [--timeout S] <target>
 harness-ops spawn <harness> --where tab|split|window --cwd D [--prompt T | --prompt-file F] [--label L] [--command CMD]
+harness-ops close [--force] <target>         # only panes made by spawn/task new; never your own
+harness-ops interrupt [--key K] <target>     # stop the current turn (Esc on claude and omp)
 harness-ops which|read|name|whoami           # as agent-msg; send = msg
+
+harness-ops task new <harness> --title T (--brief TEXT | --brief-file F) --cwd D [--where tab|split|window] [--reuse <target>] [--max N]
+harness-ops task ls [--all] [--json]
+harness-ops task show <id> [--json]
+harness-ops task send [--force] <id> <text...>
+harness-ops task wait <id> | --any [--timeout S]
+harness-ops task done <id> --status ok|failed|blocked (--summary TEXT | --summary-file F)   # called by the worker
+harness-ops task close [--force] <id>
 ```
+
+## Tasks
+
+A task is one harness session doing one job, tracked in `~/.local/state/termctl/registry.json`.
+`task new` starts the harness and submits the brief, followed by a footer that tells the worker how to report. It prints the task id, which is also the pane's label.
+
+- The owner is told with a tagged `RE: task ...` message when the worker reports. If the owner's input line holds a draft, the result stays pending. Any later harness-ops call delivers it, for one hour. `task ls` always shows the result.
+- `task wait --any` returns each finished task once, so repeated calls walk through the results.
+- `task send` on a finished or blocked task reopens it: the worker reports again.
+- Guards (exit 6): 6 running tasks per owner (`--max`, `TERMCTL_MAX_TASKS`), spawn depth 2 (`TERMCTL_MAX_DEPTH`).
+- A task whose pane is gone reads as `lost`. If the terminal cannot be reached, its state stays as it was.
+- `--reuse` needs an idle pane running that harness. Closing such a task leaves the pane open, because it was not created for the task.
+
+## Closing panes
+
+`close` acts only on panes recorded by `spawn` or `task new`, and refuses a busy harness or a pane that holds a running task. `--force` overrides those. Nothing closes your own pane. `termctl spawn` is not recorded: that is Layer 1.
 
 Global options come before the subcommand: `--backend iterm2|tmux|rex|ghostty`, `-L <tmux-socket>`.
 The backend is detected from `TMUX`, `REX_SESSION`, `ITERM_SESSION_ID`. A target such as `tmux:%3` selects its backend.
@@ -39,7 +65,7 @@ No match, several matches, or your own pane exits 2 and lists candidates. It nev
 - A message over 800 characters or with line breaks goes to a file in `~/.cache/agent-msg/`.
 - Put options before the target; everything after the target is message text. Use `--` to send text starting with a flag.
 
-Exit codes: 0 ok, 1 backend error, 2 refused target or usage, 4 draft on input line, 5 wait timed out.
+Exit codes: 0 ok, 1 backend error, 2 refused target or usage, 4 draft on input line, 5 wait timed out, 6 refused by a safety limit.
 
 ## Backends
 
