@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/samhvw8/termctl/internal/harness"
@@ -28,12 +29,17 @@ func NewApp() *App {
 	return &App{Out: os.Stdout, Err: os.Stderr, OpenBackend: defaultBackend, OpenSender: defaultSender}
 }
 
+var itermUUID = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
+
 func backendName(o *Options, target string) (string, error) {
 	if o.Backend != "" {
 		return o.Backend, nil
 	}
 	if name, _, ok := strings.Cut(target, ":"); ok && term.IsBackend(name) {
 		return name, nil
+	}
+	if itermUUID.MatchString(target) { // iTerm2 session IDs stand alone: a reply from another terminal still routes
+		return "iterm2", nil
 	}
 	name := term.DetectEnv()
 	if name == "" {
