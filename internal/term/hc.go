@@ -102,17 +102,27 @@ func hcConnect(env []string, req []byte) ([]byte, error) {
 
 // hcEnv is the subprocess environment. HC_TERMINAL_ID is removed: with it, polling counts as that
 // terminal looking at its children. An explicit socket wins over any session in the environment.
+// Without one, a Herdr terminal's own socket is passed on: hc does not read HC_TERMINAL_SOCKET, so
+// a shell that exports XDG_RUNTIME_DIR would otherwise look for the wrong socket.
 func hcEnv(environ []string, socketPath string) []string {
 	var env []string
+	var named bool
+	var terminal string
 	for _, kv := range environ {
-		name, _, _ := strings.Cut(kv, "=")
+		name, value, _ := strings.Cut(kv, "=")
 		if name == "HC_TERMINAL_ID" || (socketPath != "" && (name == "HC_SOCKET" || name == "HC_SESSION")) {
 			continue
+		}
+		named = named || name == "HC_SOCKET"
+		if name == "HC_TERMINAL_SOCKET" {
+			terminal = value
 		}
 		env = append(env, kv)
 	}
 	if socketPath != "" {
 		env = append(env, "HC_SOCKET="+socketPath)
+	} else if !named && terminal != "" {
+		env = append(env, "HC_SOCKET="+terminal)
 	}
 	return env
 }

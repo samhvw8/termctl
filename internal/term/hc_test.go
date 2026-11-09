@@ -730,3 +730,27 @@ func TestHcSpawnCallerWithoutASpaceFallsBackToTheFolder(t *testing.T) {
 		t.Fatalf("space %q", got)
 	}
 }
+
+// A shell in a Herdr terminal can export XDG_RUNTIME_DIR, and hc then looks for the wrong socket. The
+// terminal's own socket is the right one, unless the person named another.
+func TestHcEnvUsesTheTerminalsSocket(t *testing.T) {
+	has := func(env []string, want string) bool {
+		for _, kv := range env {
+			if kv == want {
+				return true
+			}
+		}
+		return false
+	}
+	in := []string{"PATH=/x", "HC_TERMINAL_ID=t7", "HC_TERMINAL_SOCKET=/term.sock", "XDG_RUNTIME_DIR=/run"}
+	if got := hcEnv(in, ""); !has(got, "HC_SOCKET=/term.sock") {
+		t.Fatal(got)
+	}
+	named := append(append([]string{}, in...), "HC_SOCKET=/named.sock")
+	if got := hcEnv(named, ""); has(got, "HC_SOCKET=/term.sock") || !has(got, "HC_SOCKET=/named.sock") {
+		t.Fatal(got)
+	}
+	if got := hcEnv(in, "/p.sock"); has(got, "HC_SOCKET=/term.sock") || !has(got, "HC_SOCKET=/p.sock") {
+		t.Fatal(got)
+	}
+}

@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-11-09
+* **Fix**: `agent-msg` failed inside a Herdr terminal whose shell exports `XDG_RUNTIME_DIR`; found by a real `RE:` reply test. `hcEnv` now passes the terminal's socket on as `HC_SOCKET`. Runs: nothing new.
 * **Update**: `spawn` and `task new` on hc now open as a tab in the Herdr app, through a `herdr.space` label — see [backends](architecture/backends.md). Runs: nothing new.
 * **Update**: messages to Herdr agents now show hc's `<hc from=...>` tag; targets in iTerm2 and tmux keep the plain `[agent-msg` line. See [backends](architecture/backends.md). Runs: nothing new.
 * **Update**: omp's icon-led shortcut hint on an empty input line no longer counts as a draft (captured on omp 18.16.0). `hc` `Spawn` now refuses when no core runs, so a core never starts with an agent's environment. Real Claude Code and omp messages through `agent-msg` passed on the local core. Runs: nothing new.
