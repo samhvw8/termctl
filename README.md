@@ -103,6 +103,12 @@ Exit codes: 0 ok, 1 backend error, 2 refused target or usage, 4 draft on input l
 ## Install
 
 ```sh
+mise use -g github:samhvw8/termctl   # latest release, macOS or Linux
+```
+
+From a checkout:
+
+```sh
 mise run install   # go build -o ~/.local/bin/ ./cmd/harness-ops ./cmd/termctl
 ```
 

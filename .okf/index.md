@@ -15,3 +15,4 @@ Terminal driver with backends, plus harness-ops for coding-agent TUIs.
 * [Decision: Python](decisions/python-for-iterm2.md) - superseded.
 * [Decision: licence](decisions/mit-with-gpl-proto.md) - MIT, with the iTerm2 messages marked GPL-2.0-derived.
 * [Playbook: add a backend](playbooks/add-a-backend.md) - the steps.
+* [Playbook: cut a release](playbooks/cut-a-release.md) - tag, workflow, install check.

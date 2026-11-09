@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-11-09
+* **Addition**: tagged releases through GitHub Actions, so `mise use -g github:samhvw8/termctl` works — see [the playbook](playbooks/cut-a-release.md). Runs: one workflow, on version tags and manual runs only.
 * **Addition**: MIT licence, with the iTerm2 message files marked GPL-2.0-derived — see [the decision](decisions/mit-with-gpl-proto.md).
 * **Update**: guarded the live state directory after a manual cleanup deleted it: tests cannot resolve it, and `harness-ops state clean` refuses it — see [tasks](architecture/tasks.md).
 * **Update**: the lead now owns "done": `ready`, `task accept`, follow-up rounds, blind review in a new session, and tabs that survive the harness (`exited`) — see [tasks](architecture/tasks.md). `Submit` retries a dropped Enter. Registry version 2, migrated on read.

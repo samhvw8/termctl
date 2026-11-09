@@ -19,6 +19,7 @@ describes, and run the validator.
 | `internal/cli/` | Both command lines |
 | `internal/termtest/` | Fake backend and the fake harness REPL for tests |
 | `e2e/` | Real binaries against tmux on a private socket, and the opt-in iTerm2 test |
+| `scripts/dist.sh`, `.github/workflows/release.yml` | Release archives, built and published on a version tag |
 
 ## Commands
 
@@ -29,6 +30,8 @@ mise run check         # tests + OKF validator
 mise run install       # build termctl and harness-ops into ~/.local/bin
 mise run proto         # regenerate the iTerm2 messages after editing api.proto
 ```
+
+Releases: push a `v*` tag. See `.okf/playbooks/cut-a-release.md`.
 
 ## Rules
 
