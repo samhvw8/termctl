@@ -1,0 +1,22 @@
+[tools]
+python = "3.14"
+uv = "latest"
+tmux = "latest"   # needed by the tmux backend tests; a private socket keeps them off any real server
+
+[tasks.test]
+description = "Unit tests and tmux integration on a private socket (iTerm2 test is opt-in)"
+run = "uv run pytest"
+
+[tasks."test:iterm"]
+description = "Run the opt-in iTerm2 acceptance test: opens one scratch tab and closes it"
+env = { TERMCTL_ITERM_TEST = "1" }
+run = "uv run pytest tests/test_iterm_acceptance.py -v"
+
+[tasks.check]
+description = "Tests plus OKF validation"
+depends = ["test"]
+run = 'uv run "$HOME/.claude/skills/validate/scripts/okf_validate.py" .okf --strict'
+
+[tasks.install]
+description = "Install termctl and harness-ops on PATH from this checkout"
+run = "uv tool install --force --python 3.14 -e ."
