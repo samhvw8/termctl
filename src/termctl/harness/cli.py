@@ -16,6 +16,7 @@ from ..resolve import resolve
 from .ops import DEFAULT_TIMEOUT, Ops, harness_name
 
 MSG_FLAGS = {"--force", "--clear-first", "--timeout", "--backend", "-L"}
+SLASH_FLAGS = {"--force", "--wait", "--timeout", "--backend", "-L"}
 LABEL_RE = re.compile(r"[A-Za-z0-9._-]{1,40}")
 
 
@@ -210,6 +211,9 @@ def run(args) -> int:
         return 0
     if cmd == "slash":
         pane = ops.pick(target)
+        stray = [w for w in args.command if w in SLASH_FLAGS] if not getattr(args, "literal", False) else []
+        if stray:
+            raise UsageError(f"{stray[0]} must come before the target (to send it as text, put -- before the command)")
         ops.slash(pane, " ".join(args.command), force=args.force, wait=args.wait, timeout=args.timeout)
         print(f"sent to {pane.address[:8]} ({harness_name(pane)}, {pane.title or pane.folder})")
         return 0

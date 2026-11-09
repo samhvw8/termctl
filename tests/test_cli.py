@@ -121,3 +121,17 @@ def test_name_validates_label(env, capsys):
 def test_wait_idle(env, capsys):
     code, out, _ = run(["wait-idle", "target", "--timeout", "10"], capsys)
     assert code == 0 and "idle" in out
+
+
+def test_slash_flag_after_the_command_is_refused(env, capsys):
+    # `slash target /help --wait` must not type "--wait" into the harness.
+    code, _, err = run(["slash", "target", "/help", "--wait"], capsys)
+    assert code == 2 and "before the target" in err
+    assert env.inputs_sent("fake:1") == []
+
+
+def test_slash_keeps_its_own_arguments(env, capsys):
+    code, _, _ = run(["slash", "target", "/compact", "focus", "on", "tests"], capsys)
+    assert code == 0
+    assert env.inputs_sent("fake:1")[0][2] == "/compact focus on tests"
+
