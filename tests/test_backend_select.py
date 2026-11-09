@@ -1,7 +1,7 @@
 import pytest
 
 from termctl.backends import detect, make
-from termctl.backends.base import Backend, check_text
+from termctl.backends.base import Backend, check_text, trim_screen
 from termctl.errors import BackendError, UsageError
 
 
@@ -45,3 +45,8 @@ def test_send_text_rejects_line_breaks():
 def test_backend_is_abstract():
     with pytest.raises(TypeError):
         Backend()
+
+
+def test_trim_screen_turns_nul_cells_into_spaces():
+    # iTerm2 returns NUL for cells a TUI never wrote (Claude's input box, seen 2026-11-09).
+    assert trim_screen(["half\x00typed\x00draft", ""], 10) == ["half typed draft"]

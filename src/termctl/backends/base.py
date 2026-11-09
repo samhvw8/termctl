@@ -60,7 +60,7 @@ class Backend(ABC):
 
 
 def trim_screen(lines: list[str], n: int) -> list[str]:
-    lines = [ln.rstrip() for ln in lines]
+    lines = [ln.replace("\x00", " ").rstrip() for ln in lines]  # iTerm2 gives NUL for cells a TUI never wrote
     while lines and not lines[-1]:
         lines.pop()
     return lines[-n:]
