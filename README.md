@@ -107,3 +107,9 @@ mise run install   # go build -o ~/.local/bin/ ./cmd/harness-ops ./cmd/termctl
 ```
 
 The binaries have no runtime dependency. iTerm2's API must be enabled (Settings > General > Magic > Enable Python API; the name is iTerm's, and no Python is used).
+
+## Licence
+
+termctl is under the [MIT licence](LICENSE), with one exception.
+
+`internal/iterm2api/api.proto` and the generated `api.pb.go` copy message names and field numbers from iTerm2's `proto/api.proto`. iTerm2 is distributed under GPL-2.0, so these two files are marked as derived from it and are not covered by the MIT licence. Both are compiled into the binaries. If GPL-2.0 applies to those files, it also applies to a distributed binary.

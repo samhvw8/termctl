@@ -13,4 +13,5 @@ Terminal driver with backends, plus harness-ops for coding-agent TUIs.
 * [Architecture: tasks and pane safety](architecture/tasks.md) - the registry, notifications, guards, close rules.
 * [Decision: Go](decisions/go-own-iterm2-client.md) - a single binary with our own iTerm2 client.
 * [Decision: Python](decisions/python-for-iterm2.md) - superseded.
+* [Decision: licence](decisions/mit-with-gpl-proto.md) - MIT, with the iTerm2 messages marked GPL-2.0-derived.
 * [Playbook: add a backend](playbooks/add-a-backend.md) - the steps.

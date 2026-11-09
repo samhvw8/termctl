@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-11-09
+* **Addition**: MIT licence, with the iTerm2 message files marked GPL-2.0-derived — see [the decision](decisions/mit-with-gpl-proto.md).
 * **Update**: guarded the live state directory after a manual cleanup deleted it: tests cannot resolve it, and `harness-ops state clean` refuses it — see [tasks](architecture/tasks.md).
 * **Update**: the lead now owns "done": `ready`, `task accept`, follow-up rounds, blind review in a new session, and tabs that survive the harness (`exited`) — see [tasks](architecture/tasks.md). `Submit` retries a dropped Enter. Registry version 2, migrated on read.
 * **Update**: rewrote termctl and harness-ops in Go with our own iTerm2 client — see [the decision](decisions/go-own-iterm2-client.md). The Python decision is deprecated. Verified on real iTerm2: a haiku worker reported through `task done`, Esc stopped real claude and omp turns. Found that a session ending within seconds raises a modal that stalls iTerm2's API, so failed commands now stay open briefly.
