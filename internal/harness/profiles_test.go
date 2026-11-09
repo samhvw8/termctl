@@ -91,6 +91,9 @@ func TestOmp(t *testing.T) {
 	eq(t, p.ReadInput(ompIdle), "")
 	draft := append(append([]string{}, ompIdle[:3]...), "╰─ a draft here")
 	eq(t, p.ReadInput(draft), "a draft here")
+	// Captured from omp 18.16.0: a shortcut hint that an empty input line shows for a moment.
+	hint := append(append([]string{}, ompIdle[:3]...), "╰─ \U000f0636 \U000f0312 to change thinking effort")
+	eq(t, p.ReadInput(hint), "")
 	if !p.IsBusy([]string{"  󱊷 Read stats.go", " ⠧ 3m  󰪣 Gemini ─󰁨18%─1M─", "╰─"}) || !p.IsBusy([]string{"  󱊷 Working…", "╰─"}) || p.IsBusy(ompIdle) {
 		t.Fatal("busy")
 	}

@@ -12,6 +12,7 @@ var (
 	claudeWorking       = regexp.MustCompile(`(?m)^\s*\S\s+\S+…\s*\(`)
 	opencodePlaceholder = regexp.MustCompile(`^Ask anything….*$`)
 	ompPrompt           = regexp.MustCompile(`^\s*╰─\s?(.*)$`)
+	ompPlaceholder      = regexp.MustCompile(`^[\x{e000}-\x{f8ff}\x{f0000}-\x{10ffff}\s]+to \S`) // an empty omp input can show an icon-led shortcut hint
 	genericPrompt       = regexp.MustCompile(`^\s*[>❯›] ?(.*)$`)
 )
 
@@ -62,7 +63,11 @@ func claudeStableView(lines []string) []string {
 func ompInput(lines []string) *string {
 	for i := len(lines) - 1; i >= 0; i-- {
 		if m := ompPrompt.FindStringSubmatch(lines[i]); m != nil {
-			return str(strings.TrimSpace(m[1]))
+			text := strings.TrimSpace(m[1])
+			if ompPlaceholder.MatchString(text) {
+				return str("")
+			}
+			return &text
 		}
 	}
 	return nil
