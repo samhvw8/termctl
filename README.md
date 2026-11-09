@@ -79,14 +79,7 @@ Exit codes: 0 ok, 1 backend error, 2 refused target or usage, 4 draft on input l
 ## Install
 
 ```sh
-mise run install   # uv tool install --force --python 3.14 -e .
+mise run install   # go build -o ~/.local/bin/ ./cmd/harness-ops ./cmd/termctl
 ```
 
-mise's `pipx:` backend installs from PyPI or a Git URL, not a local checkout. This repo has no remote yet, so it uses `uv tool install -e`.
-
-## Known limits (found with real harnesses, 2026-11-09)
-
-- `slash --wait` times out (exit 5) on commands that open a panel, such as Claude's `/help` or `/status`: the harness shows the panel until someone presses Esc.
-- A slash command the harness does not know goes to the model as a normal prompt (omp has no `/help`).
-- omp's input box can show autocomplete ghost text, which draft detection reads as part of the draft.
-- Claude keeps many blank rows between the conversation and its input box. Use `read -n 200` to see a reply.
+The binaries have no runtime dependency. iTerm2's API must be enabled (Settings > General > Magic > Enable Python API; the name is iTerm's, and no Python is used).

@@ -3,12 +3,12 @@ type: Architecture
 title: Tasks and pane safety
 description: How harness-ops tracks a job given to another harness session, and what stops it closing or spawning the wrong thing.
 tags: [architecture, harness, tasks, safety]
-generated: { by: claude-code/opus-5.5, at: '2026-11-09T03:40:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-09T05:30:00Z' }
 ---
 
 # Overview
 
-A task is one harness session doing one job. The registry is `~/.local/state/termctl/registry.json` (`TERMCTL_STATE_DIR` moves it). Code: `src/termctl/harness/tasks.py` and `registry.py`.
+A task is one harness session doing one job. The registry is `~/.local/state/termctl/registry.json` (`TERMCTL_STATE_DIR` moves it). Code: `internal/harness/tasks.go` and `registry.go`.
 
 Writes hold an exclusive `flock` on `registry.lock` and replace the file atomically, so readers need no lock. A corrupt file is an error, never a reset, because a reset would forget running tasks.
 
@@ -35,7 +35,7 @@ A backend error during reconcile leaves the status alone: unknown is not gone.
 | `task close` refuses a running task without `--force`. | 6 |
 | A pane reused with `--reuse` is never closed by its task. | none |
 | 6 running tasks per owner, depth 2. Depth comes from the registry: the owner pane's own task depth plus 1. | 6 |
-| A record from before a terminal server restart does not count: tmux pane IDs are reused, so `server_ref` holds the server pid. | 6 or lost |
+| A record from before a terminal server restart does not count: tmux pane IDs are reused, so `ServerRef` holds the server pid. | 6 or lost |
 
 # Verified on real harnesses
 

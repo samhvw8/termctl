@@ -12,14 +12,13 @@ describes, and run the validator.
 
 | Path | What |
 |---|---|
-| `src/termctl/backends/` | Layer 1: one file per backend, `base.py` is the interface |
-| `src/termctl/cli.py` | `termctl` CLI (no harness knowledge) |
-| `src/termctl/harness/profiles.py` | Layer 2: how each harness looks on screen |
-| `src/termctl/harness/ops.py` | Layer 2: draft check, slash, wait-idle, msg, spawn |
-| `src/termctl/harness/tasks.py` | Layer 2: tasks, pending notifications, close safety |
-| `src/termctl/harness/registry.py` | Layer 2: the locked state file |
-| `src/termctl/harness/cli.py` | `harness-ops` CLI |
-| `tests/` | Unit (fake backend), tmux integration, acceptance, opt-in iTerm2 |
+| `cmd/` | `termctl` and `harness-ops` entry points |
+| `internal/term/` | Layer 1: backends (`tmux.go`, `iterm2.go`, `rex.go`, `ghostty.go`), target resolution, process helpers |
+| `internal/iterm2api/` | iTerm2 client: `api.proto` holds only the messages we use, `client.go` connects and calls |
+| `internal/harness/` | Layer 2: `profiles.go` (screens), `ops.go` (draft, slash, wait-idle, msg, spawn), `tasks.go`, `registry.go` |
+| `internal/cli/` | Both command lines |
+| `internal/termtest/` | Fake backend and the fake harness REPL for tests |
+| `e2e/` | Real binaries against tmux on a private socket, and the opt-in iTerm2 test |
 
 ## Commands
 
@@ -27,14 +26,16 @@ describes, and run the validator.
 mise run test          # unit + tmux integration on a private socket
 mise run test:iterm    # opt-in: opens one scratch iTerm2 tab, closes it
 mise run check         # tests + OKF validator
-mise run install       # put termctl and harness-ops on PATH from this checkout
+mise run install       # build termctl and harness-ops into ~/.local/bin
+mise run proto         # regenerate the iTerm2 messages after editing api.proto
 ```
 
 ## Rules
 
 - Exit codes are the contract: 0 ok, 1 backend error, 2 refused target/usage, 4 draft on input line, 5 wait timeout, 6 refused by a safety limit.
 - Never send to a pane resolved by focus. A target that is not unique, or is your own pane, is refused.
-- Layer 1 knows nothing about harnesses. Harness logic goes in `harness/`.
-- Tests never touch the real registry: `tests/conftest.py` sets `TERMCTL_STATE_DIR`.
-- Tests that open panes must create them, and close them. tmux tests use the private socket `termctl-test`.
-- Parsing a harness screen against a real capture: add the capture to `tests/test_profiles.py`.
+- Layer 1 knows nothing about harnesses. Harness logic goes in `internal/harness/`.
+- Tests never touch the real registry: set `TERMCTL_STATE_DIR`.
+- Tests that open panes must create them, and close them. tmux tests use private sockets named `termctl-test-*`.
+- Parsing a harness screen against a real capture: add the capture to `internal/harness/profiles_test.go`.
+- A session that ends within seconds makes iTerm2 raise a modal that stalls its whole API. Never spawn something that can exit at once without the wrapper in `iterm2Command`.

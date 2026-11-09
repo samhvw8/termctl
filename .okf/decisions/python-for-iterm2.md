@@ -1,10 +1,15 @@
 ---
 type: Decision
+status: deprecated
 title: Use Python
 description: The tool is Python because the iTerm2 backend needs iTerm's Python API.
 tags: [decision]
-generated: { by: claude-code/opus-5.5, at: '2026-11-09T01:30:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-09T05:30:00Z' }
 ---
+
+# Superseded
+
+Replaced by [Go with our own iTerm2 client](/decisions/go-own-iterm2-client.md). The reasoning below is wrong: Python is one client of a protobuf-over-WebSocket API.
 
 # Decision
 

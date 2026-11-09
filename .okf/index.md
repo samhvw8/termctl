@@ -11,5 +11,6 @@ Terminal driver with backends, plus harness-ops for coding-agent TUIs.
 * [Architecture: backends](architecture/backends.md) - the interface and state of each backend.
 * [Architecture: harness profiles](architecture/harness-profiles.md) - input parsing, calibration, the idle rule.
 * [Architecture: tasks and pane safety](architecture/tasks.md) - the registry, notifications, guards, close rules.
-* [Decision: Python](decisions/python-for-iterm2.md) - why Python, and why `uv tool install -e`.
+* [Decision: Go](decisions/go-own-iterm2-client.md) - a single binary with our own iTerm2 client.
+* [Decision: Python](decisions/python-for-iterm2.md) - superseded.
 * [Playbook: add a backend](playbooks/add-a-backend.md) - the steps.

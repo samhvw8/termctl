@@ -3,7 +3,7 @@ type: Architecture
 title: Two layers
 description: Layer 1 drives terminals, Layer 2 knows about harnesses; the split keeps new terminals cheap to add.
 tags: [architecture]
-generated: { by: claude-code/opus-5.5, at: '2026-11-09T01:30:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-09T05:30:00Z' }
 sources:
   - id: agent-msg
     resource: ~/.dotfiles/home/.ccp/hub/skills/agent-msg/SKILL.md
@@ -14,10 +14,10 @@ sources:
 
 | Layer | Code | Knows |
 |---|---|---|
-| 1. `termctl` | `src/termctl/backends/`, `cli.py`, `resolve.py`, `proc.py` | Panes, text, keys, capture, labels, spawn. |
-| 2. `harness-ops` | `src/termctl/harness/` | Draft check, slash commands, idle waits, tagged messages, spawn with readiness. |
+| 1. `termctl` | `internal/term/`, `internal/iterm2api/`, `cmd/termctl` | Panes, text, keys, capture, labels, spawn. |
+| 2. `harness-ops` | `internal/harness/`, `internal/cli/` | Draft check, slash commands, idle waits, tagged messages, spawn with readiness. |
 
-Layer 1 has no harness knowledge. Its one exception is `proc.MAIN_PROCESSES`, plain data that says which programs own a pane so its folder is reported correctly. A test keeps it in sync with the profiles.
+Layer 1 has no harness knowledge. Its one exception is `term.MainProcesses`, plain data that says which programs own a pane so its folder is reported correctly. A test keeps it in sync with the profiles.
 
 The `agent-msg` skill script is a thin wrapper around `harness-ops`, so the existing rules live in one place.[^agent-msg]
 

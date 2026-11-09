@@ -1,10 +1,5 @@
-.venv/
-__pycache__/
-*.pyc
-.pytest_cache/
 dist/
 build/
-*.egg-info/
 .env*
 .DS_Store
 .codegraph/

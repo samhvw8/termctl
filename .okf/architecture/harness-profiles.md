@@ -3,14 +3,14 @@ type: Architecture
 title: Harness profiles
 description: How harness-ops recognises a harness, reads its input line and decides it is idle.
 tags: [architecture, harness]
-generated: { by: claude-code/opus-5.5, at: '2026-11-09T03:40:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-09T05:30:00Z' }
 ---
 
 # Profile fields
 
-`Profile` in `src/termctl/harness/profiles.py`: `processes`, start `command`, `slash`, `calibrated`, `prompt_required`, `stable_seconds`, `read_input`, `stable_view`, `busy_patterns`.
+`Profile` in `internal/harness/profiles.go`: `Processes`, start `Command`, `Slash`, `Calibrated`, `PromptRequired`, `StableSeconds`, `ReadInput`, `StableView`, `BusyPatterns`, `InterruptKeys`, `InterruptVerified`.
 
-`read_input` returns the draft, `""` for an empty line, or `None` when the input line is not on screen.
+`ReadInput` returns the draft, `""` for an empty line, or nil when the input line is not on screen.
 
 # Calibration
 
@@ -29,6 +29,6 @@ Claude shows `✽ Gesticulating… (6s · ↓ 243 tokens)`, and the wording chan
 
 # Idle rule
 
-`wait_idle` returns when all hold: the terminal's own status is not `working`, no busy pattern is on screen, the input line is visible (where `prompt_required`), and `stable_view` has not changed for `stable_seconds`.
+`WaitIdle` returns when all hold: the terminal's own status is not `working`, no busy pattern is on screen, the input line is visible (where `PromptRequired`), and `StableView` has not changed for `StableSeconds`.
 
 A calibrated harness whose input line cannot be read is refused (exit 4). Sending blind could join a draft, and crashing beats corrupting. An uncalibrated harness warns and proceeds, because its parser is unproven.

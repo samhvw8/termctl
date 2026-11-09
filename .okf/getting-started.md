@@ -4,7 +4,7 @@ title: Getting started — termctl
 description: Reading order for the termctl knowledge bundle.
 tags: [getting-started]
 status: stable
-generated: { by: claude-code/opus-5.5, at: '2026-11-09T03:40:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-09T05:30:00Z' }
 ---
 
 # Overview
@@ -17,5 +17,5 @@ Read in this order:
 2. [Backends](/architecture/backends.md) - iTerm2, tmux, Rex, Ghostty.
 3. [Harness profiles](/architecture/harness-profiles.md) - recognising a harness, reading its input line, idle detection.
 4. [Tasks and pane safety](/architecture/tasks.md) - the registry, notifications and what is refused.
-5. [Why Python](/decisions/python-for-iterm2.md) - the language decision.
+5. [Why Go](/decisions/go-own-iterm2-client.md) - the language decision.
 6. [Add a backend](/playbooks/add-a-backend.md) - the steps.

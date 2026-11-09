@@ -1,0 +1,241 @@
+// Subset of iTerm2's API messages: only the calls termctl makes. Field numbers match
+// iTerm2's proto/api.proto. Unknown fields are ignored on the wire. Regenerate: mise run proto
+syntax = "proto2";
+package iterm2api;
+option go_package = "github.com/samhvw8/termctl/internal/iterm2api";
+
+message ClientOriginatedMessage {
+  optional int64 id = 1;
+  optional GetBufferRequest get_buffer_request = 100;
+  optional ListSessionsRequest list_sessions_request = 106;
+  optional SendTextRequest send_text_request = 107;
+  optional CreateTabRequest create_tab_request = 108;
+  optional SplitPaneRequest split_pane_request = 109;
+  optional ActivateRequest activate_request = 114;
+  optional VariableRequest variable_request = 115;
+  optional CloseRequest close_request = 131;
+  optional InvokeFunctionRequest invoke_function_request = 132;
+}
+
+message ServerOriginatedMessage {
+  optional int64 id = 1;
+  optional string error = 2;
+  optional GetBufferResponse get_buffer_response = 100;
+  optional ListSessionsResponse list_sessions_response = 106;
+  optional SendTextResponse send_text_response = 107;
+  optional CreateTabResponse create_tab_response = 108;
+  optional SplitPaneResponse split_pane_response = 109;
+  optional ActivateResponse activate_response = 114;
+  optional VariableResponse variable_response = 115;
+  optional CloseResponse close_response = 131;
+  optional InvokeFunctionResponse invoke_function_response = 132;
+}
+
+message ActivateRequest {
+  optional string window_id = 1;
+  optional string tab_id = 2;
+  optional string session_id = 3;
+  optional bool order_window_front = 4;
+  optional bool select_tab = 5;
+  optional bool select_session = 6;
+}
+
+message SplitPaneRequest {
+  optional string session = 1;
+  optional SplitPaneRequest.SplitDirection split_direction = 2;
+  optional bool before = 3;
+  optional string profile_name = 4;
+  repeated ProfileProperty custom_profile_properties = 5;
+  enum SplitDirection {
+    VERTICAL = 0;
+    HORIZONTAL = 1;
+  }
+}
+
+message ListSessionsRequest {
+}
+
+message InvokeFunctionRequest {
+  optional InvokeFunctionRequest.Method method = 7;
+  optional string invocation = 5;
+  optional double timeout = 6;
+  message Method {
+    optional string receiver = 1;
+  }
+}
+
+message SendTextRequest {
+  optional string session = 1;
+  optional string text = 2;
+  optional bool suppress_broadcast = 3;
+}
+
+message CloseRequest {
+  optional CloseRequest.CloseSessions sessions = 2;
+  optional bool force = 4;
+  message CloseSessions {
+    repeated string session_ids = 1;
+  }
+}
+
+message VariableRequest {
+  optional string session_id = 1;
+  repeated VariableRequest.Set set = 2;
+  repeated string get = 3;
+  message Set {
+    optional string name = 1;
+    optional string value = 2;
+  }
+}
+
+message CreateTabRequest {
+  optional string profile_name = 1;
+  optional string window_id = 2;
+  optional uint32 tab_index = 3;
+  repeated ProfileProperty custom_profile_properties = 5;
+  optional bool select_tab = 6;
+}
+
+message GetBufferRequest {
+  optional string session = 1;
+  optional LineRange line_range = 2;
+  optional bool include_styles = 3;
+}
+
+message CreateTabResponse {
+  optional CreateTabResponse.Status status = 1;
+  optional string window_id = 2;
+  optional int32 tab_id = 3;
+  optional string session_id = 4;
+  enum Status {
+    OK = 0;
+    INVALID_PROFILE_NAME = 1;
+    INVALID_WINDOW_ID = 2;
+    INVALID_TAB_INDEX = 3;
+    MISSING_SUBSTITUTION = 4;
+  }
+}
+
+message GetBufferResponse {
+  optional GetBufferResponse.Status status = 1;
+  repeated LineContents contents = 3;
+  enum Status {
+    OK = 0;
+    SESSION_NOT_FOUND = 1;
+    INVALID_LINE_RANGE = 2;
+    REQUEST_MALFORMED = 3;
+  }
+}
+
+message ActivateResponse {
+  optional ActivateResponse.Status status = 1;
+  enum Status {
+    OK = 0;
+    BAD_IDENTIFIER = 1;
+    INVALID_OPTION = 2;
+  }
+}
+
+message InvokeFunctionResponse {
+  optional InvokeFunctionResponse.Error error = 1;
+  optional InvokeFunctionResponse.Success success = 2;
+  enum Status {
+    TIMEOUT = 1;
+    FAILED = 2;
+    REQUEST_MALFORMED = 3;
+    INVALID_ID = 4;
+  }
+  message Error {
+    optional InvokeFunctionResponse.Status status = 1;
+    optional string error_reason = 2;
+  }
+  message Success {
+    optional string json_result = 1;
+  }
+}
+
+message SplitPaneResponse {
+  optional SplitPaneResponse.Status status = 1;
+  repeated string session_id = 2;
+  enum Status {
+    OK = 0;
+    SESSION_NOT_FOUND = 1;
+    INVALID_PROFILE_NAME = 2;
+    CANNOT_SPLIT = 3;
+    MALFORMED_CUSTOM_PROFILE_PROPERTY = 4;
+  }
+}
+
+message CloseResponse {
+  repeated CloseResponse.Status statuses = 1;
+  enum Status {
+    OK = 0;
+    NOT_FOUND = 1;
+    USER_DECLINED = 2;
+  }
+}
+
+message SendTextResponse {
+  optional SendTextResponse.Status status = 1;
+  enum Status {
+    OK = 0;
+    SESSION_NOT_FOUND = 1;
+  }
+}
+
+message ListSessionsResponse {
+  repeated ListSessionsResponse.Window windows = 1;
+  message Window {
+    repeated ListSessionsResponse.Tab tabs = 1;
+    optional string window_id = 2;
+    optional string selected_tab_id = 5;
+  }
+  message Tab {
+    optional SplitTreeNode root = 3;
+    optional string tab_id = 2;
+  }
+}
+
+message VariableResponse {
+  optional VariableResponse.Status status = 1;
+  repeated string values = 2;
+  enum Status {
+    OK = 0;
+    SESSION_NOT_FOUND = 1;
+    INVALID_NAME = 2;
+    MISSING_SCOPE = 3;
+    TAB_NOT_FOUND = 4;
+    MULTI_GET_DISALLOWED = 5;
+    WINDOW_NOT_FOUND = 6;
+  }
+}
+
+message ProfileProperty {
+  optional string key = 1;
+  optional string json_value = 2;
+}
+
+message LineRange {
+  optional bool screen_contents_only = 1;
+}
+
+message LineContents {
+  optional string text = 1;
+  enum Continuation {
+    CONTINUATION_HARD_EOL = 1;
+    CONTINUATION_SOFT_EOL = 2;
+  }
+}
+
+message SplitTreeNode {
+  repeated SplitTreeNode.SplitTreeLink links = 2;
+  message SplitTreeLink {
+    optional SessionSummary session = 1;
+    optional SplitTreeNode node = 2;
+  }
+}
+
+message SessionSummary {
+  optional string unique_identifier = 1;
+}
+
