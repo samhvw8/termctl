@@ -219,8 +219,8 @@ func TestTaskNewDoneNotifyClose(t *testing.T) {
 	if code, _, stderr := r.ops(r.harness, "task", "close", id); code != 6 {
 		t.Fatal(code, stderr)
 	}
-	if code, out, stderr := r.ops(worker, "task", "done", id, "--status", "ok", "--summary", "report written"); code != 0 {
-		t.Fatal(out, stderr)
+	if code, out, stderr := r.ops(worker, "task", "done", id, "--status", "ok", "--summary", "report written"); code != 0 || !strings.Contains(out, "ready") {
+		t.Fatal(code, out, stderr)
 	}
 	waitFor(t, "owner notified", func() bool { return len(readLog(r.log)) > 0 })
 	note := readLog(r.log)[0]
@@ -228,17 +228,101 @@ func TestTaskNewDoneNotifyClose(t *testing.T) {
 	if !strings.HasPrefix(note, "[agent-msg from ") || !strings.Contains(note, "RE: task "+id) || !strings.Contains(note, "report written") {
 		t.Fatal(note)
 	}
-	if _, out, _ := r.ops(r.harness, "task", "ls"); !strings.Contains(out, id) || !strings.Contains(out, "done") || !strings.Contains(out, "report written") {
+	if !paneAlive(t, worker) {
+		t.Fatal("task done closed the worker's pane")
+	}
+	if _, out, _ := r.ops(r.harness, "task", "ls"); !strings.Contains(out, id) || !strings.Contains(out, "ready") || !strings.Contains(out, "report written") {
 		t.Fatal(out)
 	}
-	if code, _, stderr := r.ops(r.harness, "task", "close", id); code != 0 {
+	if code, _, _ := r.ops(r.harness, "task", "close", id); code != 6 {
+		t.Fatal("close before accept must be refused: ", code)
+	}
+	if code, _, stderr := r.ops(worker, "task", "accept", id); code != 2 {
+		t.Fatal("the worker must not accept: ", code, stderr)
+	}
+
+	// Round 2 in the same session.
+	if code, _, stderr := r.ops(r.harness, "task", "send", id, "please", "fix", "the", "typo"); code != 0 {
 		t.Fatal(stderr)
 	}
-	if strings.Contains(tmux(t, "list-panes", "-a", "-F", "#{pane_id}"), worker+"\n") {
-		t.Fatal("worker pane still there")
+	waitFor(t, "round 2 message", func() bool { return len(readLog(workerLog)) >= 2 })
+	if _, out, _ := r.ops(r.harness, "task", "show", id, "--json"); !strings.Contains(out, `"round": 2`) || !strings.Contains(out, `"status": "running"`) {
+		t.Fatal(out)
+	}
+	if code, out, stderr := r.ops(worker, "task", "done", id, "--status", "ok", "--summary", "typo fixed"); code != 0 {
+		t.Fatal(out, stderr)
+	}
+	waitFor(t, "second note", func() bool { return len(readLog(r.log)) > 1 })
+	if !strings.Contains(readLog(r.log)[1], "round 2") {
+		t.Fatal(readLog(r.log))
+	}
+
+	if code, _, stderr := r.ops(r.harness, "task", "accept", id, "--close"); code != 0 {
+		t.Fatal(stderr)
+	}
+	if paneAlive(t, worker) {
+		t.Fatal("accept --close left the worker pane")
 	}
 	if _, out, _ := r.ops(r.harness, "task", "ls"); strings.Contains(out, id) {
 		t.Fatal(out)
+	}
+}
+
+func paneAlive(t *testing.T, pane string) bool {
+	t.Helper()
+	for _, p := range strings.Fields(tmux(t, "list-panes", "-a", "-F", "#{pane_id}")) {
+		if p == pane {
+			return true
+		}
+	}
+	return false
+}
+
+// A tab must survive the harness: the shell stays, the error stays on screen, the owner is told.
+func TestHarnessExitLeavesPaneAndTellsOwner(t *testing.T) {
+	r := newRig(t)
+	id, task, _ := newTask(t, r, "x")
+	worker := workerPane(task)
+	tmux(t, "send-keys", "-t", worker, "C-d") // EOF ends the fake harness
+	waitFor(t, "status exited", func() bool {
+		_, out, _ := r.ops(r.harness, "task", "show", id, "--json")
+		return strings.Contains(out, `"status": "exited"`)
+	})
+	if !paneAlive(t, worker) {
+		t.Fatal("the pane died with the harness")
+	}
+	waitFor(t, "exit message on screen", func() bool {
+		return strings.Contains(tmux(t, "capture-pane", "-p", "-t", worker), "exited with status")
+	})
+	waitFor(t, "owner told", func() bool { return len(readLog(r.log)) > 0 })
+	note := readLog(r.log)[0]
+	t.Log(note)
+	if !strings.Contains(note, id) || !strings.Contains(note, "exited") {
+		t.Fatal(note)
+	}
+	if code, _, _ := r.ops(r.harness, "task", "send", id, "hello?"); code != 2 {
+		t.Fatal(code)
+	}
+	if code, _, _ := r.ops(r.harness, "task", "close", id); code != 6 {
+		t.Fatal(code)
+	}
+	if code, _, stderr := r.ops(r.harness, "task", "close", "--force", id); code != 0 || paneAlive(t, worker) {
+		t.Fatal(code, stderr)
+	}
+}
+
+func TestPlainSpawnSurvivesItsHarness(t *testing.T) {
+	r := newRig(t)
+	log2 := filepath.Join(r.tmp, "s.log")
+	code, out, stderr := r.ops(r.sender, "spawn", "generic", "--where", "tab", "--cwd", r.tmp, "--command", fakeCmd(log2), "--label", "keeper")
+	if code != 0 {
+		t.Fatal(out, stderr)
+	}
+	pane := strings.SplitN(strings.TrimSpace(out), ":", 2)[1]
+	tmux(t, "send-keys", "-t", pane, "C-d")
+	waitFor(t, "exit message", func() bool { return strings.Contains(tmux(t, "capture-pane", "-p", "-t", pane), "exited with status") })
+	if !paneAlive(t, pane) {
+		t.Fatal("pane died")
 	}
 }
 
@@ -332,5 +416,67 @@ func TestClearFirstOnITerm2(t *testing.T) {
 	t.Log(lines)
 	if len(lines) != 2 || lines[0] != "/clear" || !strings.HasPrefix(lines[1], "[agent-msg from ") || !strings.HasSuffix(lines[1], "] start over") {
 		t.Fatalf("%q", lines)
+	}
+}
+
+// TestHarnessExitOnITerm2 is opt-in: two scratch tabs, closed at the end. It sends only to those tabs.
+func TestHarnessExitOnITerm2(t *testing.T) {
+	if os.Getenv("TERMCTL_ITERM_TEST") != "1" {
+		t.Skip("set TERMCTL_ITERM_TEST=1")
+	}
+	tmp := t.TempDir()
+	ownerLog, workerLog := filepath.Join(tmp, "owner.log"), filepath.Join(tmp, "worker.log")
+	b, err := term.Make("iterm2", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := b.Spawn("tab", fakeCmd(ownerLog), tmp, "termctl-owner-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close(owner)
+	time.Sleep(3 * time.Second)
+	run := func(args ...string) (int, string, string) {
+		cmd := exec.Command(filepath.Join(binDir, "harness-ops"), append([]string{"--backend", "iterm2"}, args...)...)
+		cmd.Env = append(os.Environ(), "TERMCTL_STATE_DIR="+filepath.Join(tmp, "state"), "ITERM_SESSION_ID=w0:"+owner.Native)
+		var stdout, stderr strings.Builder
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		err := cmd.Run()
+		code := 0
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		}
+		return code, stdout.String(), stderr.String()
+	}
+	code, out, stderr := run("task", "new", "generic", "--title", "x", "--brief", "b", "--cwd", tmp, "--command", fakeCmd(workerLog), "--timeout", "30")
+	if code != 0 {
+		t.Fatal(out, stderr)
+	}
+	id := strings.TrimSpace(out)
+	_, shown, _ := run("task", "show", id, "--json")
+	var task map[string]any
+	json.Unmarshal([]byte(shown), &task)
+	native := strings.SplitN(task["pane"].(string), ":", 2)[1]
+	worker := &term.Pane{ID: task["pane"].(string), Backend: "iterm2", Native: native}
+	defer b.Close(worker)
+	waitFor(t, "brief", func() bool { return len(readLog(workerLog)) > 0 })
+	if err := b.SendKey(worker, "ctrl-d"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "status exited", func() bool {
+		_, shown, _ := run("task", "show", id, "--json")
+		return strings.Contains(shown, `"status": "exited"`)
+	})
+	waitFor(t, "exit message on screen", func() bool {
+		lines, err := b.Capture(worker, 40)
+		if err != nil {
+			t.Fatal("the pane died with the harness: ", err)
+		}
+		return strings.Contains(strings.Join(lines, "\n"), "exited with status")
+	})
+	waitFor(t, "owner told", func() bool { return len(readLog(ownerLog)) > 0 })
+	t.Log(readLog(ownerLog)[0])
+	if !strings.Contains(readLog(ownerLog)[0], "exited") {
+		t.Fatal(readLog(ownerLog))
 	}
 }

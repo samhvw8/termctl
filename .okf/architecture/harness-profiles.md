@@ -3,7 +3,7 @@ type: Architecture
 title: Harness profiles
 description: How harness-ops recognises a harness, reads its input line and decides it is idle.
 tags: [architecture, harness]
-generated: { by: claude-code/opus-5.5, at: '2026-11-09T05:30:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-09T06:00:00Z' }
 ---
 
 # Profile fields
@@ -26,6 +26,22 @@ Parsers were checked against screens of real harnesses on 2026-11-09. A scratch 
 # Busy lines from real turns
 
 Claude shows `✽ Gesticulating… (6s · ↓ 243 tokens)`, and the wording changes; `esc to interrupt` did not appear. The match is a word, `…`, then `(`. omp shows `Working…` or a braille spinner.
+
+# Read-only mode for blind reviewers
+
+Checked on real sessions on 2026-11-09.
+
+| Harness | Mode | Result |
+|---|---|---|
+| claude | `--setting-sources project --permission-mode dontAsk`, write tools denied, read tools and the report command allowed | Writes through the Write tool and the shell were denied; the report command ran. |
+| claude | `--permission-mode plan` | Unusable: it stops at a "ready to execute?" dialog and cannot report, even with the report command allowed. |
+| claude | `--permission-mode dontAsk` with user settings loaded | Not read-only: the user's allow rules let a write through. |
+| omp | none | `--plan-yolo` approves its own plan and then executes. `harness-ops` warns. |
+| opencode, codex, gemini, aider, pi | none verified | `harness-ops` warns, and the reviewer can change files. |
+
+# Submit
+
+A TUI can drop an Enter that arrives while long text is still being taken in. `Submit` checks that the text left the input line, presses Enter up to three more times, and then fails with exit 4.
 
 # Idle rule
 

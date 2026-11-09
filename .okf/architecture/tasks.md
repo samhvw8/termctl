@@ -3,7 +3,7 @@ type: Architecture
 title: Tasks and pane safety
 description: How harness-ops tracks a job given to another harness session, and what stops it closing or spawning the wrong thing.
 tags: [architecture, harness, tasks, safety]
-generated: { by: claude-code/opus-5.5, at: '2026-11-09T05:30:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-09T06:00:00Z' }
 ---
 
 # Overview
@@ -14,13 +14,30 @@ Writes hold an exclusive `flock` on `registry.lock` and replace the file atomica
 
 # Lifecycle
 
-| Status | Meaning |
-|---|---|
-| running | Worker has the job. A slot is reserved under the lock before the spawn, so parallel `task new` calls cannot exceed the cap. |
-| done, failed, blocked | Reported through `task done`. `blocked` may report again. `task send` reopens any of the three. |
-| lost | The pane is gone, or the task never got a pane within 10 minutes. |
+The lead owns "done". The worker's session has the files loaded, so it is the right place for a non-blind verdict.
 
-A backend error during reconcile leaves the status alone: unknown is not gone.
+| Status | Set by | Meaning |
+|---|---|---|
+| running | `task new`, `task send` | The worker has the job. A slot is reserved under the lock before the spawn, so parallel calls cannot exceed the cap. |
+| ready | worker's `task done --status ok` | Waiting for the lead. The session stays open. |
+| failed, blocked | worker's `task done` | Waiting for the lead. The session stays open. |
+| done | owner's `task accept` | Only this makes a task done. Only a ready task can be accepted, so a failure is never recorded as done. |
+| exited | exit hook, or reconcile | The pane is alive and the harness is gone. The owner is told. |
+| lost | reconcile | The pane is gone, or the task never got a pane within 10 minutes. |
+
+`task send` on a ready, failed or blocked task returns it to `running` and adds one to `round`. The worker's next `task done` returns it to `ready`.
+
+A backend error during reconcile leaves the status alone: unknown is not gone. Registry version 1 files are migrated on read.
+
+# Surviving tabs
+
+`Ops.Spawn` wraps the command as `<cmd>; s=$?; <hook>; <message>; exec "$SHELL" -l`, so a shell remains and a crash stays readable. The hook is `harness-ops task exited <id> --code <s>`. Without it an owner waiting for the `RE: task` line would never hear, because nothing polls. Reconcile is the fallback: a launched task whose pane now runs a bare shell has exited. `launched` keeps a login shell at startup from counting.
+
+# Blind review
+
+`task review --blind` starts a new task with `review_of` set. Its brief is the lead's requirements, or `--brief-file`, never the worker's report, summary or conversation. The reviewed task is hidden from the reviewer in `task ls` and `task show`. Blind is a convention plus these checks, not a sandbox: a reviewer that reads the registry file directly can see more.
+
+The read-only flags per harness are in [harness profiles](/architecture/harness-profiles.md).
 
 # Notifications
 
@@ -31,8 +48,8 @@ A backend error during reconcile leaves the status alone: unknown is not gone.
 | Rule | Exit |
 |---|---|
 | Your own pane is never closed, even with `--force`. | 2 |
-| `close` needs a pane recorded by `spawn` or `task new`, no running task on it, and an idle harness. `--force` overrides these. | 6 |
-| `task close` refuses a running task without `--force`. | 6 |
+| `close` needs a pane recorded by `spawn` or `task new`, no unaccepted task on it, and an idle harness. `--force` overrides these. | 6 |
+| `task close` refuses a task the lead has not accepted, without `--force`. | 6 |
 | A pane reused with `--reuse` is never closed by its task. | none |
 | 6 running tasks per owner, depth 2. Depth comes from the registry: the owner pane's own task depth plus 1. | 6 |
 | A record from before a terminal server restart does not count: tmux pane IDs are reused, so `ServerRef` holds the server pid. | 6 or lost |

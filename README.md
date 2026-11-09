@@ -26,10 +26,12 @@ harness-ops which|read|name|whoami           # as agent-msg; send = msg
 harness-ops task new <harness> --title T (--brief TEXT | --brief-file F) --cwd D [--where tab|split|window] [--reuse <target>] [--max N]
 harness-ops task ls [--all] [--json]
 harness-ops task show <id> [--json]
-harness-ops task send [--force] <id> <text...>
+harness-ops task send [--force] <id> <text...>       # on a ready task: opens the next round
 harness-ops task wait <id> | --any [--timeout S]
-harness-ops task done <id> --status ok|failed|blocked (--summary TEXT | --summary-file F)   # called by the worker
-harness-ops task close [--force] <id>
+harness-ops task done <id> --status ok|failed|blocked (--summary TEXT | --summary-file F)   # the worker reports
+harness-ops task accept <id> [--close]               # the lead's verdict: only this makes a task done
+harness-ops task review <id> --blind --harness H [--model M] [--brief-file F]
+harness-ops task close [--force] <id>                # refused until accepted, unless --force
 ```
 
 ## Tasks
@@ -37,16 +39,34 @@ harness-ops task close [--force] <id>
 A task is one harness session doing one job, tracked in `~/.local/state/termctl/registry.json`.
 `task new` starts the harness and submits the brief, followed by a footer that tells the worker how to report. It prints the task id, which is also the pane's label.
 
-- The owner is told with a tagged `RE: task ...` message when the worker reports. If the owner's input line holds a draft, the result stays pending. Any later harness-ops call delivers it, for one hour. `task ls` always shows the result.
+| Status | Meaning |
+|---|---|
+| running | The worker has the job. |
+| ready | The worker reported success. The session stays open for the lead. |
+| failed, blocked | The worker reported that. The session stays open for the lead. |
+| done | The lead accepted it. Only `task accept` sets this. |
+| exited | The pane is alive but the harness is gone. The error stays on screen. |
+| lost | The pane is gone, or the task never got one. |
+
+- Worker's `task done` means "ready for the lead". It never closes the session and never produces `done`.
+- `task send` on a ready, failed or blocked task opens the next round in the same session. `task ls` shows the round.
+- `task close` is refused until the task is accepted, unless `--force`.
+- A spawned harness leaves a shell behind, so a crash stays readable. The owner is told when the harness exits.
+- The owner is told with a tagged `RE: task ...` message. If the owner's input line holds a draft, the result stays pending. Any later harness-ops call delivers it, for one hour.
 - `task wait --any` returns each finished task once, so repeated calls walk through the results.
-- `task send` on a finished or blocked task reopens it: the worker reports again.
 - Guards (exit 6): 6 running tasks per owner (`--max`, `TERMCTL_MAX_TASKS`), spawn depth 2 (`TERMCTL_MAX_DEPTH`).
-- A task whose pane is gone reads as `lost`. If the terminal cannot be reached, its state stays as it was.
 - `--reuse` needs an idle pane running that harness. Closing such a task leaves the pane open, because it was not created for the task.
+
+## Review
+
+- **Same session (`task send`)** is the normal flow. The worker has the files loaded, so reviewer findings go there for a verdict.
+- **Blind (`task review --blind`)** starts a new session that gets the requirements and the files, not the worker's report, summary or conversation. Its result reaches the owner like any task.
+
+Blind reviewers run read-only where the harness supports it. Only Claude Code is verified: `--setting-sources project --permission-mode dontAsk`, with write tools denied and only read tools, read-only git and the report command allowed. On a real session the Write tool and shell writes were denied. Plan mode cannot be used: it stops at an approval dialog and cannot report. Other harnesses get a warning and can change files.
 
 ## Closing panes
 
-`close` acts only on panes recorded by `spawn` or `task new`, and refuses a busy harness or a pane that holds a running task. `--force` overrides those. Nothing closes your own pane. `termctl spawn` is not recorded: that is Layer 1.
+`close` acts only on panes recorded by `spawn` or `task new`, and refuses a busy harness or a pane that holds a task not yet accepted. `--force` overrides those. Nothing closes your own pane. `termctl spawn` is not recorded: that is Layer 1.
 
 Global options come before the subcommand: `--backend iterm2|tmux|rex|ghostty`, `-L <tmux-socket>`.
 The backend is detected from `TMUX`, `REX_SESSION`, `ITERM_SESSION_ID`. A target such as `tmux:%3` selects its backend.

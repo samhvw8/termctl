@@ -16,8 +16,8 @@ const (
 	MaxInline      = 800 // longer messages, or multi-line ones, go through a file
 	enterDelay     = 0.4 // TUIs drop an Enter that arrives with the pasted text
 	settle         = 0.5 // let the screen react to what we sent before judging it
-	submitSettle = 0.7 // how long a TUI gets to take a submitted line off its input
-	submitRetries = 3
+	submitSettle   = 0.7 // how long a TUI gets to take a submitted line off its input
+	submitRetries  = 3
 	poll           = 0.25
 	DefaultTimeout = 120.0
 	captureLines   = 200
@@ -349,6 +349,17 @@ func (o *Ops) Msg(p *term.Pane, text string, opts MsgOpts) (string, error) {
 	return line, o.Submit(p, line, prof)
 }
 
+// SurvivingCommand runs cmd and leaves a login shell in the pane afterwards, so a crash leaves
+// its error on screen. hook, if set, is told the exit status; its own failure must not cost the shell.
+func SurvivingCommand(cmd, hook string) string {
+	tail := "s=$?; "
+	if hook != "" {
+		tail += hook + ` --code "$s" >/dev/null 2>&1; `
+	}
+	tail += `printf '\n[termctl: harness exited with status %s; this shell stays open]\n' "$s"; exec "${SHELL:-/bin/sh}" -l`
+	return cmd + "; " + tail
+}
+
 // Flat removes what would end or corrupt a typed line.
 func Flat(text string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(text, "\r", " "), "\x1b", "")
@@ -359,6 +370,7 @@ type SpawnOpts struct {
 	Prompt, PromptFile, Label, Command, Title string
 	Timeout                                   float64
 	OnCreated                                 func(*term.Pane) error
+	Wrap                                      func(string) string // final form of the command; nil leaves it as is
 }
 
 // Spawn starts a harness, waits until ready, and submits the first prompt.
@@ -379,6 +391,9 @@ func (o *Ops) Spawn(harness, where, cwd string, opts SpawnOpts) (*term.Pane, err
 	}
 	if cmd == "" {
 		return nil, term.UsageErr("harness '%s' has no default command; pass --command", harness)
+	}
+	if opts.Wrap != nil {
+		cmd = opts.Wrap(cmd)
 	}
 	prompt := opts.Prompt
 	if opts.PromptFile != "" {

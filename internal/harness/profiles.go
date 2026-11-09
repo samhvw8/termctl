@@ -139,7 +139,8 @@ type Profile struct {
 	StableView        func([]string) []string
 	BusyPatterns      []*regexp.Regexp
 	InterruptKeys     []string
-	InterruptVerified bool // the keys were seen to stop a real turn
+	InterruptVerified bool   // the keys were seen to stop a real turn
+	ReadOnlyFlags     string // verified flags for a mode that cannot change files; "" when none is verified
 }
 
 // IsBusy looks for a busy pattern near the bottom of the screen.
@@ -167,6 +168,11 @@ var Profiles = func() map[string]*Profile {
 	claude := simple("claude")
 	claude.Calibrated, claude.PromptRequired, claude.InterruptVerified = true, true, true
 	claude.ReadInput, claude.StableView = claudeInput, claudeStableView
+	// Checked on a real session. dontAsk denies what is not listed, without prompting. User settings are
+	// excluded because their allow rules would re-open writes. Plan mode cannot be used: it stops at a
+	// "ready to execute?" dialog and cannot run the report command, even when that is allowed.
+	claude.ReadOnlyFlags = `--setting-sources project --permission-mode dontAsk --disallowedTools Edit Write MultiEdit NotebookEdit ` +
+		`--allowedTools Read Grep Glob 'Bash(git status *)' 'Bash(git diff *)' 'Bash(git log *)' 'Bash(git show *)' 'Bash(harness-ops task done *)'`
 	claude.BusyPatterns = []*regexp.Regexp{regexp.MustCompile(`(?i)esc to interrupt`), claudeWorking}
 
 	omp := simple("omp")

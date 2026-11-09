@@ -30,6 +30,11 @@ type Task struct {
 	Closed   bool              `json:"closed"`
 	Owned    bool              `json:"owned"`
 	Seen     bool              `json:"seen"`
+	Round    int               `json:"round"`    // follow-up rounds in the same session, from 1
+	Launched bool              `json:"launched"` // the brief is in: a bare shell now means the harness is gone
+	ExitCode *int              `json:"exit_code,omitempty"`
+	ReviewOf string            `json:"review_of,omitempty"` // the task this one reviews
+	Blind    bool              `json:"blind,omitempty"`     // a reviewer that must not see the worker's report
 }
 
 // PaneRecord marks a pane as created by harness-ops, so close may act on it.
@@ -61,8 +66,10 @@ type Data struct {
 	Pending []*Pending             `json:"pending"`
 }
 
+const registryVersion = 2
+
 func emptyData() *Data {
-	return &Data{Version: 1, Tasks: map[string]*Task{}, Panes: map[string]*PaneRecord{}, Pending: []*Pending{}}
+	return &Data{Version: registryVersion, Tasks: map[string]*Task{}, Panes: map[string]*PaneRecord{}, Pending: []*Pending{}}
 }
 
 // Registry is one JSON file, atomic writes, and one exclusive lock around each update.
@@ -103,7 +110,22 @@ func (r *Registry) Read() (*Data, error) {
 	if d.Panes == nil {
 		d.Panes = map[string]*PaneRecord{}
 	}
+	migrate(d)
 	return d, nil
+}
+
+// migrate brings an older file up to date. Tasks from version 1 were all launched, with one round.
+func migrate(d *Data) {
+	if d.Version >= registryVersion {
+		return
+	}
+	for _, x := range d.Tasks {
+		if x.Round == 0 {
+			x.Round = 1
+		}
+		x.Launched = x.Pane != ""
+	}
+	d.Version = registryVersion
 }
 
 // Update holds the lock, runs fn on the data, and writes it back only if fn succeeds.

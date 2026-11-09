@@ -74,7 +74,7 @@ func (f *Fake) Spawn(where, cmd, cwd, title string) (*term.Pane, error) {
 		return nil, term.BackendErr("spawn failed")
 	}
 	n := len(f.Panes) + len(f.Spawned) + 100
-	p := &term.Pane{ID: fmt.Sprintf("fake:%d", n), Backend: "fake", Native: fmt.Sprint(n), Title: title, Folder: cwd, Process: "sh"}
+	p := &term.Pane{ID: fmt.Sprintf("fake:%d", n), Backend: "fake", Native: fmt.Sprint(n), Title: title, Folder: cwd, Process: "fakeagent"}
 	f.Panes = append(f.Panes, p)
 	f.State[p.ID] = &Screen{Log: []string{"some earlier output"}}
 	f.Spawned = append(f.Spawned, p.ID)
@@ -120,7 +120,12 @@ func (f *Fake) Capture(p *term.Pane, lines int) ([]string, error) {
 		st.Busy--
 		return append(append([]string{}, st.Log...), fmt.Sprintf("working %d", st.Busy)), nil
 	}
-	return append(append([]string{}, st.Log...), "> "+st.Input), nil
+	screen := append([]string{}, st.Log...)
+	if p.Process == "fakeagent" { // spawned panes pass every profile's input-line check
+		rule := strings.Repeat("─", 40)
+		screen = append(screen, rule, "❯", rule, "╰─")
+	}
+	return append(screen, "> "+st.Input), nil
 }
 
 func (f *Fake) Close(p *term.Pane) error {

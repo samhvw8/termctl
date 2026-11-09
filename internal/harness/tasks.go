@@ -28,12 +28,21 @@ const (
 	reuseIdleTimeout = 5.0
 )
 
-var statusOf = map[string]string{"ok": "done", "failed": "failed", "blocked": "blocked"}
+// statusOf maps what a worker reports. Nothing a worker says is final: only the lead's accept makes a task done.
+var statusOf = map[string]string{"ok": "ready", "failed": "failed", "blocked": "blocked"}
 
-func active(status string) bool { return status == "running" || status == "blocked" }
+// open means a harness is still expected to be in the pane.
+func open(status string) bool { return status == "running" || status == "ready" || status == "blocked" }
+
+// settled means no more lead decision is due: accepted, or nothing left to accept.
+func settled(status string) bool { return status == "done" || status == "lost" }
+
+var shells = map[string]bool{"zsh": true, "bash": true, "sh": true, "fish": true, "dash": true, "ksh": true, "tcsh": true, "csh": true, "nu": true}
+
+func isShell(process string) bool { return shells[strings.TrimPrefix(process, "-")] }
 
 func footer(id string) string {
-	return fmt.Sprintf(`When finished, run: harness-ops task done %s --status ok|failed|blocked --summary "<one line result>"`, id)
+	return fmt.Sprintf(`When finished, run: harness-ops task done %s --status ok|failed|blocked --summary "<one line result>". `+"`task done`"+` tells the lead you are ready; keep this session open.`, id)
 }
 
 func envInt(name string, def int) (int, error) {
@@ -143,10 +152,10 @@ func (t *Tasks) Reconcile() error {
 	if err != nil {
 		return err
 	}
-	var lost []string
+	var lost, exited []string
 	now := t.clock().Now()
 	for _, x := range d.Tasks {
-		if !active(x.Status) {
+		if !open(x.Status) {
 			continue
 		}
 		if x.Pane == "" {
@@ -160,16 +169,19 @@ func (t *Tasks) Reconcile() error {
 			Warn(fmt.Sprintf("cannot check task %s: %v", x.ID, err))
 			continue
 		}
-		if p == nil {
+		switch {
+		case p == nil:
 			lost = append(lost, x.ID)
+		case x.Launched && isShell(p.Process):
+			exited = append(exited, x.ID)
 		}
 	}
-	if len(lost) == 0 {
+	if len(lost)+len(exited) == 0 {
 		return nil
 	}
 	return t.Reg.Update(func(d *Data) error {
 		for _, id := range lost {
-			if x := d.Tasks[id]; x != nil && active(x.Status) {
+			if x := d.Tasks[id]; x != nil && open(x.Status) {
 				x.Status, x.Ended = "lost", t.clock().Now()
 				if x.Summary == "" {
 					x.Summary = "its pane is gone"
@@ -177,8 +189,59 @@ func (t *Tasks) Reconcile() error {
 				delete(d.Panes, x.Pane)
 			}
 		}
+		for _, id := range exited {
+			t.markExited(d, id, nil)
+		}
 		return nil
 	})
+}
+
+// markExited records that the harness is gone from a live pane, and queues the owner's notice.
+func (t *Tasks) markExited(d *Data, id string, code *int) {
+	x := d.Tasks[id]
+	if x == nil || !open(x.Status) {
+		return
+	}
+	x.Status, x.Ended, x.ExitCode, x.Notify = "exited", t.clock().Now(), code, "pending"
+	why := "the harness exited"
+	if code != nil {
+		why = fmt.Sprintf("the harness exited with status %d", *code)
+	}
+	if x.Summary == "" {
+		x.Summary = why
+	}
+	d.Pending = append(d.Pending, &Pending{Task: x.ID, Owner: x.Owner, OwnerRef: x.OwnerRef,
+		Tag:     fmt.Sprintf("[agent-msg from %s (%s) id=%s folder=%s]", x.ID, x.Harness, x.Pane, x.Cwd),
+		Text:    fmt.Sprintf("RE: task %s (%s) exited: %s; its pane stays open, see it with: harness-ops read %s", x.ID, x.Title, why, x.ID),
+		Created: t.clock().Now()})
+}
+
+// Exited is called from the worker's pane when its harness ends. Reconcile is the fallback.
+func (t *Tasks) Exited(id string, code int) (*Task, error) {
+	var tid string
+	err := t.Reg.Update(func(d *Data) error {
+		x, err := t.find(d.Tasks, id)
+		if err != nil {
+			return err
+		}
+		if t.Sender != nil && t.Sender.ID != x.Pane && t.Sender.ID != x.Owner {
+			return term.TargetErr("%s is neither the worker nor the owner of task %s", t.Sender.Address(), x.ID)
+		}
+		tid = x.ID
+		t.markExited(d, x.ID, &code)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := t.FlushPending(); err != nil {
+		return nil, err
+	}
+	d, err := t.Reg.Read()
+	if err != nil {
+		return nil, err
+	}
+	return d.Tasks[tid], nil
 }
 
 // NewOpts are options of New.
@@ -186,6 +249,8 @@ type NewOpts struct {
 	Harness, Title, Brief, BriefFile, Cwd, Where, Reuse, Command string
 	MaxTasks                                                     int
 	Timeout                                                      float64
+	ReviewOf                                                     string
+	Blind                                                        bool
 }
 
 func newID() string {
@@ -196,7 +261,7 @@ func newID() string {
 
 func holdsTask(d *Data, paneID string) bool {
 	for _, x := range d.Tasks {
-		if active(x.Status) && x.Pane == paneID {
+		if open(x.Status) && x.Pane == paneID {
 			return true
 		}
 	}
@@ -224,7 +289,7 @@ func (t *Tasks) reserve(owner *term.Pane, o NewOpts, pane *term.Pane) (*Task, er
 			if x.Status == "running" && x.Owner == owner.ID {
 				running++
 			}
-			if active(x.Status) && x.Pane == owner.ID {
+			if open(x.Status) && x.Pane == owner.ID {
 				parent = x
 			}
 		}
@@ -244,6 +309,7 @@ func (t *Tasks) reserve(owner *term.Pane, o NewOpts, pane *term.Pane) (*Task, er
 		task = &Task{
 			ID: newID(), Title: o.Title, Harness: o.Harness, Ref: t.Backend.ServerRef(), Owner: owner.ID, OwnerRef: t.SenderRef,
 			Cwd: o.Cwd, Status: "running", Started: t.clock().Now(), Depth: depth, Notify: "none", Owned: pane == nil,
+			Round: 1, ReviewOf: o.ReviewOf, Blind: o.Blind,
 		}
 		if pane != nil {
 			task.Pane = pane.ID
@@ -383,6 +449,7 @@ func (t *Tasks) start(ops *Ops, owner *term.Pane, o NewOpts, id, brief string, p
 		ref := t.Backend.ServerRef()
 		pane, err = ops.Spawn(o.Harness, o.Where, o.Cwd, SpawnOpts{
 			Label: id, Title: o.Title, Command: o.Command, Timeout: o.Timeout,
+			Wrap: func(cmd string) string { return SurvivingCommand(cmd, t.exitHook(id)) },
 			OnCreated: func(p *term.Pane) error {
 				if t.spawnHook != nil {
 					t.spawnHook(p)
@@ -410,7 +477,23 @@ func (t *Tasks) start(ops *Ops, owner *term.Pane, o NewOpts, id, brief string, p
 	if prof == nil {
 		prof = Profiles["generic"]
 	}
-	return ops.Submit(pane, prompt(id, owner, brief, path), prof)
+	if err := ops.Submit(pane, prompt(id, owner, brief, path), prof); err != nil {
+		return err
+	}
+	return t.Reg.Update(func(d *Data) error { d.Tasks[id].Launched = true; return nil })
+}
+
+// exitHook is the command the pane's shell runs when the harness ends. It must reach the same registry.
+func (t *Tasks) exitHook(id string) string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	env := ""
+	if d := os.Getenv("TERMCTL_STATE_DIR"); d != "" {
+		env = "env TERMCTL_STATE_DIR=" + term.ShellQuote(d) + " "
+	}
+	return env + term.ShellQuote(exe) + " task exited " + id
 }
 
 func (t *Tasks) record(d *Data, p *term.Pane, harness, label, cwd string, ref map[string]string) {
@@ -424,6 +507,7 @@ func (t *Tasks) record(d *Data, p *term.Pane, harness, label, cwd string, ref ma
 // Spawn starts a harness and records the pane, so close may act on it later.
 func (t *Tasks) Spawn(harness, where, cwd string, opts SpawnOpts) (*term.Pane, error) {
 	ref := t.Backend.ServerRef()
+	opts.Wrap = func(cmd string) string { return SurvivingCommand(cmd, "") }
 	opts.OnCreated = func(p *term.Pane) error {
 		return t.Reg.Update(func(d *Data) error { t.record(d, p, harness, opts.Label, cwd, ref); return nil })
 	}
@@ -467,7 +551,7 @@ func (t *Tasks) ClosePane(target string, force bool) (*term.Pane, error) {
 	}
 	var task *Task
 	for _, x := range d.Tasks {
-		if active(x.Status) && x.Pane == p.ID {
+		if !settled(x.Status) && !x.Closed && x.Pane == p.ID {
 			task = x
 		}
 	}
@@ -476,7 +560,7 @@ func (t *Tasks) ClosePane(target string, force bool) (*term.Pane, error) {
 			return nil, term.Errf(term.CodeGuard, "%s was not created through spawn or task new; use --force to close it", p.Address())
 		}
 		if task != nil {
-			return nil, term.Errf(term.CodeGuard, "%s holds running task %s; use task close, or --force", p.Address(), task.ID)
+			return nil, term.Errf(term.CodeGuard, "%s holds task %s (%s), not accepted; use task accept, or --force", p.Address(), task.ID, task.Status)
 		}
 		busy, err := t.busy(t.Backend, p)
 		if err != nil {
@@ -492,15 +576,31 @@ func (t *Tasks) ClosePane(target string, force bool) (*term.Pane, error) {
 	return p, t.Reg.Update(func(d *Data) error {
 		delete(d.Panes, p.ID)
 		for _, x := range d.Tasks {
-			if x.Pane == p.ID && active(x.Status) {
-				x.Status, x.Ended, x.Summary, x.Closed = "failed", t.clock().Now(), "its pane was closed with --force", true
+			if x.Pane == p.ID && !settled(x.Status) && !x.Closed {
+				x.Closed = true
+				if x.Status == "running" {
+					x.Status, x.Ended, x.Summary = "failed", t.clock().Now(), "its pane was closed with --force"
+				}
 			}
 		}
 		return nil
 	})
 }
 
-// Ls lists tasks. Without all: this owner's open tasks.
+// reviewedBySender is the task this pane is reviewing blind, or "".
+func (t *Tasks) reviewedBySender(d *Data) string {
+	if t.Sender == nil {
+		return ""
+	}
+	for _, x := range d.Tasks {
+		if x.Blind && x.Pane == t.Sender.ID && open(x.Status) {
+			return x.ReviewOf
+		}
+	}
+	return ""
+}
+
+// Ls lists tasks. Without all: this owner's open tasks. A blind reviewer never sees what it reviews.
 func (t *Tasks) Ls(all bool) ([]*Task, error) {
 	if err := t.Reconcile(); err != nil {
 		return nil, err
@@ -509,9 +609,10 @@ func (t *Tasks) Ls(all bool) ([]*Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	hidden := t.reviewedBySender(d)
 	var out []*Task
 	for _, x := range d.Tasks {
-		if all || (!x.Closed && (t.Sender == nil || x.Owner == t.Sender.ID)) {
+		if x.ID != hidden && (all || (!x.Closed && (t.Sender == nil || x.Owner == t.Sender.ID))) {
 			out = append(out, x)
 		}
 	}
@@ -531,18 +632,33 @@ func (t *Tasks) Get(id string) (*Task, error) {
 	return t.find(d.Tasks, id)
 }
 
+// Show is Get for the caller's eyes: a blind reviewer cannot read the task it reviews.
+func (t *Tasks) Show(id string) (*Task, error) {
+	x, err := t.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	d, err := t.Reg.Read()
+	if err != nil {
+		return nil, err
+	}
+	if x.ID == t.reviewedBySender(d) {
+		return nil, term.TargetErr("a blind reviewer cannot read task %s", x.ID)
+	}
+	return x, nil
+}
+
 // Send messages a task's pane. New work on a finished task reopens it: the worker must report again.
 func (t *Tasks) Send(id, text string, force bool) error {
 	x, err := t.Get(id)
 	if err != nil {
 		return err
 	}
-	if x.Status == "lost" || x.Closed {
-		word := "lost"
-		if x.Closed {
-			word = "closed"
-		}
-		return term.UsageErr("task %s is %s: its pane is gone", x.ID, word)
+	if x.Closed {
+		return term.UsageErr("task %s is closed", x.ID)
+	}
+	if x.Status == "lost" || x.Status == "exited" {
+		return term.UsageErr("task %s is %s: there is no harness to receive this", x.ID, x.Status)
 	}
 	b, p, err := t.paneByID(x.Pane, x.Ref)
 	if err != nil {
@@ -560,6 +676,7 @@ func (t *Tasks) Send(id, text string, force bool) error {
 	return t.Reg.Update(func(d *Data) error {
 		c := d.Tasks[x.ID]
 		c.Status, c.Ended, c.Notify, c.Seen = "running", 0, "none", false
+		c.Round++
 		return nil
 	})
 }
@@ -639,6 +756,13 @@ func (t *Tasks) Wait(id string, any bool, timeout float64) (*Task, error) {
 	}
 }
 
+func roundNote(round int) string {
+	if round > 1 {
+		return fmt.Sprintf(" round %d", round)
+	}
+	return ""
+}
+
 func (t *Tasks) doneTag(x *Task, b term.Backend) (string, error) {
 	if t.Sender != nil {
 		return t.ops(b, t.Sender).Tag()
@@ -672,7 +796,7 @@ func (t *Tasks) Done(id, status, summary, summaryFile string) (*Task, error) {
 		if t.Sender != nil && t.Sender.ID != x.Pane && t.Sender.ID != x.Owner {
 			return term.TargetErr("%s is neither the worker nor the owner of task %s", t.Sender.Address(), x.ID)
 		}
-		if !active(x.Status) {
+		if x.Status != "running" && x.Status != "blocked" {
 			return term.UsageErr("task %s is already %s", x.ID, x.Status)
 		}
 		x.Status, x.Ended, x.Summary, x.Notify = stored, t.clock().Now(), summary, "pending"
@@ -682,7 +806,7 @@ func (t *Tasks) Done(id, status, summary, summaryFile string) (*Task, error) {
 			return err
 		}
 		d.Pending = append(d.Pending, &Pending{Task: tid, Owner: x.Owner, OwnerRef: x.OwnerRef, Tag: tag,
-			Text: fmt.Sprintf("RE: task %s (%s) %s: %s", tid, x.Title, x.Status, summary), Created: t.clock().Now()})
+			Text: fmt.Sprintf("RE: task %s (%s) %s%s: %s", tid, x.Title, x.Status, roundNote(x.Round), summary), Created: t.clock().Now()})
 		return nil
 	})
 	if err != nil {
@@ -788,8 +912,8 @@ func (t *Tasks) Close(id string, force bool) (*Task, error) {
 	if t.isSelf(x.Pane) {
 		return nil, term.TargetErr("refusing to close your own pane")
 	}
-	if x.Status == "running" && !force {
-		return nil, term.Errf(term.CodeGuard, "task %s is running; use --force to close it", x.ID)
+	if !settled(x.Status) && !force {
+		return nil, term.Errf(term.CodeGuard, "task %s is %s, not accepted; use task accept, or --force", x.ID, x.Status)
 	}
 	if x.Owned && x.Pane != "" {
 		b, p, err := t.paneByID(x.Pane, x.Ref)
@@ -816,4 +940,93 @@ func (t *Tasks) Close(id string, force bool) (*Task, error) {
 		return nil
 	})
 	return result, err
+}
+
+// Accept is the lead's verdict: only it makes a task done.
+func (t *Tasks) Accept(id string, closeIt bool) (*Task, error) {
+	x, err := t.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if t.Sender == nil || t.Sender.ID != x.Owner {
+		return nil, term.TargetErr("only the owner of task %s can accept it", x.ID)
+	}
+	if x.Status != "ready" {
+		return nil, term.UsageErr("task %s is %s; only a ready task can be accepted", x.ID, x.Status)
+	}
+	if err := t.Reg.Update(func(d *Data) error {
+		d.Tasks[x.ID].Status = "done"
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	if closeIt {
+		return t.Close(x.ID, false)
+	}
+	return t.Get(x.ID)
+}
+
+// ReviewOpts are options of Review.
+type ReviewOpts struct {
+	ID, Harness, Model, BriefFile, Where, Command string
+	Blind                                         bool
+	Timeout                                       float64
+}
+
+func stripFooter(brief, id string) string {
+	return strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(brief), footer(id)))
+}
+
+func (t *Tasks) blindBrief(x *Task) string {
+	requirements := "(the original brief is not available; review against what the code claims to do)"
+	if data, err := os.ReadFile(x.Brief); err == nil {
+		requirements = stripFooter(string(data), x.ID)
+	}
+	return "Blind review. You do not have the worker's report, and you must not look for it.\n" +
+		"Inspect the changes in this folder (start with `git status` and `git diff`) against the requirements below.\n" +
+		"Report a verdict, pass or fail, with concrete findings (file and line). Do not change any file.\n\nRequirements:\n\n" + requirements
+}
+
+// Review starts a new session linked to a task. A blind reviewer gets the requirements and the
+// files, never the worker's report, summary or conversation. Non-blind review is task send.
+func (t *Tasks) Review(o ReviewOpts) (*Task, error) {
+	if !o.Blind {
+		return nil, term.UsageErr("task review is for --blind review; a non-blind review goes to the worker with task send")
+	}
+	if o.Harness == "" {
+		return nil, term.UsageErr("task review needs --harness")
+	}
+	prof, known := Profiles[o.Harness]
+	if !known && o.Command == "" {
+		return nil, term.UsageErr("unknown harness '%s'; pass --command", o.Harness)
+	}
+	x, err := t.Get(o.ID)
+	if err != nil {
+		return nil, err
+	}
+	if x.Status == "running" {
+		return nil, term.UsageErr("task %s is still running; review it after the worker reports", x.ID)
+	}
+	cmd := o.Command
+	if cmd == "" {
+		cmd = prof.Command
+		if o.Model != "" {
+			cmd += " --model=" + term.ShellQuote(o.Model)
+		}
+		if prof.ReadOnlyFlags != "" {
+			cmd += " " + prof.ReadOnlyFlags
+		} else {
+			Warn(fmt.Sprintf("%s has no verified read-only mode; this reviewer can change files", o.Harness))
+		}
+	}
+	brief := t.blindBrief(x)
+	if o.BriefFile != "" {
+		data, err := os.ReadFile(expandHome(o.BriefFile))
+		if err != nil {
+			return nil, term.UsageErr("--brief-file: %v", err)
+		}
+		brief = string(data)
+	}
+	return t.New(NewOpts{Harness: o.Harness, Title: "blind review of " + x.ID, Brief: brief, Cwd: x.Cwd, Where: o.Where,
+		Command: cmd, Timeout: o.Timeout, ReviewOf: x.ID, Blind: true})
 }

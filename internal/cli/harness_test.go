@@ -207,6 +207,15 @@ func TestTaskCommands(t *testing.T) {
 	if code, _, _ := e.run("task", "done", "x", "--status", "maybe"); code != 2 {
 		t.Fatal(code)
 	}
+	if code, _, _ := e.run("task", "accept", "nope"); code != 2 {
+		t.Fatal(code)
+	}
+	if code, _, stderr := e.run("task", "review", "nope", "--harness", "claude"); code != 2 || !strings.Contains(stderr, "blind") {
+		t.Fatal(code, stderr)
+	}
+	if code, out, _ := e.run("--help"); code != 0 || !strings.Contains(out, "task accept") || !strings.Contains(out, "task review") {
+		t.Fatal(code, out)
+	}
 	if code, _, _ := e.run("task", "nonsense"); code != 2 {
 		t.Fatal(code)
 	}

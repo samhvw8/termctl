@@ -33,8 +33,10 @@ Talk to coding-agent panes. Put options before the target: everything after the 
   task show ID [--json]
   task send [--force] ID TEXT...
   task wait (ID | --any) [--timeout S]
-  task done ID --status ok|failed|blocked (--summary TEXT | --summary-file F)
-  task close [--force] ID
+  task done ID --status ok|failed|blocked (--summary TEXT | --summary-file F)   the worker reports; the session stays open
+  task accept ID [--close]                    the lead's verdict; only the owner can finish a task
+  task review ID --blind --harness H [--model M] [--brief-file F]   a new session that never sees the worker's report
+  task close [--force] ID                     refused until the task is accepted, unless --force
 
 Exit codes: 0 ok, 1 backend error, 2 refused target/usage, 4 draft on input line, 5 wait timed out, 6 refused by a safety limit.
 `
@@ -127,7 +129,7 @@ func when(ts float64) string {
 }
 
 func (a *App) printTasks(tasks []*harness.Task) {
-	fmt.Fprintf(a.Out, "%-9s %-8s %-9s %-12s %-28s SUMMARY\n", "ID", "STATUS", "HARNESS", "STARTED", "TITLE")
+	fmt.Fprintf(a.Out, "%-9s %-8s %-9s %-5s %-12s %-28s SUMMARY\n", "ID", "STATUS", "HARNESS", "ROUND", "STARTED", "TITLE")
 	for _, t := range tasks {
 		extra := ""
 		if t.Notify == "pending" {
@@ -136,7 +138,10 @@ func (a *App) printTasks(tasks []*harness.Task) {
 		if t.Closed {
 			extra += " [closed]"
 		}
-		fmt.Fprintf(a.Out, "%-9s %-8s %-9s %-12s %-28s %s%s\n", t.ID, t.Status, t.Harness, when(t.Started), term.Cut(t.Title, 28),
+		if t.ReviewOf != "" {
+			extra += " [reviews " + t.ReviewOf + "]"
+		}
+		fmt.Fprintf(a.Out, "%-9s %-8s %-9s %-5d %-12s %-28s %s%s\n", t.ID, t.Status, t.Harness, t.Round, when(t.Started), term.Cut(t.Title, 28),
 			term.Cut(strings.ReplaceAll(t.Summary, "\n", " "), 60), extra)
 	}
 }
@@ -559,6 +564,12 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 		vals = []string{"--status", "--summary", "--summary-file"}
 	case "close":
 		bools = []string{"--force"}
+	case "accept":
+		bools = []string{"--close"}
+	case "review":
+		bools, vals = []string{"--blind"}, []string{"--harness", "--model", "--brief-file", "--where", "--command", "--timeout"}
+	case "exited":
+		vals = []string{"--code"}
 	default:
 		return term.UsageErr("unknown task command '%s'", cmd)
 	}
@@ -624,7 +635,7 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 		if err != nil {
 			return err
 		}
-		t, err := tasks.Get(id)
+		t, err := tasks.Show(id)
 		if err != nil {
 			return err
 		}
@@ -633,7 +644,7 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 			fmt.Fprintln(a.Out, string(data))
 			return nil
 		}
-		for _, kv := range [][2]string{{"id", t.ID}, {"status", t.Status}, {"title", t.Title}, {"harness", t.Harness}, {"pane", t.Pane}, {"owner", t.Owner},
+		for _, kv := range [][2]string{{"id", t.ID}, {"status", t.Status}, {"round", fmt.Sprint(t.Round)}, {"title", t.Title}, {"harness", t.Harness}, {"reviews", t.ReviewOf}, {"pane", t.Pane}, {"owner", t.Owner},
 			{"cwd", t.Cwd}, {"brief", t.Brief}, {"depth", fmt.Sprint(t.Depth)}, {"notify", t.Notify}, {"summary", t.Summary}, {"started", when(t.Started)}, {"ended", when(t.Ended)}} {
 			fmt.Fprintf(a.Out, "%-9s %s\n", kv[0]+":", kv[1])
 		}
@@ -677,11 +688,54 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 		if err != nil {
 			return err
 		}
-		note := map[string]string{"delivered": "owner told", "pending": "owner busy: notification pending", "owner-gone": "owner pane is gone"}[t.Notify]
+		note := map[string]string{"delivered": "owner told; keep this session open", "pending": "owner busy: notification pending; keep this session open", "owner-gone": "owner pane is gone"}[t.Notify]
 		if note == "" {
 			note = t.Notify
 		}
 		fmt.Fprintf(a.Out, "task %s: %s (%s)\n", t.ID, t.Status, note)
+	case "accept":
+		id, err := arg()
+		if err != nil {
+			return err
+		}
+		t, err := tasks.Accept(id, p.bools["--close"])
+		if err != nil {
+			return err
+		}
+		state := "accepted"
+		if t.Closed {
+			state = "accepted and closed"
+		}
+		fmt.Fprintf(a.Out, "%s task %s\n", state, t.ID)
+	case "review":
+		id, err := arg()
+		if err != nil {
+			return err
+		}
+		timeout, err := p.float("--timeout", harness.DefaultTimeout)
+		if err != nil {
+			return err
+		}
+		t, err := tasks.Review(harness.ReviewOpts{ID: id, Blind: p.bools["--blind"], Harness: p.vals["--harness"], Model: p.vals["--model"],
+			BriefFile: p.vals["--brief-file"], Where: p.vals["--where"], Command: p.vals["--command"], Timeout: timeout})
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(a.Out, t.ID)
+	case "exited":
+		id, err := arg()
+		if err != nil {
+			return err
+		}
+		code, err := p.int("--code", 0)
+		if err != nil {
+			return err
+		}
+		t, err := tasks.Exited(id, code)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(a.Out, "task %s: %s\n", t.ID, t.Status)
 	case "close":
 		id, err := arg()
 		if err != nil {

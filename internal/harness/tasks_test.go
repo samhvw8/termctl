@@ -110,7 +110,7 @@ func TestNewSpawnsAndSubmitsBriefWithFooter(t *testing.T) {
 	if x.Status != "running" || x.Owner != r.owner.ID || x.Depth != 1 {
 		t.Fatalf("%+v", x)
 	}
-	if r.b.Events[0].Kind != "spawn" || r.b.Events[0].Text != "fake-cmd|/w" {
+	if r.b.Events[0].Kind != "spawn" || !strings.HasPrefix(r.b.Events[0].Text, "fake-cmd; s=$?;") {
 		t.Fatal(r.b.Events[0])
 	}
 	line := r.b.Texts(x.Pane)[0]
@@ -220,12 +220,15 @@ func TestHarnessNotReadyMarksFailedAndKeepsPaneClosable(t *testing.T) {
 }
 
 func TestDoneSetsStatus(t *testing.T) {
-	for reported, stored := range map[string]string{"ok": "done", "failed": "failed", "blocked": "blocked"} {
+	for reported, stored := range map[string]string{"ok": "ready", "failed": "failed", "blocked": "blocked"} {
 		r := newRig(t)
 		x := r.mustNew(t, nil, NewOpts{})
 		d := r.done(t, x, reported, "result text")
 		if d.Status != stored || d.Summary != "result text" || d.Ended == 0 {
 			t.Fatalf("%+v", d)
+		}
+		if r.b.Has("close", x.Pane) {
+			t.Fatal("task done must leave the session open")
 		}
 	}
 }
@@ -249,7 +252,7 @@ func TestBlockedCanFinish(t *testing.T) {
 	x := r.mustNew(t, nil, NewOpts{})
 	w := r.as(r.pane(x))
 	w.Done(x.ID, "blocked", "need input", "")
-	if d, err := w.Done(x.ID, "ok", "did it", ""); err != nil || d.Status != "done" {
+	if d, err := w.Done(x.ID, "ok", "did it", ""); err != nil || d.Status != "ready" {
 		t.Fatal(d, err)
 	}
 }
@@ -309,7 +312,7 @@ func TestSendReopensAFinishedTask(t *testing.T) {
 	if err := r.tasks.Send(x.ID, "here is the answer", false); err != nil {
 		t.Fatal(err)
 	}
-	if g := r.get(t, x.ID); g.Status != "running" || g.Ended != 0 {
+	if g := r.get(t, x.ID); g.Status != "running" || g.Ended != 0 || g.Round != 2 {
 		t.Fatalf("%+v", g)
 	}
 }
@@ -349,13 +352,24 @@ func TestRestartedServerMeansLost(t *testing.T) {
 	}
 }
 
-func TestFinishedTaskIsNotReconciled(t *testing.T) {
+func TestAcceptedTaskIsNotReconciled(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	r.done(t, x, "ok", "x")
+	r.tasks.Accept(x.ID, false)
+	r.b.Close(r.pane(x))
+	if r.get(t, x.ID).Status != "done" {
+		t.Fatal()
+	}
+}
+
+func TestReadyTaskWithGonePaneIsLost(t *testing.T) {
 	r := newRig(t)
 	x := r.mustNew(t, nil, NewOpts{})
 	r.done(t, x, "ok", "x")
 	r.b.Close(r.pane(x))
-	if r.get(t, x.ID).Status != "done" {
-		t.Fatal()
+	if g := r.get(t, x.ID); g.Status != "lost" || g.Summary != "x" {
+		t.Fatalf("%+v", g)
 	}
 }
 
@@ -396,7 +410,7 @@ func TestDraftOnOwnerKeepsNotificationPending(t *testing.T) {
 	if len(r.b.Texts(r.owner.ID)) != 0 || r.b.State[r.owner.ID].Input != "owner typing" {
 		t.Fatal("joined the draft")
 	}
-	if d.Notify != "pending" || d.Status != "done" || len(r.data().Pending) != 1 {
+	if d.Notify != "pending" || d.Status != "ready" || len(r.data().Pending) != 1 {
 		t.Fatalf("%+v", d)
 	}
 	if e := r.clock.T - start; e <= 0 || e > 15 {
@@ -449,7 +463,7 @@ func TestNotificationToGoneOwner(t *testing.T) {
 	w := r.as(r.pane(x))
 	r.b.Close(r.owner)
 	d, _ := w.Done(x.ID, "ok", "x", "")
-	if d.Notify != "owner-gone" || d.Status != "done" || len(r.data().Pending) != 0 {
+	if d.Notify != "owner-gone" || d.Status != "ready" || len(r.data().Pending) != 0 {
 		t.Fatalf("%+v", d)
 	}
 }
@@ -489,7 +503,7 @@ func TestLs(t *testing.T) {
 		t.Fatal(theirs.ID, len(all))
 	}
 	r.done(t, mine, "ok", "x")
-	r.tasks.Close(mine.ID, false)
+	r.tasks.Accept(mine.ID, true)
 	got, _ = r.tasks.Ls(false)
 	if len(got) != 0 {
 		t.Fatal(got)
@@ -505,7 +519,7 @@ func TestWait(t *testing.T) {
 			w.Done(x.ID, "ok", "x", "")
 		}
 	}
-	if g, err := r.tasks.Wait(x.ID, false, 60); err != nil || g.Status != "done" {
+	if g, err := r.tasks.Wait(x.ID, false, 60); err != nil || g.Status != "ready" {
 		t.Fatal(g, err)
 	}
 }
@@ -567,10 +581,32 @@ func TestTaskCloseRules(t *testing.T) {
 	}
 }
 
-func TestTaskCloseAfterDoneIgnoresBusy(t *testing.T) {
+func TestTaskCloseBeforeAcceptIsRefused(t *testing.T) {
+	for _, status := range []string{"ok", "failed", "blocked"} {
+		r := newRig(t)
+		x := r.mustNew(t, nil, NewOpts{})
+		r.done(t, x, status, "x")
+		_, err := r.tasks.Close(x.ID, false)
+		wantCode(t, err, 6)
+		if r.b.Has("close", x.Pane) {
+			t.Fatal("closed before accept")
+		}
+		if _, err := r.tasks.Close(x.ID, true); err != nil || !r.b.Has("close", x.Pane) {
+			t.Fatal(err)
+		}
+		if g := r.get(t, x.ID); !g.Closed || g.Status == "done" {
+			t.Fatalf("--force must not accept: %+v", g)
+		}
+	}
+}
+
+func TestCloseAfterAcceptIgnoresBusy(t *testing.T) {
 	r := newRig(t)
 	x := r.mustNew(t, nil, NewOpts{})
 	r.done(t, x, "ok", "x")
+	if _, err := r.tasks.Accept(x.ID, false); err != nil {
+		t.Fatal(err)
+	}
 	r.b.Natives[x.Pane] = "working: finishing its turn"
 	if _, err := r.tasks.Close(x.ID, false); err != nil {
 		t.Fatal(err)
@@ -585,7 +621,7 @@ func TestTaskCloseWithPaneAlreadyGone(t *testing.T) {
 	x := r.mustNew(t, nil, NewOpts{})
 	r.done(t, x, "ok", "x")
 	r.b.Close(r.pane(x))
-	if _, err := r.tasks.Close(x.ID, false); err != nil {
+	if _, err := r.tasks.Close(x.ID, false); err != nil { // lost: nothing left to accept
 		t.Fatal(err)
 	}
 	if !r.get(t, x.ID).Closed {
@@ -740,5 +776,418 @@ func TestRegistryFieldNamesAreStable(t *testing.T) {
 		if !strings.Contains(string(raw), f) {
 			t.Error(f)
 		}
+	}
+}
+
+// --- lead-owned lifecycle ------------------------------------------------
+
+func TestAcceptFinishesAReadyTask(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	r.done(t, x, "ok", "x")
+	g, err := r.tasks.Accept(x.ID, false)
+	if err != nil || g.Status != "done" || g.Closed || r.b.Has("close", x.Pane) {
+		t.Fatalf("%+v %v", g, err)
+	}
+}
+
+func TestAcceptClose(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	r.done(t, x, "ok", "x")
+	g, err := r.tasks.Accept(x.ID, true)
+	if err != nil || g.Status != "done" || !g.Closed || !r.b.Has("close", x.Pane) {
+		t.Fatalf("%+v %v", g, err)
+	}
+}
+
+func TestOnlyTheOwnerAccepts(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	r.done(t, x, "ok", "x")
+	for _, who := range []*term.Pane{r.pane(x), r.other, nil} {
+		_, err := r.as(who).Accept(x.ID, false)
+		wantCode(t, err, 2)
+	}
+	if r.get(t, x.ID).Status != "ready" {
+		t.Fatal()
+	}
+}
+
+func TestAcceptNeedsAReadyTask(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	_, err := r.tasks.Accept(x.ID, false) // still running
+	wantCode(t, err, 2)
+	r.done(t, x, "failed", "broke")
+	_, err = r.tasks.Accept(x.ID, false)
+	wantCode(t, err, 2)
+	if r.get(t, x.ID).Status != "failed" {
+		t.Fatal("accept must not turn a failure into done")
+	}
+}
+
+func TestTaskDoneNeverMeansDoneEvenFromTheOwner(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	d, err := r.tasks.Done(x.ID, "ok", "owner reports", "")
+	if err != nil || d.Status != "ready" {
+		t.Fatalf("%+v %v", d, err)
+	}
+}
+
+func TestFollowUpRounds(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	if x.Round != 1 {
+		t.Fatal(x.Round)
+	}
+	w := r.as(r.pane(x))
+	w.Done(x.ID, "ok", "first", "")
+	if err := r.tasks.Send(x.ID, "reviewer found a bug", false); err != nil {
+		t.Fatal(err)
+	}
+	g := r.get(t, x.ID)
+	if g.Status != "running" || g.Round != 2 {
+		t.Fatalf("%+v", g)
+	}
+	if err := r.tasks.Send(x.ID, "and another note", false); err != nil { // still running: same round
+		t.Fatal(err)
+	}
+	if r.get(t, x.ID).Round != 2 {
+		t.Fatal("a message during a round must not open a new one")
+	}
+	if d, err := w.Done(x.ID, "ok", "second", ""); err != nil || d.Status != "ready" || d.Round != 2 || d.Summary != "second" {
+		t.Fatalf("%+v %v", d, err)
+	}
+	notes := r.b.Texts(r.owner.ID)
+	if len(notes) != 2 || !strings.Contains(notes[1], "round 2") {
+		t.Fatal(notes)
+	}
+}
+
+func TestFooterExplainsReady(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	if !strings.Contains(r.b.Texts(x.Pane)[0], "`task done` tells the lead you are ready; keep this session open.") {
+		t.Fatal(r.b.Texts(x.Pane)[0])
+	}
+}
+
+func TestClosePaneRefusesUnacceptedTask(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	r.done(t, x, "ok", "x")
+	_, err := r.tasks.ClosePane(x.ID, false)
+	wantCode(t, err, 6)
+}
+
+func TestReadyTasksFreeARunningSlotButStillHoldThePane(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	r.done(t, x, "ok", "x")
+	_, err := r.new(t, nil, NewOpts{Reuse: x.ID})
+	wantCode(t, err, 6)
+}
+
+// --- harness exit --------------------------------------------------------
+
+func TestSpawnKeepsAShellAfterTheHarness(t *testing.T) {
+	got := SurvivingCommand("claude --model haiku", "")
+	if !strings.HasPrefix(got, "claude --model haiku; s=$?;") || !strings.HasSuffix(got, `exec "${SHELL:-/bin/sh}" -l`) {
+		t.Fatal(got)
+	}
+	hooked := SurvivingCommand("omp", "/x/harness-ops task exited t1")
+	if !strings.Contains(hooked, `/x/harness-ops task exited t1 --code "$s"`) {
+		t.Fatal(hooked)
+	}
+}
+
+func TestTaskSpawnCommandLeavesAShell(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	if !strings.Contains(r.b.Events[0].Text, "exec") || !strings.Contains(r.b.Events[0].Text, "task exited "+x.ID) {
+		t.Fatal(r.b.Events[0].Text)
+	}
+}
+
+func TestPlainSpawnAlsoLeavesAShell(t *testing.T) {
+	r := newRig(t)
+	spawned(t, r)
+	if !strings.Contains(r.b.Events[0].Text, "exec") {
+		t.Fatal(r.b.Events[0].Text)
+	}
+}
+
+func TestExitedHarnessIsDetectedAndOwnerTold(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	r.pane(x).Process = "zsh" // the harness is gone, the shell is what remains
+	g := r.get(t, x.ID)
+	if g.Status != "exited" || r.b.Has("close", x.Pane) {
+		t.Fatalf("%+v", g)
+	}
+	if _, err := r.tasks.FlushPending(); err != nil {
+		t.Fatal(err)
+	}
+	notes := r.b.Texts(r.owner.ID)
+	if len(notes) != 1 || !strings.Contains(notes[0], "exited") || !strings.Contains(notes[0], x.ID) {
+		t.Fatal(notes)
+	}
+	if r.get(t, x.ID).Status != "exited" {
+		t.Fatal("exited must not change on a second read")
+	}
+}
+
+func TestExitedKeepsAReadyWorkersSummary(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	p := r.pane(x)
+	r.done(t, x, "ok", "the report")
+	p.Process = "bash"
+	if g := r.get(t, x.ID); g.Status != "exited" || g.Summary != "the report" {
+		t.Fatalf("%+v", g)
+	}
+}
+
+func TestFailedStaysFailedWhenTheHarnessExits(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	p := r.pane(x)
+	r.done(t, x, "failed", "broke")
+	p.Process = "zsh"
+	if g := r.get(t, x.ID); g.Status != "failed" {
+		t.Fatalf("%+v", g)
+	}
+}
+
+func TestShellBeforeLaunchIsNotExited(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	r.reg.Update(func(d *Data) error { d.Tasks[x.ID].Launched = false; return nil })
+	r.pane(x).Process = "zsh" // the login shell, before the harness has started
+	if r.get(t, x.ID).Status != "running" {
+		t.Fatal()
+	}
+}
+
+func TestExitHook(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	w := r.as(r.pane(x))
+	g, err := w.Exited(x.ID, 3)
+	if err != nil || g.Status != "exited" || g.ExitCode == nil || *g.ExitCode != 3 || !strings.Contains(g.Summary, "3") {
+		t.Fatalf("%+v %v", g, err)
+	}
+	if !strings.Contains(r.b.Texts(r.owner.ID)[0], "exited") {
+		t.Fatal(r.b.Texts(r.owner.ID))
+	}
+	// A second report, and reconcile, change nothing and tell nobody twice.
+	if g2, err := w.Exited(x.ID, 9); err != nil || *g2.ExitCode != 3 {
+		t.Fatalf("%+v %v", g2, err)
+	}
+	if len(r.b.Texts(r.owner.ID)) != 1 {
+		t.Fatal(r.b.Texts(r.owner.ID))
+	}
+}
+
+func TestExitHookFromAnotherPaneIsRefused(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	_, err := r.as(r.other).Exited(x.ID, 1)
+	wantCode(t, err, 2)
+}
+
+func TestExitedAfterAcceptChangesNothing(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	w := r.as(r.pane(x))
+	r.done(t, x, "ok", "x")
+	r.tasks.Accept(x.ID, false)
+	if g, err := w.Exited(x.ID, 0); err != nil || g.Status != "done" {
+		t.Fatalf("%+v %v", g, err)
+	}
+}
+
+func TestSendToExitedTaskIsRefused(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	r.pane(x).Process = "zsh"
+	wantCode(t, r.tasks.Send(x.ID, "hello?", false), 2)
+	if len(r.b.Texts(x.Pane)) != 1 { // only the brief: nothing typed into the bare shell
+		t.Fatal(r.b.Texts(x.Pane))
+	}
+}
+
+func TestCloseExitedTaskNeedsForce(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	r.pane(x).Process = "zsh"
+	r.get(t, x.ID)
+	_, err := r.tasks.Close(x.ID, false)
+	wantCode(t, err, 6)
+	if _, err := r.tasks.Close(x.ID, true); err != nil || !r.b.Has("close", x.Pane) {
+		t.Fatal(err)
+	}
+}
+
+// --- blind review -------------------------------------------------------
+
+func readyTask(t *testing.T, r *rig) *Task {
+	x := r.mustNew(t, nil, NewOpts{Brief: "add the widget"})
+	r.done(t, x, "ok", "SECRET-WORKER-SUMMARY")
+	return r.get(t, x.ID)
+}
+
+func TestBlindReviewGetsNoWorkerSummary(t *testing.T) {
+	r := newRig(t)
+	x := readyTask(t, r)
+	rv, err := r.tasks.Review(ReviewOpts{ID: x.ID, Blind: true, Harness: "claude", Model: "haiku", Timeout: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rv.ReviewOf != x.ID || !rv.Blind || rv.ID == x.ID || rv.Pane == x.Pane {
+		t.Fatalf("%+v", rv)
+	}
+	line := r.b.Texts(rv.Pane)[0]
+	brief, _ := os.ReadFile(rv.Brief)
+	for _, text := range []string{line, string(brief)} {
+		if strings.Contains(text, "SECRET-WORKER-SUMMARY") {
+			t.Fatal("the reviewer saw the worker's summary: ", text)
+		}
+	}
+	if !strings.Contains(string(brief), "add the widget") {
+		t.Fatal("the reviewer needs the requirements: ", string(brief))
+	}
+	if strings.Contains(string(brief), "task done "+x.ID) {
+		t.Fatal("the reviewer must not get the worker's report line: ", string(brief))
+	}
+}
+
+func TestBlindReviewCommandUsesModelAndReadOnlyMode(t *testing.T) {
+	r := newRig(t)
+	x := readyTask(t, r)
+	r.tasks.Review(ReviewOpts{ID: x.ID, Blind: true, Harness: "claude", Model: "haiku", Timeout: 60})
+	var cmd string
+	for _, e := range r.b.Events {
+		if e.Kind == "spawn" {
+			cmd = e.Text
+		}
+	}
+	if !strings.Contains(cmd, "claude --model=haiku") || !strings.Contains(cmd, "--permission-mode dontAsk") || !strings.Contains(cmd, "Bash(harness-ops task done *)") || !strings.Contains(cmd, "--setting-sources project") || !strings.Contains(cmd, "--disallowedTools Edit Write") {
+		t.Fatal(cmd)
+	}
+}
+
+func TestBlindReviewWarnsWithoutReadOnlyMode(t *testing.T) {
+	r := newRig(t)
+	x := readyTask(t, r)
+	var warned string
+	old := Warn
+	Warn = func(m string) { warned += m }
+	defer func() { Warn = old }()
+	if _, err := r.tasks.Review(ReviewOpts{ID: x.ID, Blind: true, Harness: "omp", Model: "m", Timeout: 60}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(warned, "read-only") {
+		t.Fatal(warned)
+	}
+}
+
+func TestBlindReviewBriefFile(t *testing.T) {
+	r := newRig(t)
+	x := readyTask(t, r)
+	f := filepath.Join(t.TempDir(), "b.md")
+	os.WriteFile(f, []byte("Review only cmd/main.go."), 0o644)
+	rv, err := r.tasks.Review(ReviewOpts{ID: x.ID, Blind: true, Harness: "claude", BriefFile: f, Timeout: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(rv.Brief); !strings.Contains(string(b), "Review only cmd/main.go.") {
+		t.Fatal(string(b))
+	}
+}
+
+func TestReviewUsage(t *testing.T) {
+	r := newRig(t)
+	x := readyTask(t, r)
+	_, err := r.tasks.Review(ReviewOpts{ID: x.ID, Harness: "claude"})
+	wantCode(t, err, 2) // non-blind review is task send
+	_, err = r.tasks.Review(ReviewOpts{ID: x.ID, Blind: true})
+	wantCode(t, err, 2) // needs a harness
+	y := r.mustNew(t, nil, NewOpts{})
+	_, err = r.tasks.Review(ReviewOpts{ID: y.ID, Blind: true, Harness: "claude"})
+	wantCode(t, err, 2) // the worker has not finished
+}
+
+func TestReviewerCannotReadTheReviewedTask(t *testing.T) {
+	r := newRig(t)
+	x := readyTask(t, r)
+	rv, _ := r.tasks.Review(ReviewOpts{ID: x.ID, Blind: true, Harness: "claude", Timeout: 60})
+	reviewer := r.as(r.pane(rv))
+	_, err := reviewer.Show(x.ID)
+	wantCode(t, err, 2)
+	all, _ := reviewer.Ls(true)
+	for _, y := range all {
+		if y.ID == x.ID {
+			t.Fatal("reviewed task visible to its blind reviewer")
+		}
+	}
+	if g, err := r.tasks.Show(x.ID); err != nil || g.ID != x.ID {
+		t.Fatal(g, err)
+	}
+}
+
+func TestReviewerReportsLikeATask(t *testing.T) {
+	r := newRig(t)
+	x := readyTask(t, r)
+	before := len(r.b.Texts(r.owner.ID))
+	rv, _ := r.tasks.Review(ReviewOpts{ID: x.ID, Blind: true, Harness: "claude", Timeout: 60})
+	d, err := r.as(r.pane(rv)).Done(rv.ID, "ok", "verdict: pass", "")
+	if err != nil || d.Status != "ready" {
+		t.Fatalf("%+v %v", d, err)
+	}
+	notes := r.b.Texts(r.owner.ID)
+	if len(notes) != before+1 || !strings.Contains(notes[before], "verdict: pass") {
+		t.Fatal(notes)
+	}
+}
+
+// --- migration ----------------------------------------------------------
+
+const oldRegistry = `{
+ "version": 1,
+ "tasks": {
+  "tcfcdbf": {"id": "tcfcdbf", "title": "job", "harness": "omp", "pane": "fake:50", "ref": {}, "owner": "fake:9", "owner_ref": {},
+   "cwd": "/w", "brief": "/b", "status": "running", "started": 1000, "ended": 0, "summary": "", "depth": 1, "notify": "none",
+   "closed": false, "owned": true, "seen": false},
+  "told": {"id": "told", "title": "old", "harness": "omp", "pane": "", "ref": {}, "owner": "fake:9", "owner_ref": {},
+   "cwd": "/w", "brief": "/b", "status": "done", "started": 900, "ended": 950, "summary": "s", "depth": 1, "notify": "delivered",
+   "closed": false, "owned": true, "seen": true}
+ },
+ "panes": {}, "pending": []
+}`
+
+func TestOldRegistryMigratesOnRead(t *testing.T) {
+	r := newRig(t)
+	os.MkdirAll(r.reg.Root, 0o755)
+	os.WriteFile(r.reg.Path, []byte(oldRegistry), 0o644)
+	worker := termtest.MakePane(50, "tcfcdbf", "", "/w", "omp")
+	r.b.Panes = append(r.b.Panes, worker)
+	r.b.State[worker.ID] = &termtest.Screen{Log: []string{"x"}}
+	d := r.data()
+	if d.Tasks["tcfcdbf"].Round != 1 || !d.Tasks["tcfcdbf"].Launched || d.Version != registryVersion {
+		t.Fatalf("%+v", d.Tasks["tcfcdbf"])
+	}
+	if r.get(t, "tcfcdbf").Status != "running" {
+		t.Fatal("an old running task must stay running")
+	}
+	// A worker from the old format can report, and an already-finished old task stays closable.
+	g, err := r.as(worker).Done("tcfcdbf", "ok", "finished", "")
+	if err != nil || g.Status != "ready" {
+		t.Fatalf("%+v %v", g, err)
+	}
+	if _, err := r.tasks.Close("told", false); err != nil {
+		t.Fatal(err)
 	}
 }
