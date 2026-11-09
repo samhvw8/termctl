@@ -35,7 +35,8 @@ mise run proto         # regenerate the iTerm2 messages after editing api.proto
 - Exit codes are the contract: 0 ok, 1 backend error, 2 refused target/usage, 4 draft on input line, 5 wait timeout, 6 refused by a safety limit.
 - Never send to a pane resolved by focus. A target that is not unique, or is your own pane, is refused.
 - Layer 1 knows nothing about harnesses. Harness logic goes in `internal/harness/`.
-- Tests never touch the real registry: set `TERMCTL_STATE_DIR`.
+- **`~/.local/state/termctl` is live data for other agents' running tasks. Never delete it or anything in it, by hand or by script.** Run every experiment, test and manual script with `TERMCTL_STATE_DIR` set to a temp directory. Clean up with `harness-ops state clean`, which refuses the live directory.
+- Tests never touch the real registry: a test binary that resolves the default state directory panics.
 - Tests that open panes must create them, and close them. tmux tests use private sockets named `termctl-test-*`.
 - Parsing a harness screen against a real capture: add the capture to `internal/harness/profiles_test.go`.
 - A session that ends within seconds makes iTerm2 raise a modal that stalls its whole API. Never spawn something that can exit at once without the wrapper in `iterm2Command`.

@@ -12,6 +12,10 @@ A task is one harness session doing one job. The registry is `~/.local/state/ter
 
 Writes hold an exclusive `flock` on `registry.lock` and replace the file atomically, so readers need no lock. A corrupt file is an error, never a reset, because a reset would forget running tasks.
 
+# State directory is live data
+
+The default directory holds other agents' running tasks. It was deleted by hand during development, and two live tasks lost their records. So a test binary that resolves it panics, the e2e suite sets `TERMCTL_STATE_DIR` for every child, and `harness-ops state clean` refuses the live directory, anything containing it, and any directory holding something else.
+
 # Lifecycle
 
 The lead owns "done". The worker's session has the files loaded, so it is the right place for a non-blind verdict.

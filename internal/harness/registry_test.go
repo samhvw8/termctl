@@ -106,3 +106,74 @@ func TestTwoWritersLoseNothing(t *testing.T) {
 		t.Fatal(strconv.Itoa(d.Tasks["c"].Depth), len(d.Tasks))
 	}
 }
+
+// --- the real state directory is live data ----------------------------------
+
+func TestTestsCannotReachTheDefaultStateDir(t *testing.T) {
+	t.Setenv("TERMCTL_STATE_DIR", "")
+	defer func() {
+		if recover() == nil {
+			t.Fatal("a test binary must not resolve the default state dir")
+		}
+	}()
+	NewRegistry("")
+}
+
+func fakeHome(t *testing.T) (home, state string) {
+	home = t.TempDir()
+	t.Setenv("HOME", home)
+	state = filepath.Join(home, ".local", "state", "termctl")
+	os.MkdirAll(filepath.Join(state, "briefs"), 0o755)
+	os.WriteFile(filepath.Join(state, "registry.json"), []byte("{}"), 0o644)
+	return home, state
+}
+
+func stillThere(t *testing.T, state string) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(state, "registry.json")); err != nil {
+		t.Fatal("the live registry was removed")
+	}
+}
+
+func TestCleanStateRefusesTheDefaultDir(t *testing.T) {
+	home, state := fakeHome(t)
+	link := filepath.Join(t.TempDir(), "link")
+	os.Symlink(state, link)
+	for _, target := range []string{state, state + "/", link, filepath.Join(home, ".local", "state"), filepath.Join(home, ".local"), home, filepath.Join(state, "briefs"), "/"} {
+		wantCode(t, CleanState(target), term.CodeGuard)
+		stillThere(t, state)
+	}
+}
+
+func TestCleanStateNeedsAnExplicitDir(t *testing.T) {
+	_, state := fakeHome(t)
+	wantCode(t, CleanState(""), term.CodeGuard)
+	stillThere(t, state)
+}
+
+func TestCleanStateRefusesAForeignDir(t *testing.T) {
+	fakeHome(t)
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "thesis.tex"), []byte("x"), 0o644)
+	wantCode(t, CleanState(dir), term.CodeGuard)
+	if _, err := os.Stat(filepath.Join(dir, "thesis.tex")); err != nil {
+		t.Fatal("removed a directory that is not a state dir")
+	}
+}
+
+func TestCleanStateRemovesATestDir(t *testing.T) {
+	fakeHome(t)
+	dir := filepath.Join(t.TempDir(), "state")
+	r := NewRegistry(dir)
+	r.Update(func(d *Data) error { return nil })
+	os.MkdirAll(filepath.Join(dir, "briefs"), 0o755)
+	if err := CleanState(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("not removed")
+	}
+	if err := CleanState(dir); err != nil { // already gone is fine
+		t.Fatal(err)
+	}
+}

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -283,5 +284,15 @@ func TestTermctlCommands(t *testing.T) {
 	}
 	if code, _, _ := run("name", "bad label!"); code != 2 {
 		t.Fatal(code)
+	}
+}
+
+func TestStateCleanCommand(t *testing.T) {
+	e := newEnv(t)
+	t.Setenv("TERMCTL_STATE_DIR", "")
+	err := e.app.harness([]string{"state", "clean"}) // not Harness: its pending delivery would need a state dir
+	var te *term.Error
+	if !errors.As(err, &te) || te.Code != 6 || !strings.Contains(err.Error(), "TERMCTL_STATE_DIR") {
+		t.Fatal(err)
 	}
 }

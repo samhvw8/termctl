@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
+	"testing"
 
 	"github.com/samhvw8/termctl/internal/term"
 )
@@ -75,12 +77,21 @@ func emptyData() *Data {
 // Registry is one JSON file, atomic writes, and one exclusive lock around each update.
 type Registry struct{ Root, Path string }
 
+// liveRoot is the real state directory. It holds the registry of tasks other agents are running.
+func liveRoot() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "state", "termctl")
+}
+
+// DefaultRoot is TERMCTL_STATE_DIR, else the live directory. A test binary can never get the live one.
 func DefaultRoot() string {
 	if d := os.Getenv("TERMCTL_STATE_DIR"); d != "" {
 		return d
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "state", "termctl")
+	if testing.Testing() {
+		panic("tests must set TERMCTL_STATE_DIR: the default state directory is live data for other agents")
+	}
+	return liveRoot()
 }
 
 func NewRegistry(root string) *Registry {
@@ -171,6 +182,53 @@ func (r *Registry) write(d *Data) error {
 	}
 	if err := os.Rename(f.Name(), r.Path); err != nil {
 		return term.BackendErr("task registry: %v", err)
+	}
+	return nil
+}
+
+// realPath resolves symlinks on the longest part of path that exists.
+func realPath(path string) string {
+	path = filepath.Clean(path)
+	rest := ""
+	for p := path; ; p = filepath.Dir(p) {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		if p == filepath.Dir(p) {
+			return path
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+	}
+}
+
+func isStateFile(name string) bool {
+	return name == "registry.json" || name == "registry.lock" || name == "briefs" || strings.HasPrefix(name, ".registry-")
+}
+
+// CleanState removes a throwaway state directory. It refuses the live directory, anything
+// containing it or inside it, and any directory that holds something other than termctl state.
+func CleanState(root string) error {
+	if root == "" {
+		return term.Errf(term.CodeGuard, "set TERMCTL_STATE_DIR to the directory to clean; the default state directory is live data and is never cleaned")
+	}
+	target, live := realPath(root), realPath(liveRoot())
+	if target == live || strings.HasPrefix(live+"/", strings.TrimSuffix(target, "/")+"/") || strings.HasPrefix(target, live+"/") {
+		return term.Errf(term.CodeGuard, "refusing to clean %s: the live state directory holds other agents' tasks", root)
+	}
+	entries, err := os.ReadDir(target)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return term.BackendErr("state clean: %v", err)
+	}
+	for _, e := range entries {
+		if !isStateFile(e.Name()) {
+			return term.Errf(term.CodeGuard, "refusing to clean %s: %s is not termctl state", root, e.Name())
+		}
+	}
+	if err := os.RemoveAll(target); err != nil {
+		return term.BackendErr("state clean: %v", err)
 	}
 	return nil
 }

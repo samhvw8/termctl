@@ -32,8 +32,15 @@ func TestMain(m *testing.M) {
 	if out, err := exec.Command("go", "build", "-o", filepath.Join(dir, "fakeharness"), "../internal/termtest/fakeharness").CombinedOutput(); err != nil {
 		panic(string(out))
 	}
+	// A child process that forgets its own setting must still miss the live registry.
+	state, err := os.MkdirTemp("", "termctl-e2e-state")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("TERMCTL_STATE_DIR", state)
 	code := m.Run()
 	exec.Command("tmux", "-L", socket, "kill-server").Run()
+	os.RemoveAll(state)
 	os.RemoveAll(dir)
 	os.Exit(code)
 }

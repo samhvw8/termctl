@@ -37,6 +37,7 @@ Talk to coding-agent panes. Put options before the target: everything after the 
   task accept ID [--close]                    the lead's verdict; only the owner can finish a task
   task review ID --blind --harness H [--model M] [--brief-file F]   a new session that never sees the worker's report
   task close [--force] ID                     refused until the task is accepted, unless --force
+  state clean                                 remove the throwaway directory in TERMCTL_STATE_DIR; refuses the live one
 
 Exit codes: 0 ok, 1 backend error, 2 refused target/usage, 4 draft on input line, 5 wait timed out, 6 refused by a safety limit.
 `
@@ -191,6 +192,15 @@ func (a *App) harness(argv []string) error {
 		return nil
 	case "task":
 		return a.task(rest, tail, dashed, o)
+	case "state":
+		if len(rest) != 1 || rest[0] != "clean" {
+			return term.UsageErr("usage: state clean  (removes the directory in TERMCTL_STATE_DIR; never the live one)")
+		}
+		if err := harness.CleanState(os.Getenv("TERMCTL_STATE_DIR")); err != nil {
+			return err
+		}
+		fmt.Fprintf(a.Out, "cleaned %s\n", os.Getenv("TERMCTL_STATE_DIR"))
+		return nil
 	case "ls":
 		p, err := parseArgs(rest, []string{"--json", "--all"}, nil, -1)
 		if err != nil {

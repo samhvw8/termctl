@@ -57,6 +57,10 @@ A task is one harness session doing one job, tracked in `~/.local/state/termctl/
 - Guards (exit 6): 6 running tasks per owner (`--max`, `TERMCTL_MAX_TASKS`), spawn depth 2 (`TERMCTL_MAX_DEPTH`).
 - `--reuse` needs an idle pane running that harness. Closing such a task leaves the pane open, because it was not created for the task.
 
+## State directory
+
+`~/.local/state/termctl` is live data: the tasks other agents are running. For tests and experiments, set `TERMCTL_STATE_DIR` to a temp directory. `harness-ops state clean` removes that directory, and refuses the live one.
+
 ## Review
 
 - **Same session (`task send`)** is the normal flow. The worker has the files loaded, so reviewer findings go there for a verdict.
