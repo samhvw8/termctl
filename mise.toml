@@ -13,6 +13,11 @@ description = "Run the opt-in iTerm2 acceptance test: opens one scratch tab and 
 env = { TERMCTL_ITERM_TEST = "1" }
 run = "go test ./e2e -run TestClearFirstOnITerm2 -v -count=1"
 
+[tasks."test:hc"]
+description = "Run the opt-in hc acceptance tests on a private herdr-core (its own HC_SESSION and XDG paths)"
+env = { TERMCTL_HC_TEST = "1" }
+run = "go test ./e2e -run 'TestHc' -v -count=1"
+
 [tasks.check]
 description = "Tests plus OKF validation"
 depends = ["test"]

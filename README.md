@@ -72,8 +72,8 @@ Blind reviewers run read-only where the harness supports it. Only Claude Code is
 
 `close` acts only on panes recorded by `spawn` or `task new`, and refuses a busy harness or a pane that holds a task not yet accepted. `--force` overrides those. Nothing closes your own pane. `termctl spawn` is not recorded: that is Layer 1.
 
-Global options come before the subcommand: `--backend iterm2|tmux|rex|ghostty`, `-L <tmux-socket>`.
-The backend is detected from `TMUX`, `REX_SESSION`, `ITERM_SESSION_ID`. A target such as `tmux:%3` selects its backend.
+Global options come before the subcommand: `--backend iterm2|tmux|rex|hc|ghostty`, `-L <tmux-socket>`.
+The backend is detected from `TMUX`, `HC_TERMINAL_ID`, `REX_SESSION`, `ITERM_SESSION_ID`, in that order. A target such as `tmux:%3` or `hc:t7` selects its backend.
 
 ## Target resolution
 
@@ -97,6 +97,7 @@ Exit codes: 0 ok, 1 backend error, 2 refused target or usage, 4 draft on input l
 |---|---|
 | iterm2 | Tested. Python API, native `it2` status helper. |
 | tmux | Tested on a private socket. |
+| hc | Tested on a real private herdr-core with the fake harness (`mise run test:hc`). `termctl send-text` is refused: `hc send` always submits; use `harness-ops msg` or `slash`. `--where` is ignored: a spawned agent opens as a tab in the Herdr app. A blocked program cannot be messaged, and there is no `--force` for it. |
 | rex | **Untested against real Rex** (not installed here). argv mapping is unit-tested against a stub. JSON field names of `rex block ls` are not documented, so parsing is tolerant. |
 | ghostty | Stub: raises "not supported: Ghostty has no control API yet". |
 

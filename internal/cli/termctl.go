@@ -14,12 +14,12 @@ var Version = "dev"
 
 const termctlUsage = `usage: termctl [--backend NAME] [-L SOCKET] COMMAND
 
-Drive terminal panes through backends (iterm2, tmux, rex, ghostty).
+Drive terminal panes through backends (iterm2, tmux, rex, hc, ghostty).
 
   ls [--json] [--all]             list panes
   which TARGET                    resolve a target to one pane
   spawn [--where tab|split|window] [--cwd D] [--title T] [CMD...]
-  send-text TARGET TEXT...        type text literally, without Enter
+  send-text TARGET TEXT...        type text literally, without Enter (refused on hc)
   send-key TARGET KEY...          press keys: enter, escape, tab, ctrl-c, ctrl-u, ...
   capture TARGET [-n LINES]       print the last lines of a pane's screen
   close TARGET                    close a pane

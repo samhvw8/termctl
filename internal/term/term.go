@@ -38,6 +38,7 @@ type Pane struct {
 	Folder                                 string
 	IsSelf                                 bool
 	Status                                 string
+	Rows                                   int // screen height, when the backend reports it; 0 otherwise
 }
 
 // Address is the ID to print and to put in message tags. iTerm2 session IDs are UUIDs and
@@ -80,6 +81,13 @@ type Backend interface {
 	NativeStatus(p *Pane) string // the terminal's own busy/idle report, or ""
 	Available() bool
 	ServerRef() map[string]string // enough to reopen this server and to notice a restart
+}
+
+// Submitter is for a backend that cannot type without pressing Enter (hc). A backend that has it
+// is sent whole lines through SubmitText; its SendText must refuse rather than submit.
+// from names the sender of an agent message, as <backend>/<id>, and is empty for anything else.
+type Submitter interface {
+	SubmitText(p *Pane, text, from string) error
 }
 
 var Where = []string{"tab", "split", "window"}
@@ -207,7 +215,7 @@ func Resolve(panes []*Pane, target string) (*Pane, error) {
 }
 
 // BackendNames lists known backends.
-var BackendNames = []string{"iterm2", "tmux", "rex", "ghostty"}
+var BackendNames = []string{"iterm2", "tmux", "rex", "hc", "ghostty"}
 
 func IsBackend(name string) bool {
 	for _, n := range BackendNames {
@@ -219,10 +227,13 @@ func IsBackend(name string) bool {
 }
 
 // Detect names the backend of the pane we run in. tmux first: it is the innermost when nested.
+// hc comes before iTerm2: a Herdr terminal can inherit ITERM_SESSION_ID from the core's environment.
 func Detect(getenv func(string) string, itermInstalled bool) string {
 	switch {
 	case getenv("TMUX") != "":
 		return "tmux"
+	case getenv("HC_TERMINAL_ID") != "":
+		return "hc"
 	case getenv("REX_SESSION") != "":
 		return "rex"
 	case getenv("ITERM_SESSION_ID") != "":
@@ -248,6 +259,8 @@ func Make(name, socket, socketPath string) (Backend, error) {
 		return &TmuxBackend{Socket: socket, SocketPath: socketPath}, nil
 	case "rex":
 		return NewRex(), nil
+	case "hc":
+		return NewHc(socketPath), nil
 	case "ghostty":
 		return ghostty{}, nil
 	}

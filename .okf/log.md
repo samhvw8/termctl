@@ -1,6 +1,10 @@
 # Update Log
 
 ## 2026-11-09
+* **Update**: `spawn` and `task new` on hc now open as a tab in the Herdr app, through a `herdr.space` label — see [backends](architecture/backends.md). Runs: nothing new.
+* **Update**: messages to Herdr agents now show hc's `<hc from=...>` tag; targets in iTerm2 and tmux keep the plain `[agent-msg` line. See [backends](architecture/backends.md). Runs: nothing new.
+* **Update**: omp's icon-led shortcut hint on an empty input line no longer counts as a draft (captured on omp 18.16.0). `hc` `Spawn` now refuses when no core runs, so a core never starts with an agent's environment. Real Claude Code and omp messages through `agent-msg` passed on the local core. Runs: nothing new.
+* **Addition**: the `hc` backend for Herdr terminals, with the `Submitter` interface and `blocked`/`done`/`error` status handling — see [backends](architecture/backends.md). Tested on a private core with the fake harness (`mise run test:hc`); Claude Code was started with no prompt to find the variable behind "Transcript saving is off". `ServerRef` carries a `core_id`, and tasks compare it when present, because a Herdr core keeps its terminals through a restart. A bare iTerm2 UUID target now routes to iTerm2, so an `RE:` reply from another terminal reaches it. Runs: nothing new.
 * **Addition**: tagged releases through GitHub Actions, so `mise use -g github:samhvw8/termctl` works — see [the playbook](playbooks/cut-a-release.md). Runs: one workflow, on version tags and manual runs only.
 * **Addition**: MIT licence, with the iTerm2 message files marked GPL-2.0-derived — see [the decision](decisions/mit-with-gpl-proto.md).
 * **Update**: guarded the live state directory after a manual cleanup deleted it: tests cannot resolve it, and `harness-ops state clean` refuses it — see [tasks](architecture/tasks.md).

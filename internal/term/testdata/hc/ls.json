@@ -1,0 +1,1 @@
+{"hidden_finished":0,"terminals":[{"address":"t1","agent":"zsh","cwd":"/tmp","name":"fix1","state":"live","status":"idle","turn":0},{"address":"t2","agent":"sleep","cwd":"/tmp","name":"fix2","state":"live","turn":0}]}

@@ -118,6 +118,17 @@ func (t *Tasks) find(tasks map[string]*Task, id string) (*Task, error) {
 	return nil, term.TargetErr("%s match '%s'", word, id)
 }
 
+// sameServer: a pane ID only means something on the server it was recorded on. Backends with a core_id
+// (Herdr: it outlives `hc server restart`, under which terminals keep running) are compared on it, others on pid.
+// An empty stored ref compares equal.
+func sameServer(stored, current map[string]string) bool {
+	if id := stored["core_id"]; id != "" {
+		return current["core_id"] == id
+	}
+	pid := stored["pid"]
+	return pid == "" || current["pid"] == pid
+}
+
 // paneByID returns the live pane, or nil if it is gone. A restarted terminal server makes the same ID a different pane.
 func (t *Tasks) paneByID(paneID string, ref map[string]string) (term.Backend, *term.Pane, error) {
 	b, err := t.backendFor(paneID, ref)
@@ -130,7 +141,7 @@ func (t *Tasks) paneByID(paneID string, ref map[string]string) (term.Backend, *t
 	}
 	for _, p := range panes {
 		if p.ID == paneID {
-			if stored := ref["pid"]; stored != "" && b.ServerRef()["pid"] != stored {
+			if !sameServer(ref, b.ServerRef()) {
 				return b, nil, nil
 			}
 			return b, p, nil
@@ -517,10 +528,10 @@ func (t *Tasks) Spawn(harness, where, cwd string, opts SpawnOpts) (*term.Pane, e
 func (t *Tasks) isSelf(id string) bool { return t.Sender != nil && id != "" && id == t.Sender.ID }
 
 func (t *Tasks) busy(b term.Backend, p *term.Pane) (bool, error) {
-	if strings.HasPrefix(b.NativeStatus(p), "working") {
+	if nativeBusy(b.NativeStatus(p)) {
 		return true, nil
 	}
-	lines, err := b.Capture(p, captureLines)
+	lines, err := b.Capture(p, screenLines(p))
 	if err != nil {
 		return false, err
 	}
@@ -546,7 +557,7 @@ func (t *Tasks) ClosePane(target string, force bool) (*term.Pane, error) {
 	}
 	rec := d.Panes[p.ID]
 	owned := rec != nil
-	if owned && rec.Ref["pid"] != "" && t.Backend.ServerRef()["pid"] != rec.Ref["pid"] {
+	if owned && !sameServer(rec.Ref, t.Backend.ServerRef()) {
 		owned = false // the record is from before a terminal server restart
 	}
 	var task *Task

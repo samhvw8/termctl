@@ -39,6 +39,7 @@ type Fake struct {
 	DropEnters    int // this many Enters are ignored, as a TUI does when text is still pasting
 	Ref           map[string]string
 	Spawned       []string
+	BackendName   string // Name() when set; default "fake"
 }
 
 func New(panes []*term.Pane, me *term.Pane) *Fake {
@@ -57,7 +58,12 @@ func MakePane(n int, label, title, folder, process string) *term.Pane {
 	return &term.Pane{ID: fmt.Sprintf("fake:%d", n), Backend: "fake", Native: fmt.Sprint(n), Label: label, Title: title, Folder: folder, Process: process}
 }
 
-func (f *Fake) Name() string { return "fake" }
+func (f *Fake) Name() string {
+	if f.BackendName != "" {
+		return f.BackendName
+	}
+	return "fake"
+}
 func (f *Fake) ListPanes() ([]*term.Pane, error) {
 	if f.FailList {
 		return nil, term.BackendErr("backend down")

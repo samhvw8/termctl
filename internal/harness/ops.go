@@ -88,8 +88,17 @@ func (o *Ops) Pick(target string) (*term.Pane, error) {
 	return p, nil
 }
 
+// screenLines is how much to read of a pane to judge its screen. A backend that knows the height is
+// asked for no more than the screen: reading history can scroll a full-screen app.
+func screenLines(p *term.Pane) int {
+	if p.Rows > 0 && p.Rows < captureLines {
+		return p.Rows
+	}
+	return captureLines
+}
+
 func (o *Ops) draft(p *term.Pane, prof *Profile) (*string, error) {
-	lines, err := o.Backend.Capture(p, captureLines)
+	lines, err := o.Backend.Capture(p, screenLines(p))
 	if err != nil {
 		return nil, err
 	}
@@ -143,15 +152,37 @@ func (o *Ops) assertAlone(p *term.Pane, prof *Profile, force bool) error {
 // Submit types one line and presses Enter. A TUI can drop an Enter that arrives while long text
 // is still being taken in, so it checks that the text left the input line and presses Enter again.
 func (o *Ops) Submit(p *term.Pane, line string, prof *Profile) error {
+	return o.submit(p, line, prof, "")
+}
+
+// caller names the sender to a backend that can show it, as <backend>/<id>. Only agent messages carry one:
+// a tag around a slash command would stop it working.
+func (o *Ops) caller() string {
+	if o.Sender != nil {
+		return o.Sender.Backend + "/" + term.Cut(o.Sender.Native, 8)
+	}
+	return "termctl/agent-msg"
+}
+
+func (o *Ops) submit(p *term.Pane, line string, prof *Profile, from string) error {
 	if prof == nil {
 		prof = ForProcess(p.Process)
 	}
-	if err := o.Backend.SendText(p, line); err != nil {
-		return err
-	}
-	o.Clock.Sleep(enterDelay)
-	if err := o.Backend.SendKey(p, "enter"); err != nil {
-		return err
+	if sub, ok := o.Backend.(term.Submitter); ok {
+		if err := term.CheckText(line); err != nil {
+			return err
+		}
+		if err := sub.SubmitText(p, line, from); err != nil {
+			return err
+		}
+	} else {
+		if err := o.Backend.SendText(p, line); err != nil {
+			return err
+		}
+		o.Clock.Sleep(enterDelay)
+		if err := o.Backend.SendKey(p, "enter"); err != nil {
+			return err
+		}
 	}
 	for try := 0; ; try++ {
 		o.Clock.Sleep(submitSettle)
@@ -186,7 +217,13 @@ func (o *Ops) Interrupt(p *term.Pane, key string) ([]string, bool, error) {
 	return keys, verified, nil
 }
 
-// WaitIdle returns when the harness is idle: not reported working, no busy pattern, input line visible, screen stable.
+// nativeBusy reads a terminal's own status: a working or blocked harness is not ready for input.
+// blocked is hc's word for a program waiting on a person; its prompt can look idle on screen.
+func nativeBusy(native string) bool {
+	return strings.HasPrefix(native, "working") || strings.HasPrefix(native, "blocked")
+}
+
+// WaitIdle returns when the harness is idle: not reported working or blocked, no busy pattern, input line visible, screen stable.
 func (o *Ops) WaitIdle(p *term.Pane, timeout float64, prof *Profile) error {
 	if prof == nil {
 		prof = ForProcess(p.Process)
@@ -199,7 +236,7 @@ func (o *Ops) WaitIdle(p *term.Pane, timeout float64, prof *Profile) error {
 	var last []string
 	first, since := true, o.Clock.Now()
 	for {
-		lines, err := o.Backend.Capture(p, captureLines)
+		lines, err := o.Backend.Capture(p, screenLines(p))
 		if err != nil {
 			return err
 		}
@@ -209,7 +246,7 @@ func (o *Ops) WaitIdle(p *term.Pane, timeout float64, prof *Profile) error {
 		}
 		native := o.Backend.NativeStatus(p)
 		promptOK := !prof.PromptRequired || prof.ReadInput(lines) != nil
-		if !strings.HasPrefix(native, "working") && promptOK && !prof.IsBusy(lines) && o.Clock.Now()-since >= prof.StableSeconds {
+		if !nativeBusy(native) && promptOK && !prof.IsBusy(lines) && o.Clock.Now()-since >= prof.StableSeconds {
 			return nil
 		}
 		if o.Clock.Now() >= deadline {
@@ -346,7 +383,7 @@ func (o *Ops) Msg(p *term.Pane, text string, opts MsgOpts) (string, error) {
 		line = tag + " " + text
 	}
 	line = Flat(line)
-	return line, o.Submit(p, line, prof)
+	return line, o.submit(p, line, prof, o.caller())
 }
 
 // SurvivingCommand runs cmd and leaves a login shell in the pane afterwards, so a crash leaves
@@ -373,6 +410,11 @@ type SpawnOpts struct {
 	Wrap                                      func(string) string // final form of the command; nil leaves it as is
 }
 
+// hcEnvReset removes what a Herdr core started from an agent session passes on to everything it runs.
+// CLAUDE_CODE_CHILD_SESSION is the minimal set, checked on real Claude Code: inherited, it prints
+// "Transcript saving is off"; with this one variable unset, the warning is gone.
+const hcEnvReset = "unset CLAUDE_CODE_CHILD_SESSION; "
+
 // Spawn starts a harness, waits until ready, and submits the first prompt.
 func (o *Ops) Spawn(harness, where, cwd string, opts SpawnOpts) (*term.Pane, error) {
 	if opts.Prompt != "" && opts.PromptFile != "" {
@@ -394,6 +436,9 @@ func (o *Ops) Spawn(harness, where, cwd string, opts SpawnOpts) (*term.Pane, err
 	}
 	if opts.Wrap != nil {
 		cmd = opts.Wrap(cmd)
+	}
+	if o.Backend.Name() == "hc" {
+		cmd = hcEnvReset + cmd
 	}
 	prompt := opts.Prompt
 	if opts.PromptFile != "" {
@@ -465,7 +510,7 @@ func (o *Ops) Status(p *term.Pane, native string) string {
 	if prof.Name == "generic" {
 		return "?"
 	}
-	lines, err := o.Backend.Capture(p, captureLines)
+	lines, err := o.Backend.Capture(p, screenLines(p))
 	if err != nil {
 		return "?"
 	}

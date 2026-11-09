@@ -92,6 +92,23 @@ func TestDetectPriority(t *testing.T) {
 		t.Fatal("iterm2 last")
 	}
 	none := func(string) string { return "" }
+	// A Herdr terminal may inherit ITERM_SESSION_ID; tmux stays innermost. hc wins over rex and iterm2.
+	if Detect(func(k string) string {
+		if k == "HC_TERMINAL_ID" || k == "ITERM_SESSION_ID" || k == "REX_SESSION" {
+			return "x"
+		}
+		return ""
+	}, false) != "hc" {
+		t.Fatal("HC_TERMINAL_ID with ITERM_SESSION_ID and REX_SESSION")
+	}
+	if Detect(func(k string) string {
+		if k == "HC_TERMINAL_ID" || k == "TMUX" {
+			return "x"
+		}
+		return ""
+	}, false) != "tmux" {
+		t.Fatal("TMUX stays innermost")
+	}
 	if Detect(none, false) != "" || Detect(none, true) != "iterm2" {
 		t.Fatal("fallback")
 	}
