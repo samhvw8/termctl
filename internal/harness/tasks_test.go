@@ -1228,3 +1228,12 @@ func TestAutoPlacementJoinsTheCallersOwnWorkers(t *testing.T) {
 		t.Fatalf("placements %v, want %v", got, want)
 	}
 }
+
+// Teammates address a task by its ID, so a reused pane gets the task ID as its label too.
+func TestReuseLabelsThePaneWithTheTaskID(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{Reuse: "other"})
+	if r.other.Label != x.ID {
+		t.Fatalf("label %q, want %q", r.other.Label, x.ID)
+	}
+}
