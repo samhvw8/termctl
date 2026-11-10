@@ -529,6 +529,21 @@ func (t *Tasks) Spawn(harness, where, cwd string, opts SpawnOpts) (*term.Pane, e
 	return t.ops(t.Backend, t.Sender).Spawn(harness, where, cwd, opts)
 }
 
+// Mine keeps the panes this caller started with spawn or task new.
+func (t *Tasks) Mine(panes []*term.Pane) ([]*term.Pane, error) {
+	d, err := t.Reg.Read()
+	if err != nil {
+		return nil, err
+	}
+	var out []*term.Pane
+	for _, p := range panes {
+		if rec := d.Panes[p.ID]; rec != nil && t.Sender != nil && rec.Owner == t.Sender.ID {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
 // owned reports the panes this caller started with spawn or task new, from the registry.
 // A registry that cannot be read places nothing beside them; placement is cosmetic.
 func (t *Tasks) owned() func(*term.Pane) bool {

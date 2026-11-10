@@ -16,7 +16,7 @@ const harnessUsage = `usage: harness-ops [--backend NAME] [-L SOCKET] COMMAND
 
 Talk to coding-agent panes. Put options before the target: everything after the target is text.
 
-  ls [--json] [--all]                         panes with harness, label, folder, status
+  ls [--json] [--all] [--mine]                panes with harness, label, folder, status; --mine: only the ones you started
   which TARGET                                resolve a target; never sends
   read TARGET [-n LINES]                      print a pane's screen (alias: capture)
   msg [--force] [--clear-first] [--timeout S] TARGET TEXT...   tagged message (alias: send)
@@ -205,14 +205,14 @@ func (a *App) harness(argv []string) error {
 		fmt.Fprintf(a.Out, "cleaned %s\n", os.Getenv("TERMCTL_STATE_DIR"))
 		return nil
 	case "ls":
-		p, err := parseArgs(rest, []string{"--json", "--all"}, nil, -1)
+		p, err := parseArgs(rest, []string{"--json", "--all", "--mine"}, nil, -1)
 		if err != nil {
 			return err
 		}
 		if err := applyOptions(p, o); err != nil {
 			return err
 		}
-		return a.ls(o, p.bools["--all"], p.bools["--json"])
+		return a.ls(o, p.bools["--all"], p.bools["--json"], p.bools["--mine"])
 	case "whoami", "name":
 		return a.selfCmd(cmd, rest, o)
 	case "which", "read", "capture":
@@ -439,7 +439,7 @@ func (a *App) opsFor(o *Options, target string) (*harness.Ops, error) {
 	return a.newOps(b, sender), nil
 }
 
-func (a *App) ls(o *Options, all, asJSON bool) error {
+func (a *App) ls(o *Options, all, asJSON, mine bool) error {
 	names := []string{""}
 	if all {
 		names = nil
@@ -465,6 +465,19 @@ func (a *App) ls(o *Options, all, asJSON bool) error {
 		found, err := b.ListPanes()
 		if err != nil {
 			return err
+		}
+		if mine {
+			tasks, err := a.openTasks(&opt, b)
+			if err != nil {
+				return err
+			}
+			if tasks.Sender == nil {
+				return term.UsageErr("ls --mine: cannot tell which pane this runs in")
+			}
+			found, err = tasks.Mine(found)
+			if err != nil {
+				return err
+			}
 		}
 		fillStatus(a.newOps(b, nil), found)
 		panes = append(panes, found...)

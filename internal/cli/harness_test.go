@@ -296,3 +296,23 @@ func TestStateCleanCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// ls --mine lists only the panes this caller started, so a lead can find what it must close.
+func TestLsMineListsOnlyPanesTheCallerStarted(t *testing.T) {
+	e := newEnv(t)
+	code, out, stderr := e.run("spawn", "generic", "--where", "tab", "--cwd", "/w/x", "--command", "fake-cmd", "--label", "worker")
+	if code != 0 {
+		t.Fatal(code, out, stderr)
+	}
+	code, out, stderr = e.run("ls", "--mine", "--json")
+	if code != 0 {
+		t.Fatal(code, out, stderr)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(out), &rows); err != nil {
+		t.Fatal(err, out)
+	}
+	if len(rows) != 1 || rows[0]["label"] != "worker" {
+		t.Fatalf("ls --mine = %v, want only the spawned worker", rows)
+	}
+}
