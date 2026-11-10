@@ -2,6 +2,7 @@ package harness
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1189,5 +1190,41 @@ func TestOldRegistryMigratesOnRead(t *testing.T) {
 	}
 	if _, err := r.tasks.Close("told", false); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func gitDir(t *testing.T, dir string) string {
+	t.Helper()
+	for _, args := range [][]string{{"init", "-q", dir}, {"-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i"}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s", args, out)
+		}
+	}
+	return dir
+}
+
+// A lead outside the project: the first worker opens a tab beside the lead, the next ones join
+// that worker's tab instead of each opening a tab.
+func TestAutoPlacementJoinsTheCallersOwnWorkers(t *testing.T) {
+	r := newRig(t)
+	home := t.TempDir()
+	repo := gitDir(t, filepath.Join(t.TempDir(), "repo"))
+	r.owner.Folder, r.owner.Tab, r.owner.IsSelf = home, "t1", true
+	r.other.Folder, r.other.Tab = repo, "t9" // someone else's agent in the repo: never joined
+	for i := 0; i < 3; i++ {
+		if _, err := r.tasks.Spawn("generic", "auto", repo, SpawnOpts{Command: "fake-cmd", Timeout: 60}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got []string
+	for _, e := range r.b.Events {
+		if e.Kind == "spawn" {
+			got = append(got, e.Pane)
+		}
+	}
+	w1 := r.b.Spawned[0]
+	want := []string{"tab@" + r.owner.ID, "split@" + w1, "split@" + r.b.Spawned[1]}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("placements %v, want %v", got, want)
 	}
 }

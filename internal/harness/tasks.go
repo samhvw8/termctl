@@ -459,7 +459,7 @@ func (t *Tasks) start(ops *Ops, owner *term.Pane, o NewOpts, id, brief string, p
 	if pane == nil {
 		ref := t.Backend.ServerRef()
 		pane, err = ops.Spawn(o.Harness, o.Where, o.Cwd, SpawnOpts{
-			Label: id, Title: o.Title, Command: o.Command, Timeout: o.Timeout,
+			Label: id, Title: o.Title, Command: o.Command, Timeout: o.Timeout, Owned: t.owned(),
 			Wrap: func(cmd string) string { return SurvivingCommand(cmd, t.exitHook(id)) },
 			OnCreated: func(p *term.Pane) error {
 				if t.spawnHook != nil {
@@ -518,11 +518,31 @@ func (t *Tasks) record(d *Data, p *term.Pane, harness, label, cwd string, ref ma
 // Spawn starts a harness and records the pane, so close may act on it later.
 func (t *Tasks) Spawn(harness, where, cwd string, opts SpawnOpts) (*term.Pane, error) {
 	ref := t.Backend.ServerRef()
+	opts.Owned = t.owned()
 	opts.Wrap = func(cmd string) string { return SurvivingCommand(cmd, "") }
 	opts.OnCreated = func(p *term.Pane) error {
 		return t.Reg.Update(func(d *Data) error { t.record(d, p, harness, opts.Label, cwd, ref); return nil })
 	}
 	return t.ops(t.Backend, t.Sender).Spawn(harness, where, cwd, opts)
+}
+
+// owned reports the panes this caller started with spawn or task new, from the registry.
+// A registry that cannot be read places nothing beside them; placement is cosmetic.
+func (t *Tasks) owned() func(*term.Pane) bool {
+	if t.Sender == nil {
+		return nil
+	}
+	d, err := t.Reg.Read()
+	if err != nil {
+		return nil
+	}
+	mine := map[string]bool{}
+	for id, rec := range d.Panes {
+		if rec.Owner == t.Sender.ID {
+			mine[id] = true
+		}
+	}
+	return func(p *term.Pane) bool { return mine[p.ID] }
 }
 
 func (t *Tasks) isSelf(id string) bool { return t.Sender != nil && id != "" && id == t.Sender.ID }

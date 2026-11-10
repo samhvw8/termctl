@@ -407,7 +407,8 @@ type SpawnOpts struct {
 	Prompt, PromptFile, Label, Command, Title string
 	Timeout                                   float64
 	OnCreated                                 func(*term.Pane) error
-	Wrap                                      func(string) string // final form of the command; nil leaves it as is
+	Wrap                                      func(string) string   // final form of the command; nil leaves it as is
+	Owned                                     func(*term.Pane) bool // panes the caller started, for --where auto; may be nil
 }
 
 // hcEnvReset removes what a Herdr core started from an agent session passes on to everything it runs.
@@ -456,7 +457,17 @@ func (o *Ops) Spawn(harness, where, cwd string, opts SpawnOpts) (*term.Pane, err
 	if title == "" {
 		title = opts.Label
 	}
-	p, err := o.Backend.Spawn(where, cmd, cwd, title)
+	var at *term.Pane
+	if where == "auto" {
+		where, at = term.PlaceFor(o.Backend, where, cwd, opts.Owned)
+	}
+	var p *term.Pane
+	var err error
+	if a, ok := o.Backend.(term.Anchored); ok && at != nil {
+		p, err = a.SpawnAt(at, where, cmd, cwd, title)
+	} else {
+		p, err = o.Backend.Spawn(where, cmd, cwd, title)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -151,9 +151,24 @@ func (b *TmuxBackend) Spawn(where, cmd, cwd, title string) (*Pane, error) {
 	if err := CheckWhere(where); err != nil {
 		return nil, err
 	}
-	where, err := Place(b, where, cwd)
-	if err != nil {
+	where, anchor := PlaceFor(b, where, cwd, nil)
+	return b.SpawnAt(anchor, where, cmd, cwd, title)
+}
+
+// SpawnAt splits anchor, or opens a window right after anchor's window. A nil anchor means the caller's pane.
+func (b *TmuxBackend) SpawnAt(at *Pane, where, cmd, cwd, title string) (*Pane, error) {
+	if err := CheckWhere(where); err != nil {
 		return nil, err
+	}
+	if where == "auto" {
+		where, at = PlaceFor(b, where, cwd, nil)
+	}
+	if at == nil && where != "window" {
+		me, err := b.SelfPane()
+		if err != nil {
+			return nil, err
+		}
+		at = me
 	}
 	opts := []string{"-P", "-F", "#{pane_id}"}
 	if cwd != "" {
@@ -163,25 +178,17 @@ func (b *TmuxBackend) Spawn(where, cmd, cwd, title string) (*Pane, error) {
 	switch where {
 	case "tab":
 		argv = append([]string{"new-window", "-d"}, opts...)
-		me, err := b.SelfPane()
-		if err != nil {
-			return nil, err
-		}
-		if me != nil && me.Tab != "" {
-			argv = append(argv, "-a", "-t", me.Tab) // right after the caller's window
+		if at != nil && at.Tab != "" {
+			argv = append(argv, "-a", "-t", at.Tab) // right after the anchor's window
 		}
 		if title != "" {
 			argv = append(argv, "-n", title)
 		}
 	case "split":
-		me, err := b.SelfPane()
-		if err != nil {
-			return nil, err
-		}
-		if me == nil {
+		if at == nil {
 			return nil, UsageErr("split needs a pane to split: run inside tmux on this server")
 		}
-		argv = append([]string{"split-window", "-d", "-h", "-t", me.Native}, opts...)
+		argv = append([]string{"split-window", "-d", "-h", "-t", at.Native}, opts...)
 	default:
 		base := title
 		if base == "" {

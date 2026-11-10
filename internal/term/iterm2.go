@@ -235,9 +235,17 @@ func (b *ITerm2Backend) Spawn(where, cmd, cwd, title string) (*Pane, error) {
 	if err := CheckWhere(where); err != nil {
 		return nil, err
 	}
-	where, err := Place(b, where, cwd)
-	if err != nil {
+	where, anchor := PlaceFor(b, where, cwd, nil)
+	return b.SpawnAt(anchor, where, cmd, cwd, title)
+}
+
+// SpawnAt splits anchor, or opens a tab right after anchor's tab. A nil anchor means the caller's pane.
+func (b *ITerm2Backend) SpawnAt(at *Pane, where, cmd, cwd, title string) (*Pane, error) {
+	if err := CheckWhere(where); err != nil {
 		return nil, err
+	}
+	if where == "auto" {
+		where, at = PlaceFor(b, where, cwd, nil)
 	}
 	var props []*api.ProfileProperty
 	set := func(k, v string) {
@@ -255,14 +263,18 @@ func (b *ITerm2Backend) Spawn(where, cmd, cwd, title string) (*Pane, error) {
 		set("Custom Directory", "Yes")
 		set("Working Directory", cwd)
 	}
+	want := selfNative()
+	if at != nil {
+		want = at.Native
+	}
 	var anchor *itermSession
-	if me := selfNative(); me != "" {
+	if want != "" {
 		sess, err := b.sessions()
 		if err != nil {
 			return nil, err
 		}
 		for i := range sess {
-			if sess[i].id == me {
+			if sess[i].id == want {
 				anchor = &sess[i]
 			}
 		}
@@ -290,7 +302,7 @@ func (b *ITerm2Backend) Spawn(where, cmd, cwd, title string) (*Pane, error) {
 		}
 		sid = r.GetSessionId()[0]
 	default:
-		next := uint32(anchor.tabIndex + 1) // beside the caller's tab, not at the end of the window
+		next := uint32(anchor.tabIndex + 1) // beside the anchor's tab, not at the end of the window
 		r, err := b.createTab(&anchor.window, &next, props)
 		if err != nil {
 			return nil, err

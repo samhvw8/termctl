@@ -60,6 +60,13 @@ func TestSpawnAutoPlacement(t *testing.T) {
 			t.Fatalf("same-project spawn %d opened in window %s, want the caller's %s", i+1, w, callerWin)
 		}
 	}
+	// The second agent split the first one, not the caller, so the caller keeps half the window.
+	f := strings.Fields(tmux(t, "display-message", "-p", "-t", caller, "#{pane_width} #{window_width}"))
+	pw, _ := strconv.Atoi(f[0])
+	ww, _ := strconv.Atoi(f[1])
+	if pw < ww/2-1 {
+		t.Fatalf("caller pane is %d of %d columns: a later split took the caller's width", pw, ww)
+	}
 	full := spawn(app, "same-3")
 	w, idx := windowOf(t, full)
 	if w == callerWin {

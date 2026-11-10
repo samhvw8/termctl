@@ -88,6 +88,21 @@ func (f *Fake) Spawn(where, cmd, cwd, title string) (*term.Pane, error) {
 	return p, nil
 }
 
+// SpawnAt records the anchor as "<where>@<anchor id>". A split joins the anchor's tab; a tab gets a new one.
+func (f *Fake) SpawnAt(at *term.Pane, where, cmd, cwd, title string) (*term.Pane, error) {
+	p, err := f.Spawn(where, cmd, cwd, title)
+	if err != nil || at == nil {
+		return p, err
+	}
+	f.Events[len(f.Events)-1].Pane = where + "@" + at.ID
+	if where == "split" {
+		p.Tab = at.Tab
+	} else {
+		p.Tab = "tab-" + p.Native
+	}
+	return p, nil
+}
+
 func (f *Fake) SendText(p *term.Pane, text string) error {
 	st := f.State[p.ID]
 	f.Events = append(f.Events, Event{Kind: "text", Pane: p.ID, Text: text, Busy: st.Busy})
