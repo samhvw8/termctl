@@ -391,7 +391,7 @@ func (t *Tasks) New(o NewOpts) (*Task, error) {
 		return nil, term.UsageErr("empty brief")
 	}
 	if o.Where == "" {
-		o.Where = "tab"
+		o.Where = "auto"
 	}
 	if o.Cwd == "" {
 		o.Cwd, _ = os.Getwd()

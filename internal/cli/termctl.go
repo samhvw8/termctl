@@ -18,7 +18,7 @@ Drive terminal panes through backends (iterm2, tmux, rex, hc, ghostty).
 
   ls [--json] [--all]             list panes
   which TARGET                    resolve a target to one pane
-  spawn [--where tab|split|window] [--cwd D] [--title T] [CMD...]
+  spawn [--where auto|tab|split|window] [--cwd D] [--title T] [CMD...]
   send-text TARGET TEXT...        type text literally, without Enter (refused on hc)
   send-key TARGET KEY...          press keys: enter, escape, tab, ctrl-c, ctrl-u, ...
   capture TARGET [-n LINES]       print the last lines of a pane's screen
@@ -133,7 +133,7 @@ func (a *App) termctl(argv []string) error {
 		words, _ := attachLiteral(p.rest, tail, dashed)
 		where := p.vals["--where"]
 		if where == "" {
-			where = "tab"
+			where = "auto"
 		}
 		b, err := a.OpenBackend(o, "")
 		if err != nil {

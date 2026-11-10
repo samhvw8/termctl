@@ -23,7 +23,7 @@ Talk to coding-agent panes. Put options before the target: everything after the 
   slash [--force] [--wait] [--timeout S] TARGET /COMMAND
   clear [--force] [--timeout S] TARGET        /clear alone, then wait for idle
   wait-idle [--timeout S] TARGET
-  spawn HARNESS [--where tab|split|window] [--cwd D] [--prompt T | --prompt-file F] [--label L] [--command CMD] [--timeout S]
+  spawn HARNESS [--where auto|tab|split|window] [--cwd D] [--prompt T | --prompt-file F] [--label L] [--command CMD] [--timeout S]
   close [--force] TARGET                      only panes made by spawn or task new; never your own
   interrupt [--key K] TARGET                  stop the current turn
   name LABEL                                  label the current pane
@@ -38,6 +38,9 @@ Talk to coding-agent panes. Put options before the target: everything after the 
   task review ID --blind --harness H [--model M] [--brief-file F]   a new session that never sees the worker's report
   task close [--force] ID                     refused until the task is accepted, unless --force
   state clean                                 remove the throwaway directory in TERMCTL_STATE_DIR; refuses the live one
+
+--where auto (the default for spawn and task new): a folder in your pane's project (same git repo, worktrees
+included) opens as a split in your tab, up to 3 panes; anything else opens as a new tab beside yours.
 
 Exit codes: 0 ok, 1 backend error, 2 refused target/usage, 4 draft on input line, 5 wait timed out, 6 refused by a safety limit.
 `
@@ -332,7 +335,7 @@ func (a *App) harness(argv []string) error {
 		}
 		where := p.vals["--where"]
 		if where == "" {
-			where = "tab"
+			where = "auto"
 		}
 		b, err := a.OpenBackend(o, "")
 		if err != nil {

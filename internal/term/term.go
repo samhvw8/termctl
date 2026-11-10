@@ -38,11 +38,12 @@ type Pane struct {
 	Folder                                 string
 	IsSelf                                 bool
 	Status                                 string
-	Rows                                   int // screen height, when the backend reports it; 0 otherwise
+	Rows                                   int    // screen height, when the backend reports it; 0 otherwise
+	Tab                                    string // the tab (tmux: window) holding the pane, when the backend reports it
 }
 
 // Address is the ID to print and to put in message tags. iTerm2 session IDs are UUIDs and
-// stand alone, so agent-msg tags keep their form; other backends need the prefix to route.
+// stand alone, so message tags keep their form; other backends need the prefix to route.
 func (p *Pane) Address() string {
 	if p.Backend == "iterm2" {
 		return p.Native
@@ -90,7 +91,8 @@ type Submitter interface {
 	SubmitText(p *Pane, text, from string) error
 }
 
-var Where = []string{"tab", "split", "window"}
+// Where lists the --where values. "auto" is resolved by Place before a backend sees it.
+var Where = []string{"auto", "tab", "split", "window"}
 
 func CheckWhere(where string) error {
 	for _, w := range Where {

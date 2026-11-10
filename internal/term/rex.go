@@ -158,6 +158,10 @@ func (b *RexBackend) Spawn(where, cmd, cwd, title string) (*Pane, error) {
 	if err := CheckWhere(where); err != nil {
 		return nil, err
 	}
+	where, err := Place(b, where, cwd)
+	if err != nil {
+		return nil, err
+	}
 	opts := []string{"--json"}
 	if cwd != "" {
 		opts = append(opts, "-c", cwd)

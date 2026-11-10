@@ -14,7 +14,7 @@ const (
 	tmuxLabelOpt = "@termctl_label"
 )
 
-var tmuxFields = []string{"pane_id", "pane_tty", "pane_title", tmuxLabelOpt, "pane_current_path", "pane_current_command"}
+var tmuxFields = []string{"pane_id", "pane_tty", "pane_title", tmuxLabelOpt, "pane_current_path", "pane_current_command", "window_id"}
 
 var tmuxKeys = map[string]string{
 	"enter": "Enter", "escape": "Escape", "tab": "Tab", "backspace": "BSpace",
@@ -123,7 +123,7 @@ func (b *TmuxBackend) ListPanes() ([]*Pane, error) {
 		}
 		panes = append(panes, &Pane{
 			ID: "tmux:" + f[0], Backend: "tmux", Native: f[0], TTY: tty, Title: CleanTitle(f[2]),
-			Label: f[3], Process: name, Folder: Tilde(f[4]), IsSelf: f[0] == me,
+			Label: f[3], Process: name, Folder: Tilde(f[4]), IsSelf: f[0] == me, Tab: f[6],
 		})
 	}
 	return panes, nil
@@ -151,6 +151,10 @@ func (b *TmuxBackend) Spawn(where, cmd, cwd, title string) (*Pane, error) {
 	if err := CheckWhere(where); err != nil {
 		return nil, err
 	}
+	where, err := Place(b, where, cwd)
+	if err != nil {
+		return nil, err
+	}
 	opts := []string{"-P", "-F", "#{pane_id}"}
 	if cwd != "" {
 		opts = append(opts, "-c", cwd)
@@ -159,6 +163,13 @@ func (b *TmuxBackend) Spawn(where, cmd, cwd, title string) (*Pane, error) {
 	switch where {
 	case "tab":
 		argv = append([]string{"new-window", "-d"}, opts...)
+		me, err := b.SelfPane()
+		if err != nil {
+			return nil, err
+		}
+		if me != nil && me.Tab != "" {
+			argv = append(argv, "-a", "-t", me.Tab) // right after the caller's window
+		}
 		if title != "" {
 			argv = append(argv, "-n", title)
 		}

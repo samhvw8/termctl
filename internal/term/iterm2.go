@@ -104,7 +104,10 @@ func (b *ITerm2Backend) call(req *api.ClientOriginatedMessage) (*api.ServerOrigi
 	return resp, nil
 }
 
-type itermSession struct{ id, window, tab, selectedTab string }
+type itermSession struct {
+	id, window, tab, selectedTab string
+	tabIndex                     int // the tab's position in its window
+}
 
 func walkSplit(n *api.SplitTreeNode, fn func(string)) {
 	for _, l := range n.GetLinks() {
@@ -123,9 +126,9 @@ func (b *ITerm2Backend) sessions() ([]itermSession, error) {
 	}
 	var out []itermSession
 	for _, w := range resp.GetListSessionsResponse().GetWindows() {
-		for _, t := range w.GetTabs() {
+		for ti, t := range w.GetTabs() {
 			walkSplit(t.GetRoot(), func(id string) {
-				out = append(out, itermSession{id, w.GetWindowId(), t.GetTabId(), w.GetSelectedTabId()})
+				out = append(out, itermSession{id, w.GetWindowId(), t.GetTabId(), w.GetSelectedTabId(), ti})
 			})
 		}
 	}
@@ -165,14 +168,14 @@ func (b *ITerm2Backend) ListPanes() ([]*Pane, error) {
 	if err != nil {
 		return nil, err
 	}
-	type row struct{ id, tty, title, label string }
+	type row struct{ id, tab, tty, title, label string }
 	rows := make([]row, 0, len(sess))
 	for _, s := range sess {
 		v, err := b.variables(s.id, "tty", "autoName", labelVar)
 		if err != nil {
 			return nil, err
 		}
-		rows = append(rows, row{s.id, strings.TrimPrefix(v[0], "/dev/"), CleanTitle(v[1]), v[2]})
+		rows = append(rows, row{s.id, s.tab, strings.TrimPrefix(v[0], "/dev/"), CleanTitle(v[1]), v[2]})
 	}
 	procs, err := processesByTTY()
 	if err != nil {
@@ -198,7 +201,7 @@ func (b *ITerm2Backend) ListPanes() ([]*Pane, error) {
 		}
 		panes = append(panes, &Pane{
 			ID: "iterm2:" + r.id, Backend: "iterm2", Native: r.id, TTY: r.tty, Title: r.title, Label: r.label,
-			Process: name, Folder: Tilde(cwds[p.pid]), IsSelf: r.id == me,
+			Process: name, Folder: Tilde(cwds[p.pid]), IsSelf: r.id == me, Tab: r.tab,
 		})
 	}
 	return panes, nil
@@ -232,6 +235,10 @@ func (b *ITerm2Backend) Spawn(where, cmd, cwd, title string) (*Pane, error) {
 	if err := CheckWhere(where); err != nil {
 		return nil, err
 	}
+	where, err := Place(b, where, cwd)
+	if err != nil {
+		return nil, err
+	}
 	var props []*api.ProfileProperty
 	set := func(k, v string) {
 		props = append(props, &api.ProfileProperty{Key: proto.String(k), JsonValue: proto.String(jsonValue(v))})
@@ -263,7 +270,7 @@ func (b *ITerm2Backend) Spawn(where, cmd, cwd, title string) (*Pane, error) {
 	var sid string
 	switch {
 	case where == "window":
-		r, err := b.createTab(nil, props)
+		r, err := b.createTab(nil, nil, props)
 		if err != nil {
 			return nil, err
 		}
@@ -283,7 +290,8 @@ func (b *ITerm2Backend) Spawn(where, cmd, cwd, title string) (*Pane, error) {
 		}
 		sid = r.GetSessionId()[0]
 	default:
-		r, err := b.createTab(&anchor.window, props)
+		next := uint32(anchor.tabIndex + 1) // beside the caller's tab, not at the end of the window
+		r, err := b.createTab(&anchor.window, &next, props)
 		if err != nil {
 			return nil, err
 		}
@@ -297,9 +305,9 @@ func (b *ITerm2Backend) Spawn(where, cmd, cwd, title string) (*Pane, error) {
 	return &Pane{ID: "iterm2:" + sid, Backend: "iterm2", Native: sid, Title: title}, nil
 }
 
-func (b *ITerm2Backend) createTab(window *string, props []*api.ProfileProperty) (string, error) {
+func (b *ITerm2Backend) createTab(window *string, index *uint32, props []*api.ProfileProperty) (string, error) {
 	// select_tab false keeps the user's focus where it was. A new window is always ordered front.
-	req := &api.CreateTabRequest{WindowId: window, SelectTab: proto.Bool(false), CustomProfileProperties: props}
+	req := &api.CreateTabRequest{WindowId: window, TabIndex: index, SelectTab: proto.Bool(false), CustomProfileProperties: props}
 	resp, err := b.call(&api.ClientOriginatedMessage{CreateTabRequest: req})
 	if err != nil {
 		return "", err
