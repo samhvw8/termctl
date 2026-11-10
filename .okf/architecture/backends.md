@@ -3,7 +3,7 @@ type: Architecture
 title: Backends
 description: The Backend interface and the state of each terminal backend.
 tags: [architecture, backends]
-generated: { by: claude-code/opus-5.5, at: '2026-11-10T10:30:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-10T15:00:00Z' }
 sources:
   - id: rex-cli
     resource: https://www.superlogical.com/rex/docs/reference/cli
@@ -26,15 +26,20 @@ Pane IDs are `backend:id`. A target with a backend prefix selects that backend, 
 
 # Placement
 
-`--where auto` is the default for `spawn`, `task new` and `task review`. Each backend's `Spawn` resolves it with `term.Place` (`internal/term/place.go`):
+`--where auto` is the default for `spawn`, `task new` and `task review`. harness-ops resolves it in `Ops.Spawn` with `term.PlaceFor` (`internal/term/place.go`), passing the panes the caller started (registry `PaneRecord.Owner`). `termctl spawn` has no registry and resolves it in the backend with no owned panes.
 
 | Case | Result |
 |---|---|
-| The new folder is in the caller pane's project, and the caller's tab holds fewer than `MaxSplit` (3) panes | `split` in the caller's tab |
-| Another project, a full tab, or no caller pane | `tab`, opened right after the caller's tab |
-| A backend that does not report tabs (Rex) | `split` for the same project, with no cap |
+| A tab with fewer than `MaxSplit` (3) panes already works on the new folder's project: first the caller's tab, when the caller is in that project; then a tab holding a pane the caller started in that project | `split` of the newest pane in that tab, so the caller keeps its width |
+| No such tab | `tab`, opened right after the caller's tab |
+| A backend that does not report tabs (Rex) | `split` of the caller for the same project, with no cap |
+| Listing panes fails (an iTerm2 session closed meanwhile) | `tab`, with a warning; placement never fails a spawn |
 
-One project means one git repository: `git rev-parse --git-common-dir` is the same, so a worktree counts as its repository. Outside git, only the same folder counts, so a caller in `~` does not pull every folder under it into its tab. The project comes from the caller pane's folder, which is its main program's working directory. hc ignores `--where`, so `Place` never lists hc panes. Checked on real iTerm2 (2026-11-10): the same folder split the caller's tab, and another repository opened at the next tab index.
+So a lead in `~` that starts three workers in one repository gets one new tab holding all three, not three tabs. Another agent's panes are never joined. iTerm2 and tmux take the chosen pane through `term.Anchored.SpawnAt`; other backends get only the resolved `where`.
+
+One project means one git repository: `git rev-parse --git-common-dir` is the same, so a worktree counts as its repository. Outside git, only the same folder counts, so a caller in `~` does not pull every folder under it into its tab. A pane's project comes from its folder, which is its main program's working directory. hc ignores `--where`, so placement never lists hc panes. Checked on real iTerm2 (2026-11-10): the same folder split the caller's tab, and another repository opened at the next tab index. iTerm2's tab index assumes `ListSessions` returns tabs in visual order, which that check confirmed.
+
+`harness-ops ls --mine` lists the panes the caller started, so a lead can find what it must close.
 
 # Backends
 

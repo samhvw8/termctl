@@ -1,5 +1,8 @@
 # Update Log
 
+## 2026-11-11
+* **Fix**: findings from a review of v0.2.0. `--where auto` now also joins a tab of a worker the caller started in the same project, splits the newest pane instead of halving the caller, and falls back to a tab with a warning when listing panes fails. `task new --reuse` labels the pane with the task ID, so teammates can address it. `ls --mine` lists the panes the caller started. See [backends](architecture/backends.md#placement). Runs: one registry read per `auto` spawn.
+
 ## 2026-11-10
 * **Release**: v0.2.0 — the `hc` backend for Herdr, `--where auto` placement, and the `[agent-ops from ...]` message tag. Runs: nothing new.
 * **Update**: `--where auto` is the new default for `spawn` and `task new`: the caller's project splits the caller's tab (up to 3 panes), anything else opens as a new tab right after the caller's, on iTerm2 and tmux — see [backends](architecture/backends.md#placement). Before, every agent opened a tab at the end of the window. `mise run test` covers it on tmux (`TestSpawnAutoPlacement`); iTerm2 was checked by hand. Runs: one `git rev-parse` per folder for each `auto` spawn.

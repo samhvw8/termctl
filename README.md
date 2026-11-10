@@ -13,7 +13,7 @@ termctl close <target>
 termctl name <label>
 termctl whoami
 
-harness-ops ls [--json] [--all]
+harness-ops ls [--json] [--all] [--mine]     # --mine: only panes you started
 harness-ops msg [--force] [--clear-first] [--timeout S] <target> <text...>
 harness-ops slash [--force] [--wait] <target> </command>
 harness-ops clear [--force] <target>         # /clear alone, then wait for idle
@@ -34,7 +34,7 @@ harness-ops task review <id> --blind --harness H [--model M] [--brief-file F]
 harness-ops task close [--force] <id>                # refused until accepted, unless --force
 ```
 
-`--where auto` is the default. A folder in the caller's project (same git repository, worktrees included) opens as a split in the caller's tab, until that tab holds 3 panes. Any other folder, or a full tab, opens as a new tab right after the caller's tab. Herdr ignores `--where`.
+`--where auto` is the default. A new agent joins a tab that already works on its project (same git repository, worktrees included): the caller's tab, or a tab of an agent the caller started. It splits the newest pane there, up to 3 panes per tab. Otherwise it opens a new tab right after the caller's tab. Herdr ignores `--where`.
 
 ## Tasks
 
