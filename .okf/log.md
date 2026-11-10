@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-11-11
+* **Release**: v0.2.1 with the review fixes below. Runs: nothing new.
 * **Fix**: findings from a review of v0.2.0. `--where auto` now also joins a tab of a worker the caller started in the same project, splits the newest pane instead of halving the caller, and falls back to a tab with a warning when listing panes fails. `task new --reuse` labels the pane with the task ID, so teammates can address it. `ls --mine` lists the panes the caller started. See [backends](architecture/backends.md#placement). Runs: one registry read per `auto` spawn.
 
 ## 2026-11-10
