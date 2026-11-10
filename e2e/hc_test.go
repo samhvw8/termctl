@@ -275,14 +275,14 @@ func TestHcFullSession(t *testing.T) {
 		t.Fatal(code, out, stderr)
 	}
 
-	// msg: delivered inside hc's tag, with the agent-msg line whole.
+	// msg: delivered inside hc's tag, with the message line whole.
 	if code, out, stderr := r.ops(r.owner, "msg", pane, "hello", "world"); code != 0 {
 		t.Fatal(code, out, stderr)
 	}
 	waitFor(t, "message", func() bool { return len(readLog(workerLog)) > 0 })
 	line := readLog(workerLog)[0]
 	t.Logf("received: %s", line)
-	if !strings.Contains(line, ">[agent-msg from owner (fakeharness) id="+r.ownerPane+" ") || !strings.HasSuffix(line, "] hello world</hc>") {
+	if !strings.Contains(line, ">[agent-ops from owner (fakeharness) id="+r.ownerPane+" ") || !strings.HasSuffix(line, "] hello world</hc>") {
 		t.Fatal(line)
 	}
 
@@ -381,7 +381,7 @@ func TestHcWorkerOutlivesItsSpawner(t *testing.T) {
 	}
 }
 
-// A message to a Herdr agent shows hc's tag, with the agent-msg line inside it.
+// A message to a Herdr agent shows hc's tag, with the message line inside it.
 func TestHcMsgShowsHerdrTag(t *testing.T) {
 	r := newHcRig(t)
 	r.startCore()
@@ -402,7 +402,7 @@ func TestHcMsgShowsHerdrTag(t *testing.T) {
 	waitFor(t, "kid message", func() bool { return len(readLog(kidLog)) >= 1 })
 	line := readLog(kidLog)[0]
 	t.Logf("received: %s", line)
-	if !strings.HasPrefix(line, `<hc from="hc/`+owner+`">[agent-msg from `) || !strings.HasSuffix(line, "are you there</hc>") {
+	if !strings.HasPrefix(line, `<hc from="hc/`+owner+`">[agent-ops from `) || !strings.HasSuffix(line, "are you there</hc>") {
 		t.Fatal(line)
 	}
 }

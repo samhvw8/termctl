@@ -130,7 +130,7 @@ func (r *rig) ops(pane string, args ...string) (int, string, string) {
 	return code, stdout.String(), stderr.String()
 }
 
-// The agent-msg failure case: /clear then a message must be two separate lines.
+// The message failure case: /clear then a message must be two separate lines.
 func TestClearFirstProducesTwoSeparateLines(t *testing.T) {
 	r := newRig(t)
 	code, out, stderr := r.ops(r.sender, "msg", "--clear-first", "fakeh", "please", "start", "over")
@@ -140,7 +140,7 @@ func TestClearFirstProducesTwoSeparateLines(t *testing.T) {
 	waitFor(t, "two log lines", func() bool { return len(readLog(r.log)) >= 2 })
 	lines := readLog(r.log)
 	t.Log(lines)
-	if len(lines) != 2 || lines[0] != "/clear" || !strings.HasPrefix(lines[1], "[agent-msg from sender (") ||
+	if len(lines) != 2 || lines[0] != "/clear" || !strings.HasPrefix(lines[1], "[agent-ops from sender (") ||
 		!strings.HasSuffix(lines[1], "] please start over") || !strings.Contains(lines[1], "id=tmux:"+r.sender) {
 		t.Fatalf("%q", lines)
 	}
@@ -232,7 +232,7 @@ func TestTaskNewDoneNotifyClose(t *testing.T) {
 	waitFor(t, "owner notified", func() bool { return len(readLog(r.log)) > 0 })
 	note := readLog(r.log)[0]
 	t.Log(note)
-	if !strings.HasPrefix(note, "[agent-msg from ") || !strings.Contains(note, "RE: task "+id) || !strings.Contains(note, "report written") {
+	if !strings.HasPrefix(note, "[agent-ops from ") || !strings.Contains(note, "RE: task "+id) || !strings.Contains(note, "report written") {
 		t.Fatal(note)
 	}
 	if !paneAlive(t, worker) {
@@ -421,7 +421,7 @@ func TestClearFirstOnITerm2(t *testing.T) {
 	waitFor(t, "two log lines", func() bool { return len(readLog(log)) >= 2 })
 	lines := readLog(log)
 	t.Log(lines)
-	if len(lines) != 2 || lines[0] != "/clear" || !strings.HasPrefix(lines[1], "[agent-msg from ") || !strings.HasSuffix(lines[1], "] start over") {
+	if len(lines) != 2 || lines[0] != "/clear" || !strings.HasPrefix(lines[1], "[agent-ops from ") || !strings.HasSuffix(lines[1], "] start over") {
 		t.Fatalf("%q", lines)
 	}
 }

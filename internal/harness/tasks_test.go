@@ -393,7 +393,7 @@ func TestDoneNotifiesOwner(t *testing.T) {
 	x := r.mustNew(t, nil, NewOpts{})
 	r.done(t, x, "ok", "all good")
 	texts := r.b.Texts(r.owner.ID)
-	if len(texts) != 1 || !strings.HasPrefix(texts[0], "[agent-msg from ") || !strings.Contains(texts[0], "RE: task "+x.ID) || !strings.Contains(texts[0], "all good") {
+	if len(texts) != 1 || !strings.HasPrefix(texts[0], "[agent-ops from ") || !strings.Contains(texts[0], "RE: task "+x.ID) || !strings.Contains(texts[0], "all good") {
 		t.Fatal(texts)
 	}
 	if r.get(t, x.ID).Notify != "delivered" || len(r.data().Pending) != 0 {

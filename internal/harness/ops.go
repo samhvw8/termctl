@@ -40,7 +40,7 @@ var Warn = func(msg string) { fmt.Fprintf(os.Stderr, "harness-ops: warning: %s\n
 
 func DefaultInbox() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".cache", "agent-msg")
+	return filepath.Join(home, ".cache", "agent-ops")
 }
 
 // HarnessName is the profile name, or the program's name when no profile fits.
@@ -161,7 +161,7 @@ func (o *Ops) caller() string {
 	if o.Sender != nil {
 		return o.Sender.Backend + "/" + term.Cut(o.Sender.Native, 8)
 	}
-	return "termctl/agent-msg"
+	return "termctl/agent-ops"
 }
 
 func (o *Ops) submit(p *term.Pane, line string, prof *Profile, from string) error {
@@ -307,7 +307,7 @@ func (o *Ops) Tag() (string, error) {
 	if name == "" {
 		name = harness
 	}
-	return fmt.Sprintf("[agent-msg from %s (%s) id=%s folder=%s]", name, harness, me.Address(), me.Folder), nil
+	return fmt.Sprintf("[agent-ops from %s (%s) id=%s folder=%s]", name, harness, me.Address(), me.Folder), nil
 }
 
 var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]`)

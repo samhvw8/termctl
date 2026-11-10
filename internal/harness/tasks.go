@@ -222,7 +222,7 @@ func (t *Tasks) markExited(d *Data, id string, code *int) {
 		x.Summary = why
 	}
 	d.Pending = append(d.Pending, &Pending{Task: x.ID, Owner: x.Owner, OwnerRef: x.OwnerRef,
-		Tag:     fmt.Sprintf("[agent-msg from %s (%s) id=%s folder=%s]", x.ID, x.Harness, x.Pane, x.Cwd),
+		Tag:     fmt.Sprintf("[agent-ops from %s (%s) id=%s folder=%s]", x.ID, x.Harness, x.Pane, x.Cwd),
 		Text:    fmt.Sprintf("RE: task %s (%s) exited: %s; its pane stays open, see it with: harness-ops read %s", x.ID, x.Title, why, x.ID),
 		Created: t.clock().Now()})
 }
@@ -778,7 +778,7 @@ func (t *Tasks) doneTag(x *Task, b term.Backend) (string, error) {
 	if t.Sender != nil {
 		return t.ops(b, t.Sender).Tag()
 	}
-	return fmt.Sprintf("[agent-msg from %s (%s) id=%s folder=%s]", x.ID, x.Harness, x.Pane, x.Cwd), nil
+	return fmt.Sprintf("[agent-ops from %s (%s) id=%s folder=%s]", x.ID, x.Harness, x.Pane, x.Cwd), nil
 }
 
 // Done records a task's result and tells its owner, or leaves the result pending.

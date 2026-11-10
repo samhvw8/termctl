@@ -12,7 +12,7 @@ import (
 	"github.com/samhvw8/termctl/internal/termtest"
 )
 
-const tag = "[agent-msg from me-label (python3) id=fake:9 folder=~/w/me]"
+const tag = "[agent-ops from me-label (python3) id=fake:9 folder=~/w/me]"
 
 type opsRig struct {
 	ops     *Ops
