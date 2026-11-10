@@ -1,6 +1,8 @@
 # Update Log
 
 ## 2026-11-10
+* **Update**: `--where auto` is the new default for `spawn` and `task new`: the caller's project splits the caller's tab (up to 3 panes), anything else opens as a new tab right after the caller's, on iTerm2 and tmux — see [backends](architecture/backends.md#placement). Before, every agent opened a tab at the end of the window. `mise run test` covers it on tmux (`TestSpawnAutoPlacement`); iTerm2 was checked by hand. Runs: one `git rev-parse` per folder for each `auto` spawn.
+* **Update**: the `agent-msg` skill is now `agent-ops`: messages start with `[agent-ops from ...]`, and long messages go to `~/.cache/agent-ops/`. Runs: nothing new.
 * **Update**: replaced the "cause unknown" note on omp and `homebox` in [backends](architecture/backends.md): omp refused the line because it had no API key for its model. A live `task new` on Herdr passed two rounds, and `spawn` with no core refused with exit 1. Runs: nothing new.
 
 ## 2026-11-09

@@ -5,7 +5,7 @@ A terminal driver with backends, and `harness-ops`, a layer on top for talking t
 ```sh
 termctl ls [--json] [--all]                  # panes
 termctl which <target>                       # resolve a target; never sends
-termctl spawn --where tab|split|window [--cwd D] [--title T] [CMD...]
+termctl spawn [--where auto|tab|split|window] [--cwd D] [--title T] [CMD...]
 termctl send-text <target> <text...>         # literal, no Enter
 termctl send-key <target> <key...>           # enter, escape, ctrl-c, ctrl-u, up, ...
 termctl capture <target> [-n 40]
@@ -18,12 +18,12 @@ harness-ops msg [--force] [--clear-first] [--timeout S] <target> <text...>
 harness-ops slash [--force] [--wait] <target> </command>
 harness-ops clear [--force] <target>         # /clear alone, then wait for idle
 harness-ops wait-idle [--timeout S] <target>
-harness-ops spawn <harness> --where tab|split|window --cwd D [--prompt T | --prompt-file F] [--label L] [--command CMD]
+harness-ops spawn <harness> [--where auto|tab|split|window] --cwd D [--prompt T | --prompt-file F] [--label L] [--command CMD]
 harness-ops close [--force] <target>         # only panes made by spawn/task new; never your own
 harness-ops interrupt [--key K] <target>     # stop the current turn (Esc on claude and omp)
-harness-ops which|read|name|whoami           # as agent-msg; send = msg
+harness-ops which|read|name|whoami           # as agent-ops; send = msg
 
-harness-ops task new <harness> --title T (--brief TEXT | --brief-file F) --cwd D [--where tab|split|window] [--reuse <target>] [--max N]
+harness-ops task new <harness> --title T (--brief TEXT | --brief-file F) --cwd D [--where auto|tab|split|window] [--reuse <target>] [--max N]
 harness-ops task ls [--all] [--json]
 harness-ops task show <id> [--json]
 harness-ops task send [--force] <id> <text...>       # on a ready task: opens the next round
@@ -33,6 +33,8 @@ harness-ops task accept <id> [--close]               # the lead's verdict: only 
 harness-ops task review <id> --blind --harness H [--model M] [--brief-file F]
 harness-ops task close [--force] <id>                # refused until accepted, unless --force
 ```
+
+`--where auto` is the default. A folder in the caller's project (same git repository, worktrees included) opens as a split in the caller's tab, until that tab holds 3 panes. Any other folder, or a full tab, opens as a new tab right after the caller's tab. Herdr ignores `--where`.
 
 ## Tasks
 
@@ -86,7 +88,7 @@ No match, several matches, or your own pane exits 2 and lists candidates. It nev
 - A calibrated harness (claude, omp) whose input line cannot be read also refuses. Others warn and proceed.
 - `slash --force` wipes the draft with ctrl-u: a slash command must be the whole line.
 - `msg --clear-first` sends `/clear` alone, waits for idle, re-checks the input line, then sends.
-- A message over 800 characters or with line breaks goes to a file in `~/.cache/agent-msg/`.
+- A message over 800 characters or with line breaks goes to a file in `~/.cache/agent-ops/`.
 - Put options before the target; everything after the target is message text. Use `--` to send text starting with a flag.
 
 Exit codes: 0 ok, 1 backend error, 2 refused target or usage, 4 draft on input line, 5 wait timed out, 6 refused by a safety limit.

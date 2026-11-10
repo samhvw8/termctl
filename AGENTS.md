@@ -2,8 +2,8 @@
 
 termctl drives terminal panes through backends (iTerm2, tmux, Herdr `hc`, Rex; Ghostty is a stub).
 `harness-ops` sits on top and talks to coding-agent TUIs: draft check, slash commands,
-idle waits, spawn, tagged messages. It replaced the logic of the `agent-msg` script;
-that script is now a thin wrapper.
+idle waits, spawn, tagged messages. It replaced the logic of the old `agent-msg` script;
+the `agent-ops` skill script is now a thin wrapper.
 
 Project knowledge lives in `.okf/`. Update it in the same change as the code it
 describes, and run the validator.
