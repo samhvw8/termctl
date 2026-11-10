@@ -1,5 +1,8 @@
 # Update Log
 
+## 2026-11-10
+* **Update**: replaced the "cause unknown" note on omp and `homebox` in [backends](architecture/backends.md): omp refused the line because it had no API key for its model. A live `task new` on Herdr passed two rounds, and `spawn` with no core refused with exit 1. Runs: nothing new.
+
 ## 2026-11-09
 * **Fix**: `agent-msg` failed inside a Herdr terminal whose shell exports `XDG_RUNTIME_DIR`; found by a real `RE:` reply test. `hcEnv` now passes the terminal's socket on as `HC_SOCKET`. Runs: nothing new.
 * **Update**: `spawn` and `task new` on hc now open as a tab in the Herdr app, through a `herdr.space` label — see [backends](architecture/backends.md). Runs: nothing new.
