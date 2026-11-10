@@ -19,7 +19,7 @@ sources:
 
 Layer 1 has no harness knowledge. Its one exception is `term.MainProcesses`, plain data that says which programs own a pane so its folder is reported correctly. A test keeps it in sync with the profiles.
 
-The `agent-ops` skill script (named `agent-msg` until 2026-11-10) is a thin wrapper around `harness-ops`, so the existing rules live in one place.[^agent-ops]
+The `agent-ops` skill (named `agent-msg` until 2026-11-10) calls `harness-ops` directly and holds only the rules for agents; the mechanism lives here.[^agent-ops]
 
 # Message flow
 
