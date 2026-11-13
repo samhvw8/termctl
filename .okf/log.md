@@ -1,5 +1,9 @@
 # Update Log
 
+## 2026-11-14
+* **Release**: v0.2.2 — `--where auto` keeps a job's agents in the caller's tab (up to 12 panes, evenly sized), and `msg` reaches named Claude Code sessions. Runs: nothing new.
+* **Fix**: `msg` to a named Claude Code session refused with exit 4 ("cannot see claude's input line"). The session name sits in the top rule of the input box (`── voxtract ─`), and the rule pattern wanted only `─`. Found when an agy worker could not reply to its lead. The real screen is now a test in `profiles_test.go`. See [harness profiles](architecture/harness-profiles.md). Runs: nothing new.
+
 ## 2026-11-13
 * **Update**: `MaxSplit` is 12, and every split now evens out the tab: iTerm2 through `SetTabLayoutRequest` (added to the iTerm2 messages, with `SplitTreeNode.vertical`), tmux through `select-layout tiled`. See [backends](architecture/backends.md#placement). Checked on real iTerm2 3.7.6. Runs: one more terminal call (two on iTerm2) per split.
 * **Update**: `--where auto` no longer groups by git project. A new agent splits the caller's tab whatever its folder, up to `MaxSplit` 8 panes (was 3), then an owned tab, then a new tab. The split cuts the largest pane along its long side, from new pane sizes (`grid_size` added to the iTerm2 messages, `pane_width`/`pane_height` in tmux). Cause: a lead's agy workers in `~` opened their own tab. See [backends](architecture/backends.md#placement). Runs: nothing new; the per-folder `git rev-parse` calls are gone.

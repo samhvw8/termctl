@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	ruleRe              = regexp.MustCompile(`^─{10,}$`)
+	ruleRe              = regexp.MustCompile(`^─{10,}(?: .+ ─+)?$`) // a named session ends the top rule with "── name ─"
 	claudePlaceholder   = regexp.MustCompile(`^Try ".*"$`) // an empty Claude Code box shows a suggestion
 	claudeWorking       = regexp.MustCompile(`(?m)^\s*\S\s+\S+…\s*\(`)
 	opencodePlaceholder = regexp.MustCompile(`^Ask anything….*$`)

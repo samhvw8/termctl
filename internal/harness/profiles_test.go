@@ -65,6 +65,31 @@ func TestClaudeInput(t *testing.T) {
 	}
 }
 
+// A named Claude Code session prints its name in the top rule of the input box.
+var claudeNamedIdle = []string{
+	"          - speaks as                              1 new message (click) ↓",
+	"                                                                                                              533030 tokens",
+	strings.Repeat("─", 114) + " voxtract ─",
+	"❯ ",
+	strings.Repeat("─", 125),
+	"  ◆ Opus 5.5 · High | ◎ STE Lite | # voxtract                                                          ◷ 12h26m | v 2.1.323",
+	"  ▣ voxtract | ▤ samhvw8/voxtract | ⎇ main ● ↑23 | ± +15884 -395",
+	"  ◔ ▰▰▰▰▰▰▱▱▱▱▱▱ 53% · 533k/1M · 467k left | ∿ ▁▂▅▇█ +8.5k | ⇲ 434k to compact · ~19 turns | ≈ 59:56 · 99% hit",
+	"                                                                                                    $ $150 | ∑ $14.10 today",
+	"  ◷ ▀▀▀▀▀▀▀▀▀▀▀▀ 7d 76% · resets in 1d14h at Sun 21:00 ⇣1%",
+	"  ⏵⏵ auto mode on (shift+tab to cycle) · ← 1 agent",
+}
+
+func TestClaudeInputInANamedSession(t *testing.T) {
+	eq(t, draftOf(t, "claude", claudeNamedIdle), "")
+	typed := append([]string{}, claudeNamedIdle...)
+	typed[3] = "❯ half typed"
+	eq(t, draftOf(t, "claude", typed), "half typed")
+	if got := Profiles["claude"].StableView(claudeNamedIdle); len(got) != 2 {
+		t.Fatalf("stable view kept %d lines, want the 2 above the box", len(got))
+	}
+}
+
 func TestClaudeBusyFromRealTurns(t *testing.T) {
 	p := Profiles["claude"]
 	for _, line := range []string{"✽ Gesticulating… (6s · ↓ 243 tokens · thought for 3s)",

@@ -18,7 +18,7 @@ Parsers were checked against screens of real harnesses on 2026-11-09. A scratch 
 
 | Harness | Input line | Notes |
 |---|---|---|
-| claude | `❯` between `─` rules | Calibrated. An empty box can show `Try "..."`: treated as empty. Status lines below the box tick, so idle ignores them. |
+| claude | `❯` between `─` rules | Calibrated. A named session ends the top rule with `── name ─`. An empty box can show `Try "..."`: treated as empty. Status lines below the box tick, so idle ignores them. |
 | omp | `╰─` | Calibrated. ctrl-u clears. Braille spinner marks busy. |
 | opencode | `┃` box above `╹▀` | Read on a fresh screen only. Placeholder `Ask anything…` is treated as empty. Not marked calibrated. |
 | codex, gemini, aider, pi | generic | Not installed or not checked. Uncalibrated: warn and proceed. |
