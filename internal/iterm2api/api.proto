@@ -16,6 +16,7 @@ message ClientOriginatedMessage {
   optional SplitPaneRequest split_pane_request = 109;
   optional ActivateRequest activate_request = 114;
   optional VariableRequest variable_request = 115;
+  optional SetTabLayoutRequest set_tab_layout_request = 122;
   optional CloseRequest close_request = 131;
   optional InvokeFunctionRequest invoke_function_request = 132;
 }
@@ -30,6 +31,7 @@ message ServerOriginatedMessage {
   optional SplitPaneResponse split_pane_response = 109;
   optional ActivateResponse activate_response = 114;
   optional VariableResponse variable_response = 115;
+  optional SetTabLayoutResponse set_tab_layout_response = 122;
   optional CloseResponse close_response = 131;
   optional InvokeFunctionResponse invoke_function_response = 132;
 }
@@ -231,6 +233,7 @@ message LineContents {
 }
 
 message SplitTreeNode {
+  optional bool vertical = 1;  // the divider is vertical: the children sit side by side
   repeated SplitTreeNode.SplitTreeLink links = 2;
   message SplitTreeLink {
     optional SessionSummary session = 1;
@@ -240,5 +243,28 @@ message SplitTreeNode {
 
 message SessionSummary {
   optional string unique_identifier = 1;
+  optional Size grid_size = 3;  // not set for buried sessions
 }
 
+message Size {
+  optional int32 width = 1;
+  optional int32 height = 2;
+}
+
+
+// The tree must match the tab's tree exactly, `vertical` included. Only grid sizes may change, and
+// they must add up to the same totals in every dimension, or the window resizes.
+message SetTabLayoutRequest {
+  optional SplitTreeNode root = 1;
+  optional string tab_id = 2;
+}
+
+message SetTabLayoutResponse {
+  enum Status {
+    OK = 0;
+    BAD_TAB_ID = 1;
+    WRONG_TREE = 2;
+    INVALID_SIZE = 3;
+  }
+  optional Status status = 1;
+}

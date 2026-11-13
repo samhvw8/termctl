@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -14,7 +15,7 @@ const (
 	tmuxLabelOpt = "@termctl_label"
 )
 
-var tmuxFields = []string{"pane_id", "pane_tty", "pane_title", tmuxLabelOpt, "pane_current_path", "pane_current_command", "window_id"}
+var tmuxFields = []string{"pane_id", "pane_tty", "pane_title", tmuxLabelOpt, "pane_current_path", "pane_current_command", "window_id", "pane_width", "pane_height"}
 
 var tmuxKeys = map[string]string{
 	"enter": "Enter", "escape": "Escape", "tab": "Tab", "backspace": "BSpace",
@@ -121,9 +122,11 @@ func (b *TmuxBackend) ListPanes() ([]*Pane, error) {
 		if name == "" {
 			name = f[5]
 		}
+		w, _ := strconv.Atoi(f[7])
+		h, _ := strconv.Atoi(f[8])
 		panes = append(panes, &Pane{
 			ID: "tmux:" + f[0], Backend: "tmux", Native: f[0], TTY: tty, Title: CleanTitle(f[2]),
-			Label: f[3], Process: name, Folder: Tilde(f[4]), IsSelf: f[0] == me, Tab: f[6],
+			Label: f[3], Process: name, Folder: Tilde(f[4]), IsSelf: f[0] == me, Tab: f[6], Width: w, Height: h,
 		})
 	}
 	return panes, nil
@@ -151,7 +154,7 @@ func (b *TmuxBackend) Spawn(where, cmd, cwd, title string) (*Pane, error) {
 	if err := CheckWhere(where); err != nil {
 		return nil, err
 	}
-	where, anchor := PlaceFor(b, where, cwd, nil)
+	where, anchor := PlaceFor(b, where, nil)
 	return b.SpawnAt(anchor, where, cmd, cwd, title)
 }
 
@@ -161,7 +164,7 @@ func (b *TmuxBackend) SpawnAt(at *Pane, where, cmd, cwd, title string) (*Pane, e
 		return nil, err
 	}
 	if where == "auto" {
-		where, at = PlaceFor(b, where, cwd, nil)
+		where, at = PlaceFor(b, where, nil)
 	}
 	if at == nil && where != "window" {
 		me, err := b.SelfPane()
@@ -188,7 +191,11 @@ func (b *TmuxBackend) SpawnAt(at *Pane, where, cmd, cwd, title string) (*Pane, e
 		if at == nil {
 			return nil, UsageErr("split needs a pane to split: run inside tmux on this server")
 		}
-		argv = append([]string{"split-window", "-d", "-h", "-t", at.Native}, opts...)
+		dir := "-v" // below
+		if SideBySide(at.Width, at.Height) {
+			dir = "-h"
+		}
+		argv = append([]string{"split-window", "-d", dir, "-t", at.Native}, opts...)
 	default:
 		base := title
 		if base == "" {
@@ -205,6 +212,11 @@ func (b *TmuxBackend) SpawnAt(at *Pane, where, cmd, cwd, title string) (*Pane, e
 		return nil, err
 	}
 	native := strings.TrimSpace(out)
+	if where == "split" { // cosmetic: the pane exists, so warn and go on
+		if _, err := b.run("select-layout", "-t", native, "tiled"); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: even out the window: %v\n", err)
+		}
+	}
 	if title != "" {
 		if _, err := b.run("select-pane", "-t", native, "-T", title); err != nil {
 			return nil, err

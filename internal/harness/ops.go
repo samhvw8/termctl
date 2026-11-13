@@ -459,7 +459,7 @@ func (o *Ops) Spawn(harness, where, cwd string, opts SpawnOpts) (*term.Pane, err
 	}
 	var at *term.Pane
 	if where == "auto" {
-		where, at = term.PlaceFor(o.Backend, where, cwd, opts.Owned)
+		where, at = term.PlaceFor(o.Backend, where, opts.Owned)
 	}
 	var p *term.Pane
 	var err error

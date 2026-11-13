@@ -107,12 +107,13 @@ func (b *ITerm2Backend) call(req *api.ClientOriginatedMessage) (*api.ServerOrigi
 type itermSession struct {
 	id, window, tab, selectedTab string
 	tabIndex                     int // the tab's position in its window
+	cols, rows                   int // grid size in cells; 0 when iTerm2 does not report it
 }
 
-func walkSplit(n *api.SplitTreeNode, fn func(string)) {
+func walkSplit(n *api.SplitTreeNode, fn func(*api.SessionSummary)) {
 	for _, l := range n.GetLinks() {
 		if l.GetSession() != nil {
-			fn(l.GetSession().GetUniqueIdentifier())
+			fn(l.GetSession())
 		} else if l.GetNode() != nil {
 			walkSplit(l.GetNode(), fn)
 		}
@@ -127,8 +128,10 @@ func (b *ITerm2Backend) sessions() ([]itermSession, error) {
 	var out []itermSession
 	for _, w := range resp.GetListSessionsResponse().GetWindows() {
 		for ti, t := range w.GetTabs() {
-			walkSplit(t.GetRoot(), func(id string) {
-				out = append(out, itermSession{id, w.GetWindowId(), t.GetTabId(), w.GetSelectedTabId(), ti})
+			walkSplit(t.GetRoot(), func(ss *api.SessionSummary) {
+				g := ss.GetGridSize()
+				out = append(out, itermSession{ss.GetUniqueIdentifier(), w.GetWindowId(), t.GetTabId(), w.GetSelectedTabId(), ti,
+					int(g.GetWidth()), int(g.GetHeight())})
 			})
 		}
 	}
@@ -168,14 +171,17 @@ func (b *ITerm2Backend) ListPanes() ([]*Pane, error) {
 	if err != nil {
 		return nil, err
 	}
-	type row struct{ id, tab, tty, title, label string }
+	type row struct {
+		id, tab, tty, title, label string
+		cols, rows                 int
+	}
 	rows := make([]row, 0, len(sess))
 	for _, s := range sess {
 		v, err := b.variables(s.id, "tty", "autoName", labelVar)
 		if err != nil {
 			return nil, err
 		}
-		rows = append(rows, row{s.id, s.tab, strings.TrimPrefix(v[0], "/dev/"), CleanTitle(v[1]), v[2]})
+		rows = append(rows, row{s.id, s.tab, strings.TrimPrefix(v[0], "/dev/"), CleanTitle(v[1]), v[2], s.cols, s.rows})
 	}
 	procs, err := processesByTTY()
 	if err != nil {
@@ -201,7 +207,7 @@ func (b *ITerm2Backend) ListPanes() ([]*Pane, error) {
 		}
 		panes = append(panes, &Pane{
 			ID: "iterm2:" + r.id, Backend: "iterm2", Native: r.id, TTY: r.tty, Title: r.title, Label: r.label,
-			Process: name, Folder: Tilde(cwds[p.pid]), IsSelf: r.id == me, Tab: r.tab,
+			Process: name, Folder: Tilde(cwds[p.pid]), IsSelf: r.id == me, Tab: r.tab, Width: r.cols, Height: r.rows,
 		})
 	}
 	return panes, nil
@@ -235,7 +241,7 @@ func (b *ITerm2Backend) Spawn(where, cmd, cwd, title string) (*Pane, error) {
 	if err := CheckWhere(where); err != nil {
 		return nil, err
 	}
-	where, anchor := PlaceFor(b, where, cwd, nil)
+	where, anchor := PlaceFor(b, where, nil)
 	return b.SpawnAt(anchor, where, cmd, cwd, title)
 }
 
@@ -245,7 +251,7 @@ func (b *ITerm2Backend) SpawnAt(at *Pane, where, cmd, cwd, title string) (*Pane,
 		return nil, err
 	}
 	if where == "auto" {
-		where, at = PlaceFor(b, where, cwd, nil)
+		where, at = PlaceFor(b, where, nil)
 	}
 	var props []*api.ProfileProperty
 	set := func(k, v string) {
@@ -290,8 +296,12 @@ func (b *ITerm2Backend) SpawnAt(at *Pane, where, cmd, cwd, title string) (*Pane,
 	case anchor == nil:
 		return nil, UsageErr("--where %s needs a pane to anchor on: run inside an iTerm2 pane", where)
 	case where == "split":
+		dir := api.SplitPaneRequest_HORIZONTAL // a horizontal divider: the new pane goes below
+		if SideBySide(anchor.cols, anchor.rows) {
+			dir = api.SplitPaneRequest_VERTICAL
+		}
 		resp, err := b.call(&api.ClientOriginatedMessage{SplitPaneRequest: &api.SplitPaneRequest{
-			Session: proto.String(anchor.id), SplitDirection: api.SplitPaneRequest_VERTICAL.Enum(), Before: proto.Bool(false), CustomProfileProperties: props,
+			Session: proto.String(anchor.id), SplitDirection: dir.Enum(), Before: proto.Bool(false), CustomProfileProperties: props,
 		}})
 		if err != nil {
 			return nil, err
@@ -301,6 +311,9 @@ func (b *ITerm2Backend) SpawnAt(at *Pane, where, cmd, cwd, title string) (*Pane,
 			return nil, BackendErr("iTerm2 split: %s", r.GetStatus())
 		}
 		sid = r.GetSessionId()[0]
+		if err := b.evenTab(anchor.tab); err != nil { // cosmetic: the pane exists, so warn and go on
+			fmt.Fprintf(os.Stderr, "warning: even out the tab: %v\n", err)
+		}
 	default:
 		next := uint32(anchor.tabIndex + 1) // beside the anchor's tab, not at the end of the window
 		r, err := b.createTab(&anchor.window, &next, props)
@@ -448,4 +461,32 @@ func (b *ITerm2Backend) NativeStatus(p *Pane) string {
 		return *d.Status + ": " + *d.Detail
 	}
 	return *d.Status
+}
+
+// evenTab resizes the panes of a tab to even shares (see evenTree), keeping the window's size.
+func (b *ITerm2Backend) evenTab(tab string) error {
+	resp, err := b.call(&api.ClientOriginatedMessage{ListSessionsRequest: &api.ListSessionsRequest{}})
+	if err != nil {
+		return err
+	}
+	for _, w := range resp.GetListSessionsResponse().GetWindows() {
+		for _, t := range w.GetTabs() {
+			if t.GetTabId() != tab {
+				continue
+			}
+			root := evenTree(t.GetRoot())
+			if root == nil {
+				return nil
+			}
+			r, err := b.call(&api.ClientOriginatedMessage{SetTabLayoutRequest: &api.SetTabLayoutRequest{Root: root, TabId: proto.String(tab)}})
+			if err != nil {
+				return err
+			}
+			if st := r.GetSetTabLayoutResponse().GetStatus(); st != api.SetTabLayoutResponse_OK {
+				return BackendErr("iTerm2 tab layout: %s", st)
+			}
+			return nil
+		}
+	}
+	return BackendErr("iTerm2 tab layout: tab %s not found", tab)
 }

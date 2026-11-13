@@ -1203,9 +1203,9 @@ func gitDir(t *testing.T, dir string) string {
 	return dir
 }
 
-// A lead outside the project: the first worker opens a tab beside the lead, the next ones join
-// that worker's tab instead of each opening a tab.
-func TestAutoPlacementJoinsTheCallersOwnWorkers(t *testing.T) {
+// Any folder joins the caller's tab: a worker in another repository splits it too, and the tab of
+// someone else's agent in that repository is never joined.
+func TestAutoPlacementSplitsTheCallersTab(t *testing.T) {
 	r := newRig(t)
 	home := t.TempDir()
 	repo := gitDir(t, filepath.Join(t.TempDir(), "repo"))
@@ -1223,7 +1223,7 @@ func TestAutoPlacementJoinsTheCallersOwnWorkers(t *testing.T) {
 		}
 	}
 	w1 := r.b.Spawned[0]
-	want := []string{"tab@" + r.owner.ID, "split@" + w1, "split@" + r.b.Spawned[1]}
+	want := []string{"split@" + r.owner.ID, "split@" + w1, "split@" + r.b.Spawned[1]}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("placements %v, want %v", got, want)
 	}

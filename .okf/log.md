@@ -1,5 +1,9 @@
 # Update Log
 
+## 2026-11-13
+* **Update**: `MaxSplit` is 12, and every split now evens out the tab: iTerm2 through `SetTabLayoutRequest` (added to the iTerm2 messages, with `SplitTreeNode.vertical`), tmux through `select-layout tiled`. See [backends](architecture/backends.md#placement). Checked on real iTerm2 3.7.6. Runs: one more terminal call (two on iTerm2) per split.
+* **Update**: `--where auto` no longer groups by git project. A new agent splits the caller's tab whatever its folder, up to `MaxSplit` 8 panes (was 3), then an owned tab, then a new tab. The split cuts the largest pane along its long side, from new pane sizes (`grid_size` added to the iTerm2 messages, `pane_width`/`pane_height` in tmux). Cause: a lead's agy workers in `~` opened their own tab. See [backends](architecture/backends.md#placement). Runs: nothing new; the per-folder `git rev-parse` calls are gone.
+
 ## 2026-11-11
 * **Release**: v0.2.1 with the review fixes below. Runs: nothing new.
 * **Fix**: findings from a review of v0.2.0. `--where auto` now also joins a tab of a worker the caller started in the same project, splits the newest pane instead of halving the caller, and falls back to a tab with a warning when listing panes fails. `task new --reuse` labels the pane with the task ID, so teammates can address it. `ls --mine` lists the panes the caller started. See [backends](architecture/backends.md#placement). Runs: one registry read per `auto` spawn.

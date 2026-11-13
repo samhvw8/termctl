@@ -30,14 +30,18 @@ Pane IDs are `backend:id`. A target with a backend prefix selects that backend, 
 
 | Case | Result |
 |---|---|
-| A tab with fewer than `MaxSplit` (3) panes already works on the new folder's project: first the caller's tab, when the caller is in that project; then a tab holding a pane the caller started in that project | `split` of the newest pane in that tab, so the caller keeps its width |
+| A tab with fewer than `MaxSplit` (12) panes: first the caller's tab, then a tab holding a pane the caller started. The new agent's folder does not matter | `split` of the largest pane in that tab (the newest on a tie, or when the backend reports no sizes) |
 | No such tab | `tab`, opened right after the caller's tab |
-| A backend that does not report tabs (Rex) | `split` of the caller for the same project, with no cap |
+| A backend that does not report tabs (Rex) | `split` of the caller, with no cap |
 | Listing panes fails (an iTerm2 session closed meanwhile) | `tab`, with a warning; placement never fails a spawn |
 
-So a lead in `~` that starts three workers in one repository gets one new tab holding all three, not three tabs. Another agent's panes are never joined. iTerm2 and tmux take the chosen pane through `term.Anchored.SpawnAt`; other backends get only the resolved `where`.
+So the agents of one job stay in the lead's tab, whatever folder each one works in. Before 2026-11-13 placement grouped by git project, and a worker started in `~` or a scratch folder opened its own tab; Sam wanted the job together instead. Another agent's panes are never joined. iTerm2 and tmux take the chosen pane through `term.Anchored.SpawnAt`; other backends get only the resolved `where`.
 
-One project means one git repository: `git rev-parse --git-common-dir` is the same, so a worktree counts as its repository. Outside git, only the same folder counts, so a caller in `~` does not pull every folder under it into its tab. A pane's project comes from its folder, which is its main program's working directory. hc ignores `--where`, so placement never lists hc panes. Checked on real iTerm2 (2026-11-10): the same folder split the caller's tab, and another repository opened at the next tab index. iTerm2's tab index assumes `ListSessions` returns tabs in visual order, which that check confirmed.
+**Split direction.** iTerm2 and tmux cut the pane's long side: `term.SideBySide` puts the new pane beside a pane with `cols >= 2*rows` (a cell is about twice as tall as wide), and below it otherwise. A full screen fills as a grid, not as twelve thin columns.
+
+**Even layout.** After every split the backend resizes the tab's panes evenly; a failure is a warning, never a failed spawn. iTerm2: `SetTabLayoutRequest` with the same split tree and new grid sizes from `evenTree` (`internal/term/iterm2_layout.go`). Each pane gets an even share of its row or column, counted in panes across, not by tree depth: in `[a | b/c]` a and the b/c column get half the width each. The totals stay the same, because a different total resizes the window. tmux: `select-layout tiled`, which rebuilds the window as a grid and ignores the split tree. Checked on real iTerm2 3.7.6 (2026-11-13): eight spawns gave a 4x2 grid of 61-62x39 panes, the window kept its bounds, and repeated layouts lost no cells. 3.7.6 predates iTerm2's fix F-343 (2026-10-18) for a layout call that lost a cell per pane; termctl keeps the totals, so it did not trigger here. Sizes come from `SessionSummary.grid_size` in iTerm2's `ListSessions` and `pane_width`/`pane_height` in tmux; they are `Pane.Width`/`Pane.Height`, separate from `Pane.Rows`, which caps captures. An explicit `--where split` uses the same direction rule. `TestSpawnAutoPlacement` fails if twelve panes in a 200x50 tmux window end up narrower than 40 columns or uneven.
+
+hc ignores `--where`, so placement never lists hc panes. Checked on real iTerm2 (2026-11-10): a new tab opened at the next tab index. iTerm2's tab index assumes `ListSessions` returns tabs in visual order, which that check confirmed.
 
 `harness-ops ls --mine` lists the panes the caller started, so a lead can find what it must close.
 

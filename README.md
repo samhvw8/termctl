@@ -34,7 +34,7 @@ harness-ops task review <id> --blind --harness H [--model M] [--brief-file F]
 harness-ops task close [--force] <id>                # refused until accepted, unless --force
 ```
 
-`--where auto` is the default. A new agent joins a tab that already works on its project (same git repository, worktrees included): the caller's tab, or a tab of an agent the caller started. It splits the newest pane there, up to 3 panes per tab. Otherwise it opens a new tab right after the caller's tab. Herdr ignores `--where`.
+`--where auto` is the default. A new agent splits the caller's tab, whatever its folder, or a tab of an agent the caller started when the caller's tab is full. It splits the largest pane there along its long side and evens out the pane sizes, up to 12 panes per tab. Otherwise it opens a new tab right after the caller's tab. Herdr ignores `--where`.
 
 ## Tasks
 

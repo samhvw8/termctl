@@ -39,6 +39,7 @@ type Pane struct {
 	IsSelf                                 bool
 	Status                                 string
 	Rows                                   int    // screen height, when the backend reports it; 0 otherwise
+	Width, Height                          int    // pane size in cells for placement, when the backend reports it; 0 otherwise
 	Tab                                    string // the tab (tmux: window) holding the pane, when the backend reports it
 }
 

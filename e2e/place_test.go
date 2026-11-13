@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -35,8 +36,9 @@ func windowOf(t *testing.T, pane string) (id, index string) {
 	return f[0], f[1]
 }
 
-// The default --where auto: the caller's project splits its window up to three panes, then a new
-// window opens right after the caller's; another project always gets that new window.
+// The default --where auto: every new agent splits the caller's window, whatever its folder, up to
+// twelve panes; then a new window opens right after the caller's. After each split tmux tiles the
+// window, so twelve panes stay usable instead of twelve thin columns.
 func TestSpawnAutoPlacement(t *testing.T) {
 	r := newRig(t)
 	app := gitInit(t, filepath.Join(r.tmp, "app"))
@@ -54,35 +56,41 @@ func TestSpawnAutoPlacement(t *testing.T) {
 		return spawned(t, out)
 	}
 
-	for i, name := range []string{"same-1", "same-2"} {
-		p := spawn(app, name)
+	for i := 1; i < 12; i++ {
+		cwd := app
+		if i%2 == 0 {
+			cwd = tool // another repository joins the caller's window too
+		}
+		p := spawn(cwd, fmt.Sprintf("w%d", i))
 		if w, _ := windowOf(t, p); w != callerWin {
-			t.Fatalf("same-project spawn %d opened in window %s, want the caller's %s", i+1, w, callerWin)
+			t.Fatalf("spawn %d opened in window %s, want the caller's %s", i, w, callerWin)
 		}
 	}
-	// The second agent split the first one, not the caller, so the caller keeps half the window.
-	f := strings.Fields(tmux(t, "display-message", "-p", "-t", caller, "#{pane_width} #{window_width}"))
-	pw, _ := strconv.Atoi(f[0])
-	ww, _ := strconv.Atoi(f[1])
-	if pw < ww/2-1 {
-		t.Fatalf("caller pane is %d of %d columns: a later split took the caller's width", pw, ww)
+	sizes := strings.Fields(tmux(t, "list-panes", "-t", callerWin, "-F", "#{pane_width}x#{pane_height}"))
+	if len(sizes) != 12 {
+		t.Fatalf("caller's window has %d panes, want 12: %v", len(sizes), sizes)
 	}
-	full := spawn(app, "same-3")
+	minW, maxW, minH, maxH := 1<<30, 0, 1<<30, 0
+	for _, sz := range sizes {
+		var w, h int
+		fmt.Sscanf(sz, "%dx%d", &w, &h)
+		if w < 40 || h < 10 { // twelve side-by-side columns of a 200-column window would be 16 wide
+			t.Fatalf("a pane is %s: the window was not tiled (%v)", sz, sizes)
+		}
+		minW, maxW, minH, maxH = min(minW, w), max(maxW, w), min(minH, h), max(maxH, h)
+	}
+	// tiled gives the leftover cells to the last row or column, so allow a third.
+	if maxW > minW+minW/3 || maxH > minH+minH/3 {
+		t.Fatalf("panes are uneven after tiling: %v", sizes)
+	}
+
+	full := spawn(tool, "w12")
 	w, idx := windowOf(t, full)
 	if w == callerWin {
-		t.Fatal("a fourth pane split the caller's full window")
+		t.Fatal("a thirteenth pane split the caller's full window")
 	}
 	if want := next(t, callerIdx); idx != want {
 		t.Fatalf("window for a full tab at index %s, want %s (right after the caller's)", idx, want)
-	}
-
-	other := spawn(tool, "other")
-	w, idx = windowOf(t, other)
-	if w == callerWin {
-		t.Fatal("another project split the caller's window")
-	}
-	if want := next(t, callerIdx); idx != want {
-		t.Fatalf("another project's window at index %s, want %s (right after the caller's)", idx, want)
 	}
 }
 

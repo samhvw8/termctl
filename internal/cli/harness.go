@@ -39,8 +39,8 @@ Talk to coding-agent panes. Put options before the target: everything after the 
   task close [--force] ID                     refused until the task is accepted, unless --force
   state clean                                 remove the throwaway directory in TERMCTL_STATE_DIR; refuses the live one
 
---where auto (the default for spawn and task new): a folder in your pane's project (same git repo, worktrees
-included) opens as a split in your tab, up to 3 panes; anything else opens as a new tab beside yours.
+--where auto (the default for spawn and task new): a new agent splits the largest pane in your tab, whatever
+its folder, up to 12 panes, and evens out the sizes; then a tab of an agent you started; then a new tab beside yours.
 
 Exit codes: 0 ok, 1 backend error, 2 refused target/usage, 4 draft on input line, 5 wait timed out, 6 refused by a safety limit.
 `

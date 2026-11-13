@@ -158,7 +158,7 @@ func (b *RexBackend) Spawn(where, cmd, cwd, title string) (*Pane, error) {
 	if err := CheckWhere(where); err != nil {
 		return nil, err
 	}
-	where, err := Place(b, where, cwd)
+	where, err := Place(b, where)
 	if err != nil {
 		return nil, err
 	}
