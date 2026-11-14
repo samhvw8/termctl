@@ -21,9 +21,10 @@ type Event struct {
 }
 
 type Screen struct {
-	Input string
-	Busy  int
-	Log   []string
+	Input  string
+	Queued string // an interrupt puts this back on the input line, as Claude Code and agy do
+	Busy   int
+	Log    []string
 }
 
 type Fake struct {
@@ -130,6 +131,10 @@ func (f *Fake) SendKey(p *term.Pane, key string) error {
 		}
 	case "ctrl-u":
 		st.Input = ""
+	case "escape", "ctrl-c":
+		if st.Queued != "" {
+			st.Input, st.Queued = st.Queued, ""
+		}
 	}
 	return nil
 }

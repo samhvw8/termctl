@@ -245,8 +245,14 @@ func (a *App) harness(argv []string) error {
 		if err != nil {
 			return err
 		}
-		if _, err := ops.Msg(pane, text, harness.MsgOpts{Force: p.bools["--force"], ClearFirst: p.bools["--clear-first"], Timeout: timeout}); err != nil {
+		sent, err := ops.Msg(pane, text, harness.MsgOpts{Force: p.bools["--force"], ClearFirst: p.bools["--clear-first"], Timeout: timeout})
+		if err != nil {
 			return err
+		}
+		if sent.Busy {
+			fmt.Fprintf(a.Out, "queued for %s (%s, %s): it is working and may hold the message until its turn ends; "+
+				"an interrupt would put it back on the input line unsent\n", term.Cut(pane.Address(), 8), harness.HarnessName(pane), orFolder(pane))
+			return nil
 		}
 		a.sent(pane)
 		return nil
@@ -396,15 +402,14 @@ func (a *App) harness(argv []string) error {
 			return err
 		}
 		keys, verified, err := ops.Interrupt(pane, p.vals["--key"])
-		if err != nil {
-			return err
+		if keys != nil {
+			joined := strings.Join(keys, "+")
+			fmt.Fprintf(a.Out, "sent %s to %s (%s)\n", joined, term.Cut(pane.Address(), 8), harness.HarnessName(pane))
+			if !verified {
+				fmt.Fprintf(a.Err, "harness-ops: warning: %s has not been verified to stop %s; check with read\n", joined, harness.HarnessName(pane))
+			}
 		}
-		joined := strings.Join(keys, "+")
-		fmt.Fprintf(a.Out, "sent %s to %s (%s)\n", joined, term.Cut(pane.Address(), 8), harness.HarnessName(pane))
-		if !verified {
-			fmt.Fprintf(a.Err, "harness-ops: warning: %s has not been verified to stop %s; check with read\n", joined, harness.HarnessName(pane))
-		}
-		return nil
+		return err
 	}
 	return term.UsageErr("unknown command '%s'", cmd)
 }

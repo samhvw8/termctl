@@ -303,3 +303,68 @@ func TestSubmitFailsLoudlyWhenTheTextNeverGoes(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The incident: a message queued on a busy harness came back as a draft when the turn was interrupted,
+// and interrupt said nothing, so the sender thought the target was working on it.
+func TestInterruptReportsAQueuedMessagePutBack(t *testing.T) {
+	r := newOps(t)
+	r.b.State[r.t.ID].Queued = tag + strings.Repeat(" padding", 30) + " read the brief"
+	keys, _, err := r.ops.Interrupt(r.t, "")
+	wantCode(t, err, term.CodeDraft)
+	if len(keys) != 1 || !strings.Contains(err.Error(), "read the brief") || !strings.Contains(err.Error(), "not sent") {
+		t.Fatal(keys, err)
+	}
+}
+
+func TestInterruptWithAnEmptyLineIsFine(t *testing.T) {
+	r := newOps(t)
+	if _, _, err := r.ops.Interrupt(r.t, ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A draft that was there before the interrupt is not news: warn, do not fail.
+func TestInterruptLeavesAnOlderDraftAlone(t *testing.T) {
+	r := newOps(t)
+	r.b.State[r.t.ID].Input = "half typed"
+	var warned []string
+	old := Warn
+	Warn = func(m string) { warned = append(warned, m) }
+	defer func() { Warn = old }()
+	if _, _, err := r.ops.Interrupt(r.t, "f1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(warned) != 1 || !strings.Contains(warned[0], "half typed") {
+		t.Fatal(warned)
+	}
+}
+
+func TestMsgSaysWhenTheTargetIsWorking(t *testing.T) {
+	r := newOps(t)
+	sent, err := r.ops.Msg(r.t, "hello", MsgOpts{})
+	if err != nil || sent.Busy {
+		t.Fatal(sent, err)
+	}
+	r.b.Natives[r.t.ID] = "working"
+	sent, err = r.ops.Msg(r.t, "hello", MsgOpts{})
+	if err != nil || !sent.Busy {
+		t.Fatal(sent, err)
+	}
+}
+
+// An input line that cannot be read after typing is not proof the text went.
+func TestSubmitWarnsWhenItCannotConfirm(t *testing.T) {
+	r := newOps(t)
+	blind := *Profiles["generic"]
+	blind.ReadInput = func([]string) *string { return nil }
+	var warned []string
+	old := Warn
+	Warn = func(m string) { warned = append(warned, m) }
+	defer func() { Warn = old }()
+	if err := r.ops.Submit(r.t, "hello", &blind); err != nil {
+		t.Fatal(err)
+	}
+	if len(warned) != 1 || !strings.Contains(warned[0], "not confirmed") {
+		t.Fatal(warned)
+	}
+}

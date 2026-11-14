@@ -20,7 +20,7 @@ harness-ops clear [--force] <target>         # /clear alone, then wait for idle
 harness-ops wait-idle [--timeout S] <target>
 harness-ops spawn <harness> [--where auto|tab|split|window] --cwd D [--prompt T | --prompt-file F] [--label L] [--command CMD]
 harness-ops close [--force] <target>         # only panes made by spawn/task new; never your own
-harness-ops interrupt [--key K] <target>     # stop the current turn (Esc on claude and omp)
+harness-ops interrupt [--key K] <target>     # stop the current turn (Esc on claude, omp and agy)
 harness-ops which|read|name|whoami           # as agent-ops; send = msg
 
 harness-ops task new <harness> --title T (--brief TEXT | --brief-file F) --cwd D [--where auto|tab|split|window] [--reuse <target>] [--max N]

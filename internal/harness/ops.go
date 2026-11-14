@@ -18,6 +18,7 @@ const (
 	settle         = 0.5 // let the screen react to what we sent before judging it
 	submitSettle   = 0.7 // how long a TUI gets to take a submitted line off its input
 	submitRetries  = 3
+	interruptLook  = 2.0 // how long a stopped harness gets to put a queued message back on its input line
 	poll           = 0.25
 	DefaultTimeout = 120.0
 	captureLines   = 200
@@ -190,7 +191,11 @@ func (o *Ops) submit(p *term.Pane, line string, prof *Profile, from string) erro
 		if err != nil {
 			return err
 		}
-		if d == nil || *d == "" {
+		if d == nil {
+			Warn(fmt.Sprintf("cannot read the input line of %s (%s) after typing; the submit is not confirmed, check with read", p.Address(), prof.Name))
+			return nil
+		}
+		if *d == "" {
 			return nil
 		}
 		if try == submitRetries {
@@ -203,18 +208,50 @@ func (o *Ops) submit(p *term.Pane, line string, prof *Profile, from string) erro
 }
 
 // Interrupt stops the harness's current turn; it returns the keys sent and whether they are known to work.
+// A stopped harness can put a queued message back on its input line, unsent. That is refused (exit 4)
+// with the text, so a caller does not take the text on screen for a turn in progress.
 func (o *Ops) Interrupt(p *term.Pane, key string) ([]string, bool, error) {
 	prof := ForProcess(p.Process)
 	keys, verified := prof.InterruptKeys, prof.InterruptVerified
 	if key != "" {
 		keys, verified = []string{key}, true
 	}
+	before, err := o.draft(p, prof)
+	if err != nil {
+		return nil, false, err
+	}
 	for _, k := range keys {
 		if err := o.Backend.SendKey(p, k); err != nil {
 			return nil, false, err
 		}
 	}
+	var after *string
+	for waited := 0.0; waited < interruptLook; waited += poll {
+		o.Clock.Sleep(poll)
+		if after, err = o.draft(p, prof); err != nil {
+			return keys, verified, err
+		}
+		if after != nil && *after != "" && (before == nil || *after != *before) {
+			return keys, verified, term.Errf(term.CodeDraft, "%s stopped, but its input line now holds text that was not sent: %q. "+
+				"A harness puts queued messages back there when its turn is interrupted", p.Address(), ends(strings.Join(strings.Fields(*after), " "), 60, 100))
+		}
+	}
+	switch {
+	case after == nil:
+		Warn(fmt.Sprintf("cannot read the input line of %s (%s) after the interrupt; a queued message may be back on it, unsent; check with read", p.Address(), prof.Name))
+	case *after != "":
+		Warn(fmt.Sprintf("the input line of %s still holds a draft from before the interrupt: %q", p.Address(), term.Cut(*after, 80)))
+	}
 	return keys, verified, nil
+}
+
+// ends keeps the start and the end of a long text: a message's tag comes first and its point last.
+func ends(s string, head, tail int) string {
+	r := []rune(s)
+	if len(r) <= head+tail {
+		return s
+	}
+	return string(r[:head]) + " … " + string(r[len(r)-tail:])
 }
 
 // nativeBusy reads a terminal's own status: a working or blocked harness is not ready for input.
@@ -348,42 +385,64 @@ type MsgOpts struct {
 	Tag               string
 }
 
-// Msg sends a tagged message and returns the typed line.
-func (o *Ops) Msg(p *term.Pane, text string, opts MsgOpts) (string, error) {
+// Sent is what Msg typed. Busy: the harness was working, so it may hold the message until its turn ends.
+type Sent struct {
+	Line string
+	Busy bool
+}
+
+// Msg sends a tagged message.
+func (o *Ops) Msg(p *term.Pane, text string, opts MsgOpts) (Sent, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return "", term.UsageErr("empty message")
+		return Sent{}, term.UsageErr("empty message")
 	}
 	tag := opts.Tag
 	if tag == "" {
 		var err error
 		if tag, err = o.Tag(); err != nil {
-			return "", err
+			return Sent{}, err
 		}
 	}
 	prof := ForProcess(p.Process)
 	if opts.ClearFirst {
 		if err := o.Clear(p, opts.Force, opts.Timeout); err != nil {
-			return "", err
+			return Sent{}, err
 		}
 		if err := o.AssertCleared(p, prof); err != nil { // even with --force
-			return "", err
+			return Sent{}, err
 		}
 	} else if err := o.CheckDraft(p, prof, opts.Force); err != nil {
-		return "", err
+		return Sent{}, err
+	}
+	busy, err := o.busy(p, prof)
+	if err != nil {
+		return Sent{}, err
 	}
 	var line string
 	if strings.Contains(text, "\n") || len([]rune(text)) > MaxInline {
 		f, err := o.writeInbox(tag+"\n\n"+text+"\n", p)
 		if err != nil {
-			return "", err
+			return Sent{}, err
 		}
 		line = tag + " Long message; read the file " + f
 	} else {
 		line = tag + " " + text
 	}
 	line = Flat(line)
-	return line, o.submit(p, line, prof, o.caller())
+	return Sent{line, busy}, o.submit(p, line, prof, o.caller())
+}
+
+// busy is one look: the terminal reports the harness working or blocked, or a busy pattern is on screen.
+func (o *Ops) busy(p *term.Pane, prof *Profile) (bool, error) {
+	if nativeBusy(o.Backend.NativeStatus(p)) {
+		return true, nil
+	}
+	lines, err := o.Backend.Capture(p, screenLines(p))
+	if err != nil {
+		return false, err
+	}
+	return prof.IsBusy(lines), nil
 }
 
 // SurvivingCommand runs cmd and leaves a login shell in the pane afterwards, so a crash leaves
@@ -424,7 +483,7 @@ func (o *Ops) Spawn(harness, where, cwd string, opts SpawnOpts) (*term.Pane, err
 	prof, known := Profiles[harness]
 	if !known {
 		if opts.Command == "" {
-			return nil, term.UsageErr("unknown harness '%s'. Known: claude, omp, opencode, codex, gemini, aider, pi, generic; or pass --command", harness)
+			return nil, term.UsageErr("unknown harness '%s'. Known: claude, omp, opencode, codex, gemini, agy, aider, pi, generic; or pass --command", harness)
 		}
 		prof = Profiles["generic"]
 	}
