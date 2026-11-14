@@ -151,3 +151,69 @@ func TestCalibrationMarks(t *testing.T) {
 		t.Fatal()
 	}
 }
+
+// agy screens, read from a live Antigravity CLI 1.5.9 pane 140 columns wide. Past messages sit under a
+// 60-column rule; the input box rules span the pane, and a task panel can add a third rule below.
+var (
+	agyRule  = strings.Repeat("─", 140)
+	agyShort = strings.Repeat("─", 60)
+	agyPanel = []string{"  ● [15:09:35] sleep 120 running", agyRule}
+)
+
+func agyScreen(box []string, status string, panel bool) []string {
+	s := []string{agyShort, "> Read BRIEF.md in this folder and do everything it asks.", "",
+		"○ Thought for 2m 53s (The presence of an outdated brief...)", "● Explored 1 file (BRIEF.md)", "",
+		agyShort, "> [agent-ops from voxtract (claude) id=4668AAA8 folder=~/w/voxtract] The brief is", "  at this absolute path.", ""}
+	s = append(s, box...)
+	if panel {
+		s = append(s, agyPanel...)
+	}
+	return append(s, status)
+}
+
+func agyBox(body ...string) []string {
+	return append(append([]string{agyRule}, body...), agyRule)
+}
+
+func TestAgyInput(t *testing.T) {
+	idle := "? for shortcuts                                                                 auto · Gemini 4 Carbon · low"
+	eq(t, draftOf(t, "agy", agyScreen(agyBox(">"), idle, false)), "")
+	eq(t, draftOf(t, "agy", agyScreen(agyBox(">"), idle, true)), "")
+	for _, ph := range []string{"Auto mode: edits & safe commands auto-approved (shift+tab to cycle)",
+		"Plan mode: research & plan only (shift+tab to cycle)", "Accept-edits mode: file edits auto-approved (shift+tab to cycle)"} {
+		eq(t, draftOf(t, "agy", agyScreen(agyBox("> "+ph), idle, false)), "")
+	}
+	// A queued message that an interrupt put back, wrapped over three lines.
+	back := agyBox("> [agent-ops from Sams-MacBook-Pro-2.local (zsh) id=tmux:%0",
+		"  folder=/private/tmp/agyrun] Baseline", "  queued message.")
+	eq(t, draftOf(t, "agy", agyScreen(back, strings.Repeat(" ", 90)+"auto · Gemini 4 Carbon · low", true)),
+		"[agent-ops from Sams-MacBook-Pro-2.local (zsh) id=tmux:%0\nfolder=/private/tmp/agyrun] Baseline\nqueued message.")
+	// A dialog hides the input box: the past messages under short rules are not an input box.
+	dialog := append(agyScreen(nil, "", false)[:10], agyRule, "Read: /Users/x/SKILL.md", "Allow access to this file?",
+		"> 1. Yes, allow access", "  2. No, deny access", "  ↑/↓ Navigate", "esc to cancel      auto · Gemini 4 Carbon · low")
+	if d := draftOf(t, "agy", dialog); d != nil {
+		t.Fatalf("a dialog is not an input line: %q", *d)
+	}
+}
+
+func TestAgyBusy(t *testing.T) {
+	p := Profiles["agy"]
+	running := agyScreen(agyBox(">"), "esc to cancel                                  auto · Gemini 4 Carbon · low", false)
+	running = append(running[:len(running)-4], append([]string{"⢿  Running command..."}, running[len(running)-4:]...)...)
+	queued := agyScreen(agyBox(">"), "  Press up to edit queued messages                auto · Gemini 4 Carbon · low", true)
+	queued = append(queued[:len(queued)-5], append([]string{"⣟  Loading...", "▸ QUEUED-TEXT banana (alt+m to send immediately)"}, queued[len(queued)-5:]...)...)
+	idle := agyScreen(agyBox(">"), "? for shortcuts                                  auto · Gemini 4 Carbon · low", true)
+	banner := append([]string{" ┃ Introducing Gemini 4 Hydrogen", " ┃ esc to dismiss"}, idle...)
+	if !p.IsBusy(running) || !p.IsBusy(queued) || p.IsBusy(idle) || p.IsBusy(banner) {
+		t.Fatal(p.IsBusy(running), p.IsBusy(queued), p.IsBusy(idle), p.IsBusy(banner))
+	}
+	if got := p.StableView(idle); len(got) != 10 {
+		t.Fatalf("stable view is what is above the input box: %d lines", len(got))
+	}
+	if !p.Calibrated || !p.PromptRequired || !p.InterruptVerified || !reflect.DeepEqual(p.InterruptKeys, []string{"escape"}) {
+		t.Fatal(p)
+	}
+	if ForProcess("agy") != p {
+		t.Fatal("agy is detected by its process name")
+	}
+}

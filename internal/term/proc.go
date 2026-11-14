@@ -9,7 +9,7 @@ import (
 
 // MainProcesses are programs that own a pane: a pane running one of these is that program,
 // even when it has child shells. Layer 2 profiles must cover every name here.
-var MainProcesses = []string{"claude", "omp", "opencode", "codex", "gemini", "aider", "pi"}
+var MainProcesses = []string{"claude", "omp", "opencode", "codex", "gemini", "agy", "aider", "pi"}
 
 type proc struct {
 	pid  int
