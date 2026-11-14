@@ -1,6 +1,8 @@
 # Update Log
 
 ## 2026-11-14
+* **Release**: v0.2.3 — agy profile, and `interrupt` reports a queued message that came back unsent. Runs: nothing new beyond the fix below.
+* **Fix**: an agent queued a message on a busy agy, interrupted it, and took the returned draft for a turn in progress. Four causes, four fixes: agy is now a calibrated profile (it was `node`, generic, ctrl-c, input line unreadable); `interrupt` reads the input line afterwards and exits 4 when a queued message came back unsent; `msg` prints `queued for` when the target is working; `submit` warns when it cannot confirm. Reproduced and checked on a real agy in a private tmux. See [harness profiles](architecture/harness-profiles.md#interrupt). Runs: up to 2 s of screen reads per `interrupt`, one extra screen read per `msg`.
 * **Release**: v0.2.2 — `--where auto` keeps a job's agents in the caller's tab (up to 12 panes, evenly sized), and `msg` reaches named Claude Code sessions. Runs: nothing new.
 * **Fix**: `msg` to a named Claude Code session refused with exit 4 ("cannot see claude's input line"). The session name sits in the top rule of the input box (`── voxtract ─`), and the rule pattern wanted only `─`. Found when an agy worker could not reply to its lead. The real screen is now a test in `profiles_test.go`. See [harness profiles](architecture/harness-profiles.md). Runs: nothing new.
 
