@@ -128,3 +128,28 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+// Rex moves and swaps blocks through its documented CLI; it has no command to break a block out or
+// to even a layout, so those are refused by name.
+func TestRexMoveAndSwap(t *testing.T) {
+	s := &rexStub{}
+	b := &RexBackend{run: s.run}
+	a, c := rexPane(), &Pane{ID: "rex:ffff0000", Backend: "rex", Native: "ffff0000"}
+	if err := b.MovePane(a, c); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SwapPanes(a, c); err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{{"move", "abcd1234", "right", "ffff0000"}, {"swap", "abcd1234", "ffff0000"}}
+	if !reflect.DeepEqual(s.calls, want) {
+		t.Fatal(s.calls)
+	}
+	var backend Backend = b
+	if _, ok := backend.(Breaker); ok {
+		t.Fatal("rex has no command to move a block into a new window")
+	}
+	if _, ok := backend.(Arranger); ok {
+		t.Fatal("rex has no layout command")
+	}
+}

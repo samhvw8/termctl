@@ -211,3 +211,57 @@ func Contains(xs []string, sub string) bool {
 	}
 	return false
 }
+
+func (f *Fake) find(id string) *term.Pane {
+	for _, p := range f.Panes {
+		if p.ID == id {
+			return p
+		}
+	}
+	return nil
+}
+
+// MovePane puts p in anchor's tab, recorded as "move" with the anchor's ID as text.
+func (f *Fake) MovePane(p, anchor *term.Pane) error {
+	f.Events = append(f.Events, Event{Kind: "move", Pane: p.ID, Text: anchor.ID})
+	f.find(p.ID).Tab = anchor.Tab
+	return nil
+}
+
+// BreakPane gives p a tab of its own, "tab-<native>".
+func (f *Fake) BreakPane(p *term.Pane) error {
+	f.Events = append(f.Events, Event{Kind: "break", Pane: p.ID})
+	f.find(p.ID).Tab = "tab-" + p.Native
+	return nil
+}
+
+// SwapPanes trades the tabs and list positions of two panes.
+func (f *Fake) SwapPanes(a, b *term.Pane) error {
+	f.Events = append(f.Events, Event{Kind: "swap", Pane: a.ID, Text: b.ID})
+	i, j := -1, -1
+	for k, p := range f.Panes {
+		switch p.ID {
+		case a.ID:
+			i = k
+		case b.ID:
+			j = k
+		}
+	}
+	f.Panes[i].Tab, f.Panes[j].Tab = f.Panes[j].Tab, f.Panes[i].Tab
+	f.Panes[i], f.Panes[j] = f.Panes[j], f.Panes[i]
+	return nil
+}
+
+// Arrange records "arrange" on the tab, with "<layout>|<main ID>" as text.
+func (f *Fake) Arrange(tab, layout string, main *term.Pane) error {
+	id := ""
+	if main != nil {
+		id = main.ID
+	}
+	f.Events = append(f.Events, Event{Kind: "arrange", Pane: tab, Text: layout + "|" + id})
+	return nil
+}
+
+// Basic hides every optional interface of a backend (Mover, Swapper, Anchored, ...), as a backend
+// that implements only term.Backend.
+type Basic struct{ term.Backend }

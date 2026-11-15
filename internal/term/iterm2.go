@@ -478,14 +478,7 @@ func (b *ITerm2Backend) evenTab(tab string) error {
 			if root == nil {
 				return nil
 			}
-			r, err := b.call(&api.ClientOriginatedMessage{SetTabLayoutRequest: &api.SetTabLayoutRequest{Root: root, TabId: proto.String(tab)}})
-			if err != nil {
-				return err
-			}
-			if st := r.GetSetTabLayoutResponse().GetStatus(); st != api.SetTabLayoutResponse_OK {
-				return BackendErr("iTerm2 tab layout: %s", st)
-			}
-			return nil
+			return b.setLayout(tab, root)
 		}
 	}
 	return BackendErr("iTerm2 tab layout: tab %s not found", tab)

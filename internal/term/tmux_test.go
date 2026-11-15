@@ -1,7 +1,9 @@
 package term
 
 import (
+	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -184,3 +186,132 @@ func TestTmuxServerRefReopensTheSameServer(t *testing.T) {
 		t.Fatal(panes, again.ServerRef())
 	}
 }
+
+// tmuxInfo reads a pane's window, process and geometry from tmux itself.
+func tmuxInfo(t *testing.T, id string) (window, pid string, left, top, width, height int) {
+	t.Helper()
+	out, err := tmuxCmd("display-message", "-p", "-t", id, "#{window_id} #{pane_pid} #{pane_left} #{pane_top} #{pane_width} #{pane_height}")
+	if err != nil {
+		t.Fatal(out)
+	}
+	f := strings.Fields(out)
+	n := func(s string) int { v, _ := strconv.Atoi(s); return v }
+	return f[0], f[1], n(f[2]), n(f[3]), n(f[4]), n(f[5])
+}
+
+func listed(t *testing.T, b *TmuxBackend, id string) (*Pane, []*Pane) {
+	t.Helper()
+	panes, err := b.ListPanes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range panes {
+		if p.ID == id {
+			return p, panes
+		}
+	}
+	t.Fatalf("%s is gone", id)
+	return nil, nil
+}
+
+// Every move keeps the pane's %id, its process and its label; only its window changes.
+func TestTmuxMoveBreakSwapArrangeKeepTheProcess(t *testing.T) {
+	b := tmuxRig(t)
+	x, _ := b.Spawn("tab", "sleep 300", "", "x")
+	y, _ := b.Spawn("tab", "sleep 300", "", "y")
+	if err := b.SetLabel(x, "mover"); err != nil {
+		t.Fatal(err)
+	}
+	winX, pid, _, _, _, _ := tmuxInfo(t, x.Native)
+	winY, pidY, _, _, _, _ := tmuxInfo(t, y.Native)
+	same := func(step string) {
+		t.Helper()
+		if _, p, _, _, _, _ := tmuxInfo(t, x.Native); p != pid {
+			t.Fatalf("%s: pid %s, want %s", step, p, pid)
+		}
+		if _, p, _, _, _, _ := tmuxInfo(t, y.Native); p != pidY {
+			t.Fatalf("%s: y's pid %s, want %s", step, p, pidY)
+		}
+		if p, _ := listed(t, b, x.ID); p.Label != "mover" || p.Process != "sleep" {
+			t.Fatalf("%s: %+v", step, p)
+		}
+	}
+
+	p, panes := listed(t, b, x.ID)
+	if _, err := Move(b, panes, p, "tab-of:"+y.ID); err != nil {
+		t.Fatal(err)
+	}
+	if w, _, _, _, _, _ := tmuxInfo(t, x.Native); w != winY {
+		t.Fatalf("x is in %s, want %s", w, winY)
+	}
+	if out, _ := tmuxCmd("list-windows", "-a", "-F", "#{window_id}"); strings.Contains(out, winX) {
+		t.Fatal("the emptied window stayed open")
+	}
+	same("move")
+
+	p, panes = listed(t, b, x.ID)
+	m, err := Move(b, panes, p, "new")
+	if err != nil || m.Pane.Tab == winY {
+		t.Fatal(err, m)
+	}
+	idx := func(w string) string {
+		out, _ := tmuxCmd("display-message", "-p", "-t", w, "#{window_index}")
+		return out
+	}
+	if a, b := idx(winY), idx(m.Pane.Tab); b != fmt.Sprint(atoi(a)+1) {
+		t.Fatalf("new window at index %s, want right after %s", b, a)
+	}
+	same("break")
+	winNew := m.Pane.Tab
+
+	p, _ = listed(t, b, x.ID)
+	q, _ := listed(t, b, y.ID)
+	if _, err := Swap(b, p, q); err != nil {
+		t.Fatal(err)
+	}
+	if w, _, _, _, _, _ := tmuxInfo(t, x.Native); w != winY {
+		t.Fatalf("after the swap x is in %s, want %s", w, winY)
+	}
+	if w, _, _, _, _, _ := tmuxInfo(t, y.Native); w != winNew {
+		t.Fatalf("after the swap y is in %s, want %s", w, winNew)
+	}
+	same("swap")
+
+	// four panes in x's window, then each layout
+	p, _ = listed(t, b, x.ID)
+	for i := 0; i < 3; i++ {
+		if _, err := b.SpawnAt(p, "split", "sleep 300", "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	geo := func() [][4]int {
+		out, _ := tmuxCmd("list-panes", "-t", winY, "-F", "#{pane_left} #{pane_top} #{pane_width} #{pane_height}")
+		var g [][4]int
+		for _, line := range strings.Split(out, "\n") {
+			var r [4]int
+			fmt.Sscan(line, &r[0], &r[1], &r[2], &r[3])
+			g = append(g, r)
+		}
+		return g
+	}
+	_, panes = listed(t, b, x.ID)
+	for _, layout := range []string{"columns", "rows", "tiled", "even"} {
+		if _, err := Arrange(b, panes, "tab-of:"+x.ID, layout, ""); err != nil {
+			t.Fatal(layout, err)
+		}
+		for _, g := range geo() {
+			if (layout == "columns" && g[1] != 0) || (layout == "rows" && g[0] != 0) || ((layout == "tiled" || layout == "even") && g[2] < 70) {
+				t.Fatalf("%s: %v", layout, geo())
+			}
+		}
+	}
+	if _, err := Arrange(b, panes, winY, "main-left", x.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, left, top, w, _ := tmuxInfo(t, x.Native); left != 0 || top != 0 || w < 75 || w > 85 {
+		t.Fatalf("main-left: x at %d,%d width %d, want the left half of 160", left, top, w)
+	}
+	same("arrange")
+}
+
+func atoi(s string) int { n, _ := strconv.Atoi(s); return n }

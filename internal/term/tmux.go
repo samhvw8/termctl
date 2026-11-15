@@ -212,10 +212,8 @@ func (b *TmuxBackend) SpawnAt(at *Pane, where, cmd, cwd, title string) (*Pane, e
 		return nil, err
 	}
 	native := strings.TrimSpace(out)
-	if where == "split" { // cosmetic: the pane exists, so warn and go on
-		if _, err := b.run("select-layout", "-t", native, "tiled"); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: even out the window: %v\n", err)
-		}
+	if where == "split" {
+		b.tile(native)
 	}
 	if title != "" {
 		if _, err := b.run("select-pane", "-t", native, "-T", title); err != nil {
@@ -278,3 +276,79 @@ func (b *TmuxBackend) SetLabel(p *Pane, label string) error {
 }
 
 func (b *TmuxBackend) NativeStatus(*Pane) string { return "" }
+
+// tile evens out the window holding target as a grid. Cosmetic: the panes exist, so a failure warns.
+func (b *TmuxBackend) tile(target string) {
+	if _, err := b.run("select-layout", "-t", target, "tiled"); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: even out the window: %v\n", err)
+	}
+}
+
+// MovePane joins p to anchor's window, beside or below anchor, then tiles that window as a spawn
+// does. join-pane moves the pane itself: its %id, process and history stay. A window left empty
+// closes; its pane lives on in the new one.
+func (b *TmuxBackend) MovePane(p, anchor *Pane) error {
+	dir := "-v" // below
+	if SideBySide(anchor.Width, anchor.Height) {
+		dir = "-h"
+	}
+	if _, err := b.run("join-pane", "-d", dir, "-s", p.Native, "-t", anchor.Native); err != nil {
+		return err
+	}
+	b.tile(anchor.Native)
+	return nil
+}
+
+// BreakPane moves p into a new window right after the one it leaves (break-pane -a).
+func (b *TmuxBackend) BreakPane(p *Pane) error {
+	argv := []string{"break-pane", "-d", "-s", p.Native}
+	if p.Tab != "" {
+		argv = append(argv, "-a", "-t", p.Tab)
+	}
+	_, err := b.run(argv...)
+	return err
+}
+
+// SwapPanes trades the places of two panes; -d keeps each window's active pane.
+func (b *TmuxBackend) SwapPanes(x, y *Pane) error {
+	_, err := b.run("swap-pane", "-d", "-s", x.Native, "-t", y.Native)
+	return err
+}
+
+var tmuxLayouts = map[string]string{
+	"even": "tiled", "tiled": "tiled", "rows": "even-vertical", "columns": "even-horizontal",
+	"main-left": "main-vertical", "main-top": "main-horizontal",
+}
+
+// Arrange applies one of tmux's own layouts to a window. tmux has no layout that keeps the split
+// tree and evens the sizes, so even tiles, as a spawn does. A main-* layout puts main first (tmux
+// gives the first pane the big side) and sets the window's main-pane-width or -height to 50%.
+func (b *TmuxBackend) Arrange(tab, layout string, main *Pane) error {
+	name, ok := tmuxLayouts[layout]
+	if !ok {
+		return CheckLayout(layout)
+	}
+	switch layout {
+	case "main-left":
+		if _, err := b.run("set-option", "-w", "-t", tab, "main-pane-width", "50%"); err != nil {
+			return err
+		}
+	case "main-top":
+		if _, err := b.run("set-option", "-w", "-t", tab, "main-pane-height", "50%"); err != nil {
+			return err
+		}
+	}
+	if main != nil {
+		out, err := b.run("list-panes", "-t", tab, "-F", "#{pane_id}")
+		if err != nil {
+			return err
+		}
+		if first := strings.Fields(out); len(first) > 0 && first[0] != main.Native {
+			if _, err := b.run("swap-pane", "-d", "-s", main.Native, "-t", first[0]); err != nil {
+				return err
+			}
+		}
+	}
+	_, err := b.run("select-layout", "-t", tab, name)
+	return err
+}

@@ -290,3 +290,21 @@ func (b *RexBackend) SetLabel(p *Pane, label string) error {
 
 func (b *RexBackend) NativeStatus(*Pane) string    { return "" }
 func (b *RexBackend) ServerRef() map[string]string { return map[string]string{} }
+
+// MovePane moves block p beside anchor with `rex move`, which works across windows of one session.
+// Rex reports no block sizes, so the block goes to the right, as a split does. Rex has no command
+// that moves a block into a new window or evens out a layout, so it has no BreakPane or Arrange.
+func (b *RexBackend) MovePane(p, anchor *Pane) error {
+	dir := "below"
+	if SideBySide(anchor.Width, anchor.Height) {
+		dir = "right"
+	}
+	_, err := b.call("move", p.Native, dir, anchor.Native)
+	return err
+}
+
+// SwapPanes trades the places of two blocks with `rex swap`.
+func (b *RexBackend) SwapPanes(x, y *Pane) error {
+	_, err := b.call("swap", x.Native, y.Native)
+	return err
+}
