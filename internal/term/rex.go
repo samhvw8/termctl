@@ -3,24 +3,55 @@ package term
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 )
 
-// RexBackend is written against Rex's documented CLI and is UNTESTED against a real Rex:
-// only argv mapping is covered, by a stub. https://www.superlogical.com/rex/docs/reference/cli
-// JSON field names of `rex block ls --json` are not documented, so parsing is tolerant.
+// RexBackend drives Rex (superlogical.com/rex) through its CLI. Checked against Rex 0.1.0-preview.19
+// on a private server (`mise run test:rex`). Rex terms: a session holds windows (Rex.app shows them
+// as tabs), a window holds blocks (panes). Pane.Native is the block's UUID, Pane.Tab its window's.
+//
+//   - The CLI is found through REX_BIN_DIR (Rex sets it in its own terminals), then PATH, then the
+//     app bundle, because the Rex app does not put it on PATH.
+//   - Every call names its server (-S) and passes --autostart=false. Rex sets no server variable in
+//     its terminals, and a bare rex looks at $XDG_RUNTIME_DIR/rex/server.sock first, which is not the
+//     app's server: it would start a second, empty server there. See server.
+//   - ls, view and layout changes run as one Lua script each (rex do), not one CLI call per block:
+//     each CLI call costs about 180 ms.
 type RexBackend struct {
-	run func(args ...string) (stdout string, code int, stderr string, err error)
+	run    func(args ...string) (stdout string, code int, stderr string, err error) // the CLI, without -S
+	getenv func(string) string
+	isSock func(path string) bool
+	addr   *string           // the resolved -S value; "" when no server listens
+	blocks map[string]string // block UUID -> session ID, from the last ListPanes
 }
 
-const rexExitTarget = 3
+const (
+	rexExitTarget   = 3 // a block, window or session target that does not exist
+	rexExitNoServer = 4
+	rexTerminal     = "com.superlogical.terminal"
+	// rexAppCLI is where the Rex app keeps its CLI, below the home directory.
+	rexAppCLI = "Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS/rex"
+)
 
 func NewRex() *RexBackend {
-	return &RexBackend{run: func(args ...string) (string, int, string, error) {
-		cmd := exec.Command("rex", args...)
+	b := &RexBackend{getenv: os.Getenv, isSock: isSocket}
+	b.run = func(args ...string) (string, int, string, error) {
+		bin := rexBin(b.getenv)
+		if bin == "" {
+			return "", 0, "", errors.New("rex not found")
+		}
+		cmd := exec.Command(bin, args...)
+		// Every call names its blocks, windows and sessions by ID. With REX_SESSION set, the CLI can
+		// look IDs up in that session only, and miss a block of another (a new session's, for one).
+		for _, kv := range os.Environ() {
+			if !strings.HasPrefix(kv, "REX_SESSION=") && !strings.HasPrefix(kv, "REX_BLOCK=") && !strings.HasPrefix(kv, "REX_CLIENT=") {
+				cmd.Env = append(cmd.Env, kv)
+			}
+		}
 		var stderr strings.Builder
 		cmd.Stderr = &stderr
 		out, err := cmd.Output()
@@ -29,91 +60,262 @@ func NewRex() *RexBackend {
 			return string(out), exit.ExitCode(), stderr.String(), nil
 		}
 		return string(out), 0, stderr.String(), err
-	}}
+	}
+	return b
 }
 
-func (b *RexBackend) Name() string { return "rex" }
-
-func (b *RexBackend) call(args ...string) (string, error) {
-	out, code, stderr, err := b.run(args...)
-	if err != nil {
-		return "", BackendErr("rex is not installed")
-	}
-	if code == rexExitTarget {
-		return "", TargetErr("rex: target missing or ambiguous: %s", strings.TrimSpace(stderr))
-	}
-	if code != 0 {
-		return "", BackendErr("rex %s: exit %d: %s", args[0], code, strings.TrimSpace(stderr))
-	}
-	return out, nil
+func isSocket(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.Mode()&os.ModeSocket != 0
 }
 
-func (b *RexBackend) Available() bool {
-	_, err := exec.LookPath("rex")
-	return err == nil
-}
-
-func first(m map[string]any, keys ...string) string {
-	for _, k := range keys {
-		if v, ok := m[k]; ok && v != nil && v != "" {
-			if s, ok := v.(string); ok {
-				return s
-			}
+// rexBin finds the CLI: REX_BIN_DIR, which Rex sets in its terminals, then PATH, then the app bundle.
+func rexBin(getenv func(string) string) string {
+	if d := getenv("REX_BIN_DIR"); d != "" {
+		if p := filepath.Join(d, "rex"); isFile(p) {
+			return p
+		}
+	}
+	if p, err := exec.LookPath("rex"); err == nil {
+		return p
+	}
+	if home := getenv("HOME"); home != "" {
+		if p := filepath.Join(home, rexAppCLI); isFile(p) {
+			return p
 		}
 	}
 	return ""
 }
 
-func (b *RexBackend) process(block string) string {
-	out, err := b.call("block", "call", "-b", block, "process")
+func isFile(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir()
+}
+
+func (b *RexBackend) Name() string { return "rex" }
+
+func (b *RexBackend) Available() bool { return rexBin(b.env) != "" }
+
+func (b *RexBackend) env(k string) string {
+	if b.getenv == nil {
+		return os.Getenv(k)
+	}
+	return b.getenv(k)
+}
+
+// rexSockets lists the sockets a local Rex server listens on, in the order the CLI tries them:
+// $REX_RUNTIME_DIR/server.sock, $XDG_RUNTIME_DIR/rex/server.sock, then the app's
+// ~/Library/Application Support/rex/server.sock.
+func rexSockets(getenv func(string) string) []string {
+	var out []string
+	if d := getenv("REX_RUNTIME_DIR"); d != "" {
+		out = append(out, filepath.Join(d, "server.sock"))
+	}
+	if d := getenv("XDG_RUNTIME_DIR"); d != "" {
+		out = append(out, filepath.Join(d, "rex", "server.sock"))
+	}
+	if home := getenv("HOME"); home != "" {
+		out = append(out, filepath.Join(home, "Library", "Application Support", "rex", "server.sock"))
+	}
+	return out
+}
+
+// server picks the Rex server to talk to: REX_SERVER when set; otherwise, of the sockets that
+// exist, the one whose server holds this terminal's session (REX_SESSION), or the first that
+// answers. Rex sets no server variable in its terminals, and the app's server is not where a bare
+// rex looks first when XDG_RUNTIME_DIR is set, hence the search. "" means no server listens.
+func (b *RexBackend) server() string {
+	if b.addr != nil {
+		return *b.addr
+	}
+	addr := b.findServer()
+	b.addr = &addr
+	return addr
+}
+
+func (b *RexBackend) findServer() string {
+	if s := b.env("REX_SERVER"); s != "" {
+		return s
+	}
+	isSock := b.isSock
+	if isSock == nil {
+		isSock = isSocket
+	}
+	var live []string
+	seen := map[string]bool{}
+	for _, s := range rexSockets(b.env) {
+		if !seen[s] && isSock(s) {
+			live = append(live, "unix://"+s)
+		}
+		seen[s] = true
+	}
+	if len(live) < 2 {
+		return strings.Join(live, "")
+	}
+	want := b.env("REX_SESSION")
+	first := ""
+	for _, addr := range live {
+		out, code, _, err := b.run("-S", addr, "--autostart=false", "ls", "-q", "--short=false")
+		if err != nil || code != 0 {
+			continue
+		}
+		if want == "" {
+			return addr
+		}
+		if first == "" {
+			first = addr
+		}
+		for _, line := range strings.Split(out, "\n") {
+			if strings.TrimSpace(line) == want {
+				return addr
+			}
+		}
+	}
+	return first
+}
+
+func (b *RexBackend) call(args ...string) (string, error) {
+	addr := b.server()
+	if addr == "" {
+		return "", BackendErr("no Rex server is running (looked in %s); open Rex, or set REX_SERVER", strings.Join(rexSockets(b.env), ", "))
+	}
+	out, code, stderr, err := b.run(append([]string{"-S", addr, "--autostart=false"}, args...)...)
 	if err != nil {
-		return ""
+		return "", BackendErr("rex CLI not found: install Rex, or set REX_BIN_DIR to the folder that holds it")
 	}
-	var d map[string]any
-	if json.Unmarshal([]byte(out), &d) != nil {
-		return ""
+	msg := strings.TrimPrefix(strings.TrimSpace(stderr), "Error: ")
+	switch code {
+	case 0:
+		return out, nil
+	case rexExitTarget:
+		return "", TargetErr("rex: %s", msg)
+	case rexExitNoServer:
+		return "", BackendErr("rex: %s", msg)
 	}
-	name := first(d, "name", "command", "comm", "exe")
-	if name == "" {
-		return ""
+	return "", BackendErr("rex %s: exit %d: %s", args[0], code, msg)
+}
+
+// rexRow is one block as rexListLua reports it.
+type rexRow struct {
+	Session, Window, Block, Label, Title, Name, Path, Argv0, Cwd string
+	Cols, Rows                                                   int
+}
+
+// rexListLua lists every block of every session, in window order and then layout order, with what
+// ls shows; detached blocks come last, with no window. A session must be attached before its view
+// and its blocks' methods answer.
+const rexListLua = `
+local function term(sid, bid, m)
+  return rex.call("block.method", {session_id = sid, block_id = bid, method = m}) or {}
+end
+local out = {}
+for _, s in ipairs((rex.call("session.list", {}) or {}).sessions or {}) do
+  local sid = s.session_id
+  rex.call("session.attach", {session_id = sid})
+  local v = rex.call("session.view", {session_id = sid}) or {}
+  local seen = {}
+  local function add(b, win)
+    if seen[b.block_id] then return end
+    seen[b.block_id] = true
+    local row = {session = sid, window = win or "", block = b.block_id, label = b.label or ""}
+    if b.creator_name == "com.superlogical.terminal" then
+      local fg = term(sid, b.block_id, "process").foreground or {}
+      local sz = term(sid, b.block_id, "size")
+      row.title = term(sid, b.block_id, "title").title or ""
+      row.name, row.path, row.argv0, row.cwd = fg.name or "", fg.path or "", fg.argv0 or "", fg.cwd or ""
+      row.cols, row.rows = sz.columns or 0, sz.rows or 0
+    end
+    table.insert(out, row)
+  end
+  for _, w in ipairs(v.windows or {}) do
+    for _, layer in ipairs(w.layers or {}) do
+      for _, b in ipairs(layer.blocks or {}) do add(b, w.window_id) end
+    end
+  end
+  for _, b in ipairs((rex.call("session.list_blocks", {session_id = sid}) or {}).blocks or {}) do add(b, nil) end
+end
+return out
+`
+
+// rexID drops the type prefix of a Rex ID: block:<uuid> and window:<uuid> become <uuid>, which
+// every rex command accepts.
+func rexID(id string) string {
+	if _, uuid, ok := strings.Cut(id, ":"); ok {
+		return uuid
 	}
-	return strings.SplitN(filepath.Base(name), " ", 2)[0]
+	return id
+}
+
+// rexTabs names each window as Rex's own short IDs do: the last 6 hex digits of its UUID (rex
+// window ls shows them, and every rex command accepts them). The full UUIDs are time-ordered, so
+// their starts look alike. Should two windows share 6 digits, all names grow until they differ.
+func rexTabs(rows []rexRow) map[string]string {
+	hex := map[string]string{} // window ID -> the hex digits of its UUID
+	for _, r := range rows {
+		if r.Window != "" {
+			hex[r.Window] = strings.ReplaceAll(rexID(r.Window), "-", "")
+		}
+	}
+	for n := 6; ; n++ {
+		out, seen, unique := map[string]string{}, map[string]bool{}, true
+		for id, h := range hex {
+			s := h[max(0, len(h)-n):]
+			unique = unique && !seen[s]
+			seen[s], out[id] = true, s
+		}
+		if unique || n >= 32 {
+			return out
+		}
+	}
+}
+
+// rexProcess names the program on a block: the foreground name, or a known agent that an
+// interpreter runs, by its path or argv[0].
+func rexProcess(r rexRow) string {
+	for _, n := range MainProcesses {
+		for _, s := range []string{r.Name, filepath.Base(r.Path), filepath.Base(strings.TrimPrefix(r.Argv0, "-"))} {
+			if s == n {
+				return n
+			}
+		}
+	}
+	return r.Name
 }
 
 func (b *RexBackend) ListPanes() ([]*Pane, error) {
-	out, err := b.call("block", "ls", "-A", "--json")
+	if b.server() == "" {
+		return nil, nil // nothing to list; never start a server to find that out
+	}
+	out, err := b.call("do", "-e", rexListLua, "--json")
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(out) == "" {
-		return nil, nil
-	}
-	var data any
-	if err := json.Unmarshal([]byte(out), &data); err != nil {
-		return nil, BackendErr("rex block ls: bad JSON: %v", err)
-	}
-	if m, ok := data.(map[string]any); ok {
-		data = m["blocks"]
-	}
-	blocks, _ := data.([]any)
-	me := os.Getenv("REX_BLOCK")
-	var panes []*Pane
-	for _, raw := range blocks {
-		m, ok := raw.(map[string]any)
-		if !ok {
-			continue
+	var rows []rexRow
+	if t := strings.TrimSpace(out); t != "" && t != "{}" && t != "null" { // Lua gives {} for an empty list
+		if err := json.Unmarshal([]byte(t), &rows); err != nil {
+			return nil, BackendErr("rex ls: bad JSON: %v", err)
 		}
-		native := first(m, "id", "block_id")
+	}
+	me := rexID(b.env("REX_BLOCK"))
+	tabs := rexTabs(rows)
+	b.blocks = map[string]string{}
+	panes := make([]*Pane, 0, len(rows))
+	for _, r := range rows {
+		native := rexID(r.Block)
+		b.blocks[native] = r.Session
 		panes = append(panes, &Pane{
-			ID: "rex:" + native, Backend: "rex", Native: native, Title: CleanTitle(first(m, "title", "name")),
-			Label: first(m, "label"), Process: b.process(native), Folder: Tilde(first(m, "cwd", "directory", "working_directory")),
-			IsSelf: me != "" && native == me,
+			ID: "rex:" + native, Backend: "rex", Native: native, Title: CleanTitle(r.Title), Label: r.Label,
+			Process: rexProcess(r), Folder: Tilde(r.Cwd), IsSelf: me != "" && native == me,
+			Rows: r.Rows, Width: r.Cols, Height: r.Rows, Tab: tabs[r.Window],
 		})
 	}
 	return panes, nil
 }
 
 func (b *RexBackend) SelfPane() (*Pane, error) {
+	if b.env("REX_BLOCK") == "" {
+		return nil, nil
+	}
 	panes, err := b.ListPanes()
 	if err != nil {
 		return nil, err
@@ -126,138 +328,151 @@ func (b *RexBackend) SelfPane() (*Pane, error) {
 	return nil, nil
 }
 
-// rexBlockID finds the new block's ID in a creation result; window and session results nest it.
-func rexBlockID(v any) string {
-	switch t := v.(type) {
-	case []any:
-		if len(t) > 0 {
-			return rexBlockID(t[0])
-		}
-	case map[string]any:
-		for _, k := range []string{"block", "focused_block", "first_block"} {
-			switch b := t[k].(type) {
-			case string:
-				if b != "" {
-					return b
-				}
-			case map[string]any:
-				if id := first(b, "id"); id != "" {
-					return id
-				}
-			}
-		}
-		if bs, ok := t["blocks"].([]any); ok && len(bs) > 0 {
-			return rexBlockID(bs[0])
-		}
-		return first(t, "id")
+// session returns the session that holds a block.
+func (b *RexBackend) session(native string) (string, error) {
+	if s, ok := b.blocks[native]; ok {
+		return s, nil
 	}
-	return ""
+	if _, err := b.ListPanes(); err != nil {
+		return "", err
+	}
+	if s, ok := b.blocks[native]; ok {
+		return s, nil
+	}
+	return "", TargetErr("rex has no block %s", native)
+}
+
+// rexCreated is the result of rex new, run, split and window new: new and session.create nest the
+// window, the others give it (or the anchor) at the top.
+type rexCreated struct {
+	SessionID      string   `json:"session_id"`
+	WindowID       string   `json:"window_id"`
+	BlockIDs       []string `json:"block_ids"`
+	InitialWindows []struct {
+		WindowID string   `json:"window_id"`
+		BlockIDs []string `json:"block_ids"`
+	} `json:"initial_windows"`
+}
+
+// block is the new block's UUID, or "".
+func (c rexCreated) block() string {
+	ids := c.BlockIDs
+	if len(ids) == 0 && len(c.InitialWindows) > 0 {
+		ids = c.InitialWindows[0].BlockIDs
+	}
+	if len(ids) == 0 {
+		return ""
+	}
+	return rexID(ids[0])
+}
+
+func (c rexCreated) window() string {
+	if c.WindowID == "" && len(c.InitialWindows) > 0 {
+		return rexID(c.InitialWindows[0].WindowID)
+	}
+	return rexID(c.WindowID)
 }
 
 func (b *RexBackend) Spawn(where, cmd, cwd, title string) (*Pane, error) {
+	return b.SpawnAt(nil, where, cmd, cwd, title)
+}
+
+// SpawnAt splits anchor (beside it or below it, by its long side), or opens a window right after
+// anchor's window, in anchor's session. A nil anchor means the caller's block. "window" opens a new
+// session. The new block is labelled with title. Focus stays where it was, except that Rex makes a
+// new session's window active.
+func (b *RexBackend) SpawnAt(at *Pane, where, cmd, cwd, title string) (*Pane, error) {
 	if err := CheckWhere(where); err != nil {
 		return nil, err
 	}
-	where, err := Place(b, where)
-	if err != nil {
-		return nil, err
+	if where == "auto" {
+		where, at = PlaceFor(b, where, nil)
 	}
-	opts := []string{"--json"}
-	if cwd != "" {
-		opts = append(opts, "-c", cwd)
+	if at == nil && where != "window" {
+		me, err := b.SelfPane()
+		if err != nil {
+			return nil, err
+		}
+		at = me
 	}
 	var argv []string
 	switch where {
-	case "tab":
-		argv = append([]string{"window", "new", "--focus=false"}, opts...)
-		if s := os.Getenv("REX_SESSION"); s != "" {
-			argv = append(argv, "-s", s)
-		}
-		if title != "" {
-			argv = append(argv, title)
-		}
 	case "split":
-		argv = append([]string{"split", "--focus=false"}, opts...)
-		if blk := os.Getenv("REX_BLOCK"); blk != "" {
-			argv = append(argv, "-b", blk)
+		if at == nil {
+			return nil, UsageErr("split needs a block to split: run inside Rex, or name one")
 		}
+		dir := "below"
+		if SideBySide(at.Width, at.Height) {
+			dir = "right"
+		}
+		argv = []string{"split", "--focus=false", "--json", "-b", at.Native, "--split", dir}
+	case "tab":
+		if at == nil {
+			return nil, UsageErr("a new window needs a session: run inside Rex, or use --where window")
+		}
+		sid, err := b.session(at.Native)
+		if err != nil {
+			return nil, err
+		}
+		argv = []string{"window", "new", "--focus=false", "--json", "-s", sid}
 		if title != "" {
-			argv = append(argv, "--label", title)
+			argv = append(argv, title) // the window's label, which Rex.app shows on the tab
 		}
 	default:
-		argv = append([]string{"new"}, opts...)
+		argv = []string{"new", "--json"}
 		if title != "" {
 			argv = append(argv, title)
 		}
 	}
+	if cwd != "" {
+		argv = append(argv, "-c", cwd)
+	}
 	if cmd != "" {
-		shell := os.Getenv("SHELL")
+		shell := b.env("SHELL")
 		if shell == "" {
 			shell = "/bin/sh"
 		}
-		argv = append(argv, "--shell", shell, "--interactive", "--")
-		argv = append(argv, shellSplit(cmd)...)
+		argv = append(argv, "--shell=none", "--", shell, "-lic", cmd) // as iTerm2 does: mise and PATH load
 	}
 	out, err := b.call(argv...)
 	if err != nil {
 		return nil, err
 	}
-	var v any
-	if strings.TrimSpace(out) != "" {
-		if err := json.Unmarshal([]byte(out), &v); err != nil {
-			return nil, BackendErr("rex: bad JSON from creation: %v", err)
-		}
+	var c rexCreated
+	if err := json.Unmarshal([]byte(out), &c); err != nil {
+		return nil, BackendErr("rex %s: bad JSON: %v", argv[0], err)
 	}
-	native := rexBlockID(v)
+	native := c.block()
 	if native == "" {
-		return nil, BackendErr("rex: creation result carries no block ID (untested backend; check rex --json output)")
+		return nil, BackendErr("rex %s: the result names no block: %s", argv[0], strings.TrimSpace(out))
 	}
-	return &Pane{ID: "rex:" + native, Backend: "rex", Native: native, Title: title}, nil
-}
-
-// shellSplit splits a command line, honouring single quotes, double quotes and backslashes.
-func shellSplit(s string) []string {
-	var words []string
-	var cur strings.Builder
-	in, started := rune(0), false
-	esc := false
-	for _, r := range s {
-		switch {
-		case esc:
-			cur.WriteRune(r)
-			esc = false
-		case r == '\\' && in != '\'':
-			esc, started = true, true
-		case in != 0:
-			if r == in {
-				in = 0
-			} else {
-				cur.WriteRune(r)
-			}
-		case r == '\'' || r == '"':
-			in, started = r, true
-		case r == ' ' || r == '\t':
-			if started {
-				words = append(words, cur.String())
-				cur.Reset()
-				started = false
-			}
-		default:
-			cur.WriteRune(r)
-			started = true
+	p := &Pane{ID: "rex:" + native, Backend: "rex", Native: native, Title: title, Tab: c.window()}
+	if title != "" {
+		if err := b.SetLabel(p, title); err != nil {
+			return p, err
+		}
+		p.Label = title
+	}
+	switch {
+	case where == "split":
+		p.Tab = at.Tab
+		b.even(at.Native) // cosmetic: a failure only warns
+	case where == "tab" && at.Tab != "":
+		if _, err := b.call("window", "move", p.Tab, "--after", at.Tab); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: open the window right after %s: %v\n", at.Tab, err)
 		}
 	}
-	if started {
-		words = append(words, cur.String())
-	}
-	return words
+	return p, nil
 }
 
 func (b *RexBackend) SendText(p *Pane, text string) error {
 	if err := CheckText(text); err != nil {
 		return err
 	}
-	_, err := b.call("send", "-b", p.Native, text)
+	if text == "" {
+		return nil // rex send refuses empty input
+	}
+	_, err := b.call("send", "-b", p.Native, "--", text) // -- so a text that starts with - is not a flag
 	return err
 }
 
@@ -284,27 +499,9 @@ func (b *RexBackend) Close(p *Pane) error {
 }
 
 func (b *RexBackend) SetLabel(p *Pane, label string) error {
-	_, err := b.call("block", "rename", p.Native, label)
+	_, err := b.call("block", "rename", p.Native, "--", label)
 	return err
 }
 
 func (b *RexBackend) NativeStatus(*Pane) string    { return "" }
 func (b *RexBackend) ServerRef() map[string]string { return map[string]string{} }
-
-// MovePane moves block p beside anchor with `rex move`, which works across windows of one session.
-// Rex reports no block sizes, so the block goes to the right, as a split does. Rex has no command
-// that moves a block into a new window or evens out a layout, so it has no BreakPane or Arrange.
-func (b *RexBackend) MovePane(p, anchor *Pane) error {
-	dir := "below"
-	if SideBySide(anchor.Width, anchor.Height) {
-		dir = "right"
-	}
-	_, err := b.call("move", p.Native, dir, anchor.Native)
-	return err
-}
-
-// SwapPanes trades the places of two blocks with `rex swap`.
-func (b *RexBackend) SwapPanes(x, y *Pane) error {
-	_, err := b.call("swap", x.Native, y.Native)
-	return err
-}

@@ -52,7 +52,6 @@ const TabTargets = "self, tab-of:<pane>, or a tab ID from ls"
 var cannotArrange = map[string]string{
 	"hc":      "herdr-core has no tabs or splits; the Herdr app places its terminals",
 	"ghostty": "Ghostty has no control API yet",
-	"rex":     "Rex's CLI has no command for it",
 }
 
 func notSupported(b Backend, what string) *Error {
@@ -66,7 +65,7 @@ func notSupported(b Backend, what string) *Error {
 // ResolveTab names a tab: "self" is the caller's tab, "tab-of:<target>" the tab of the pane that
 // target resolves to, anything else a tab ID as ls shows it. Tab IDs, not positions: a position
 // shifts when another tab opens or closes. It returns the tab and the pane that named it (nil for
-// an ID). On a backend that reports no tabs (Rex) the tab is "" and only the pane stands for it.
+// an ID). On a backend that reports no tabs the tab is "" and only the pane stands for it.
 func ResolveTab(panes []*Pane, target string) (string, *Pane, error) {
 	var at *Pane
 	switch {

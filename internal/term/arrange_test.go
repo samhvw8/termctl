@@ -111,7 +111,7 @@ func TestMoveRefusalsChangeNothing(t *testing.T) {
 
 // A backend without the interfaces is refused with its name, before anything changes.
 func TestUnsupportedBackendIsRefusedByName(t *testing.T) {
-	for _, name := range []string{"hc", "rex", "ghostty"} {
+	for _, name := range []string{"hc", "ghostty"} {
 		f, ps := moveRig()
 		f.BackendName = name
 		b := termtest.Basic{Backend: f}
@@ -223,7 +223,9 @@ var (
 	_ term.Swapper  = (*term.ITerm2Backend)(nil)
 	_ term.Arranger = (*term.ITerm2Backend)(nil)
 	_ term.Mover    = (*term.RexBackend)(nil)
+	_ term.Breaker  = (*term.RexBackend)(nil)
 	_ term.Swapper  = (*term.RexBackend)(nil)
+	_ term.Arranger = (*term.RexBackend)(nil)
 )
 
 func TestHcAndGhosttyCannotMove(t *testing.T) {
