@@ -53,7 +53,7 @@ harness-ops task close [--force] <id>                # refused until accepted, u
 |---|---|---|---|---|
 | tmux | yes (`join-pane`) | yes (`break-pane`) | yes (`swap-pane`) | yes (`select-layout`; `even` = `tiled`) |
 | iterm2 (3.7+) | yes (`move_session`) | yes (`move_session_to_new_tab`) | yes (`apply_layout`) | yes (`apply_layout`, then even sizes) |
-| rex | yes (`rex move`), untested | no command | yes (`rex swap`), untested | no command |
+| rex | yes (`session.move_block`), within one session | yes (a new window, the block moved in, a placeholder closed) | yes (`rex swap`), within one session | yes (`session.resize_pane` for `even`; the others detach and place every block) |
 | hc, ghostty | no | no | no | no |
 
 An unsupported command exits 1 with `not supported on <backend>` and changes nothing.
@@ -122,7 +122,7 @@ Exit codes: 0 ok, 1 backend error, 2 refused target or usage, 4 draft on input l
 | iterm2 | Tested. Python API, native `it2` status helper. |
 | tmux | Tested on a private socket. |
 | hc | Tested on a real private herdr-core with the fake harness (`mise run test:hc`). `termctl send-text` is refused: `hc send` always submits; use `harness-ops msg` or `slash`. `--where` is ignored: a spawned agent opens as a tab in the Herdr app. A blocked program cannot be messaged, and there is no `--force` for it. |
-| rex | **Untested against real Rex** (not installed here). argv mapping is unit-tested against a stub. JSON field names of `rex block ls` are not documented, so parsing is tolerant. |
+| rex | Tested on a real private Rex server, 0.1.0-preview.19 (`mise run test:rex`). The CLI is found through `REX_BIN_DIR`, then `PATH`, then the Rex app bundle. The server is `REX_SERVER` when set, else the local socket whose server holds `REX_SESSION`; termctl never starts a server. A Rex window is a tab; `--where window` opens a new session. Blocks move and swap only within their session. |
 | ghostty | Stub: raises "not supported: Ghostty has no control API yet". |
 
 ## Install
