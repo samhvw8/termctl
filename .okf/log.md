@@ -1,5 +1,10 @@
 # Update Log
 
+## 2026-11-15
+* **Release**: v0.3.0 — `move`, `pull`, `swap` and `arrange`, and a Rex backend that works against a real Rex. Runs: nothing new.
+* **Fix**: the Rex backend, written from the docs, failed against a real Rex 0.1.0-preview.19: `block ls -A --json` is refused, the JSON field names differed, creation results nest the block ID, and a bare `rex` talks to (and autostarts) a server other than the app's. The backend now finds the CLI and the server itself, lists through one Lua script, and does all four pane moves, including `move --to new` and `arrange`. `mise run test:rex` runs it on a private server; `ls` was checked on the live app. See [backends](architecture/backends.md#rex). Runs: nothing new.
+* **Addition**: `move`, `pull`, `swap` and `arrange` in termctl and harness-ops regroup live panes without restarting them; `ls` shows each pane's tab. tmux and iTerm2 do all four; Rex (see the fix above); hc and Ghostty refuse by name. iTerm2 uses its built-in `move_session`, `move_session_to_new_tab` and `apply_layout` (`InvokeFunctionRequest.app` added to the messages). PIDs checked unchanged on tmux (`mise run test`) and real iTerm2 3.7.6 (`mise run test:iterm`). See [backends](architecture/backends.md#moving-and-arranging). Runs: nothing new.
+
 ## 2026-11-14
 * **Release**: v0.2.3 — agy profile, and `interrupt` reports a queued message that came back unsent. Runs: nothing new beyond the fix below.
 * **Fix**: an agent queued a message on a busy agy, interrupted it, and took the returned draft for a turn in progress. Four causes, four fixes: agy is now a calibrated profile (it was `node`, generic, ctrl-c, input line unreadable); `interrupt` reads the input line afterwards and exits 4 when a queued message came back unsent; `msg` prints `queued for` when the target is working; `submit` warns when it cannot confirm. Reproduced and checked on a real agy in a private tmux. See [harness profiles](architecture/harness-profiles.md#interrupt). Runs: up to 2 s of screen reads per `interrupt`, one extra screen read per `msg`.

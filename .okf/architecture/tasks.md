@@ -3,7 +3,7 @@ type: Architecture
 title: Tasks and pane safety
 description: How harness-ops tracks a job given to another harness session, and what stops it closing or spawning the wrong thing.
 tags: [architecture, harness, tasks, safety]
-generated: { by: claude-code/opus-5.5, at: '2026-11-09T06:00:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-15T15:00:00Z' }
 ---
 
 # Overview
@@ -36,6 +36,10 @@ A backend error during reconcile leaves the status alone: unknown is not gone. R
 # Surviving tabs
 
 `Ops.Spawn` wraps the command as `<cmd>; s=$?; <hook>; <message>; exec "$SHELL" -l`, so a shell remains and a crash stays readable. The hook is `harness-ops task exited <id> --code <s>`. Without it an owner waiting for the `RE: task` line would never hear, because nothing polls. Reconcile is the fallback: a launched task whose pane now runs a bare shell has exited. `launched` keeps a login shell at startup from counting.
+
+# Moved panes
+
+`move`, `pull`, `swap` and `arrange` keep a pane's ID, and `term` fails the command if one would not. Records key on pane IDs and store no tab, so a moved worker keeps its task, `PaneRecord` and label without a registry write. A busy worker may be moved; the caller's own pane may not. See [backends](/architecture/backends.md#moving-and-arranging).
 
 # Blind review
 

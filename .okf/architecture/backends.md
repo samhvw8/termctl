@@ -3,11 +3,14 @@ type: Architecture
 title: Backends
 description: The Backend interface and the state of each terminal backend.
 tags: [architecture, backends]
-generated: { by: claude-code/opus-5.5, at: '2026-11-10T15:00:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-15T16:30:00Z' }
 sources:
   - id: rex-cli
     resource: https://www.superlogical.com/rex/docs/reference/cli
     title: Rex CLI reference
+  - id: iterm2-move
+    resource: https://github.com/gnachman/iTerm2/tree/master/sources/Language/BuiltInFunctions
+    title: iTerm2 built-in functions move_session, move_session_to_new_tab, apply_layout (MoveSessionBuiltInFunction.swift, MoveSessionBuiltInFunctions.swift, ApplyLayoutBuiltInFunction.swift)
 ---
 
 # Interface
@@ -16,7 +19,9 @@ sources:
 
 `Submitter` is optional: `SubmitText(pane, text, from)` for a backend that cannot type without pressing Enter (hc). `Ops.Submit` uses it when present, still with `CheckText` and the draft check afterwards. Such a backend's `SendText` must refuse loudly, never submit.
 
-`Pane.Tab` names the tab (tmux: window) that holds a pane, for backends that report it (iTerm2, tmux).
+`Pane.Tab` names the tab (tmux: window) that holds a pane, for backends that report it (iTerm2, tmux). `ls` shows it in the TAB column and as `tab` in `--json`.
+
+`Mover`, `Breaker`, `Swapper` and `Arranger` are optional too: see [moving and arranging](#moving-and-arranging).
 
 Pane IDs are `backend:id`. A target with a backend prefix selects that backend, which is how `RE:` replies route across terminals.
 
@@ -32,7 +37,7 @@ Pane IDs are `backend:id`. A target with a backend prefix selects that backend, 
 |---|---|
 | A tab with fewer than `MaxSplit` (12) panes: first the caller's tab, then a tab holding a pane the caller started. The new agent's folder does not matter | `split` of the largest pane in that tab (the newest on a tie, or when the backend reports no sizes) |
 | No such tab | `tab`, opened right after the caller's tab |
-| A backend that does not report tabs (Rex) | `split` of the caller, with no cap |
+| A backend that does not report tabs | `split` of the caller, with no cap |
 | Listing panes fails (an iTerm2 session closed meanwhile) | `tab`, with a warning; placement never fails a spawn |
 
 So the agents of one job stay in the lead's tab, whatever folder each one works in. Before 2026-11-13 placement grouped by git project, and a worker started in `~` or a scratch folder opened its own tab; Sam wanted the job together instead. Another agent's panes are never joined. iTerm2 and tmux take the chosen pane through `term.Anchored.SpawnAt`; other backends get only the resolved `where`.
@@ -45,16 +50,51 @@ hc ignores `--where`, so placement never lists hc panes. Checked on real iTerm2 
 
 `harness-ops ls --mine` lists the panes the caller started, so a lead can find what it must close.
 
+# Moving and arranging
+
+`move`, `pull`, `swap` and `arrange` (both CLIs) regroup live panes. Code: `internal/term/arrange.go` (resolution, refusals, checks), each backend's `MovePane`, `BreakPane`, `SwapPanes`, `Arrange`, and `internal/harness/arrange.go` (harness-ops guards). Rules:
+
+- **Nothing restarts.** Every backend moves the pane itself, so the process, PID, scrollback and label stay. A backend that cannot do that has no method, and the command exits 1 with `not supported on <backend>` before anything changes. Never fake a move by starting the program again.
+- **IDs stay.** After every change `term` lists the panes again and fails if a pane is no longer there under its ID; a label the change dropped is set again. The registry stores pane IDs and no tabs, so a moved worker keeps its task and `PaneRecord` with no update. Checked in `TestMovePullSwapArrangeKeepThePaneAlive`: the worker's task stays `running` on the same pane, and it answers `msg` after the moves.
+- **Targets** resolve like `close`: exactly one pane, never the caller's own (exit 2). A busy harness may be moved. A tab target is `self`, `tab-of:<pane>`, or a tab ID from `ls`; `move` also takes `new`. IDs, not positions, because a position shifts when another tab opens or closes. A move that changes nothing (same tab, a pane already alone) is refused.
+- **Placement** reuses spawn's: a moved pane splits the largest pane of the destination tab along its long side, and the destination tab is evened out. The tab it leaves is not re-laid out; a tab left empty closes (its pane lives on).
+- **Layouts**: `even`, `rows`, `columns`, `tiled`, `main-left`, `main-top`. Main is `--main`, else the caller when it is in the tab, else the first pane. A tab with one pane is left alone.
+
+| Command | tmux | iTerm2 (3.7+) | Rex | hc | Ghostty |
+|---|---|---|---|---|---|
+| `move --to <tab>`, `pull` | `join-pane -d`, then `select-layout tiled` | `iterm2.move_session`, then the even layout | `session.move_block` through `rex api`, then the window is evened out; within one session only | no | no |
+| `move --to new` | `break-pane -d -a` (right after its window) | `iterm2.move_session_to_new_tab` (right after its tab) | a new window with a placeholder `sleep 60`, the block moved in, the placeholder closed, the window moved right after the old one | no | no |
+| `swap` | `swap-pane -d` | `iterm2.apply_layout` with the two exchanged, then the old sizes back by `SetTabLayoutRequest` | `rex swap` | no | no |
+| `arrange` | `select-layout`: even and tiled → `tiled`, rows → `even-vertical`, columns → `even-horizontal`, main-left/top → `main-vertical`/`main-horizontal` with the window's `main-pane-width`/`-height` set to 50% and main swapped first | even → `SetTabLayoutRequest` (same tree, even sizes); others → `iterm2.apply_layout` with a new tree, then even sizes | even → split ratios by `resize_pane`; others → every block but main detached, then placed again with even ratios (iTerm2's layout definitions), focus given back | no | no |
+
+**iTerm2.** `api.proto` has no message that moves a session; `SetTabLayoutRequest` changes sizes only and refuses another tree. The moves go through built-in functions invoked with `InvokeFunctionRequest` in the app context (`app`, field 4, added to our messages), the same ones the Python API calls: `move_session` (API 1.11), `move_session_to_new_tab` (1.13), `apply_layout` (1.14, base64 JSON spec; it refuses a splitter with one child and same-orientation nesting, so specs are flattened). iTerm2 3.7.6 speaks API 1.21.[^iterm2-move] `move_session` returns success even when it did nothing (a locked layout or session, no room to split), so the result is read back from `ListSessions` and a no-op exits 1. It briefly puts every window in split-selection mode, as a drag does. Checked on real iTerm2 3.7.6 (2026-11-15, `TestMoveOnITerm2`, two scratch tabs of `sleep`): every command kept each `sleep`'s PID.
+
+**Rex.** Rex has no single call that breaks a block out into a new window or applies a layout, so `move --to new` and `arrange` are built from `session.move_block`, `detach_block`, `resize_pane`, `move_window` and `new_window`. Checked on a private Rex 0.1.0-preview.19 server (2026-11-15, `mise run test:rex`): every command kept each `sleep`'s PID, and a fake-harness task was messaged, moved to a new window and messaged again.
+
+**hc.** herdr-core has no tabs or splits; the Herdr app lays out terminals (`herdr.space`/`herdr.tab` labels, and its own `herdr-app do pane.swap` command). termctl does not drive the app and cannot test it without Sam's live app, so hc refuses all four.
+
 # Backends
 
 | Backend | Notes |
 |---|---|
 | iterm2 | Own client over one websocket for the process lifetime; each API call times out after 30 s. Spawns through `$SHELL -lic` so mise and PATH load. A new tab uses `select_tab: false`, to keep the user's focus, and `tab_index` to open right after the caller's tab. A command that fails stays open for 8 s, because a session that ends within seconds makes iTerm2 raise a modal dialog that stalls the whole API until someone clicks OK. |
 | tmux | CLI. Labels are the pane option `@termctl_label`. Escapes a final `;`, which tmux reads as a command separator. A new window opens right after the caller's (`new-window -a -t <window_id>`; a pane ID there fails with "can't specify pane here"). `TMUX_PANE` is trusted only when `$TMUX` names the same server. |
-| rex | Written from the documented CLI.[^rex-cli] Not run against real Rex. |
+| rex | CLI, checked on Rex 0.1.0-preview.19 on a private server (`mise run test:rex`) and listed on the live app. A Rex window is a tab; its ID is the window's last 6 hex digits, as Rex shows it. Details: [the Rex section below](#rex). |
 | hc | Herdr (herdr-core `hc` 0.1.19). Tested on a real private core with the fake harness and a no-prompt Claude Code (`mise run test:hc`); real Claude Code and omp messages passed on the live core. `SendText` always refuses: `hc send` always submits, so lines go through `SubmitText`. Pane ID `hc:t7`; label is the `termctl_label` label. `Process` is `foreground.name`, or a known agent found in `foreground.argv`. `where` is validated and ignored: a new terminal opens as a tab in the Herdr app. Details: [the hc section below](#hc). |
 | ghostty | Stub that raises. |
 
+
+# Rex
+
+Measured on Rex 0.1.0-preview.19,[^rex-cli] and the reason the code is the way it is:
+
+- **Which server.** Rex sets no server variable in its terminals (only `REX_SESSION=session:<uuid>`, `REX_BLOCK=block:<uuid>`, `REX_BIN_DIR`, `TERM_PROGRAM=rex`). A bare `rex` reads `REX_SERVER`, then `$REX_RUNTIME_DIR/server.sock`, then `$XDG_RUNTIME_DIR/rex/server.sock`, then the app's `~/Library/Application Support/rex/server.sock`, and **autostarts** a server where it looked first. A shell that exports `XDG_RUNTIME_DIR` therefore misses the app. The backend uses `REX_SERVER`, else the one socket that exists, else the one whose server holds `REX_SESSION`, and passes `-S <addr> --autostart=false` on every call. termctl never starts a Rex server: with none, `ls` is empty and other commands exit 1.
+- **Which CLI.** The CLI is not on `PATH` by default; it sits in the app's `Rex Server.app`. Order: `REX_BIN_DIR`, `PATH`, the app bundle.
+- **Listing.** `block ls` and `window ls --json` need `-s`, so `ListPanes` runs one `rex do -e` Lua script over every session. Title, cwd, process and size come from `rex block call -b <id> process|title|size`. Each CLI call costs about 180 ms.
+- **CLI quirks.** `rex send` and `block rename` read text that starts with `-` as a flag, so the backend passes `--`. With `REX_SESSION` set, a block ID resolves only inside that session, so the backend drops `REX_SESSION`, `REX_BLOCK` and `REX_CLIENT` from the environment of the `rex` processes it runs. Exit 3 is an unknown target (exit 2 for us), exit 4 no server.
+- **Spawn.** `split` splits the anchor on its long side, then evens the window; `tab` is `window new` in the caller's session, moved right after the caller's window; `window` is `rex new`, a new session. Commands run as `$SHELL -lic`.
+- **Sessions are walls.** Moves and swaps work only inside one session ("blocks are in different sessions"); a cross-session move is refused before anything changes.
+- **Not checked:** real pane sizes (a headless server reports 80x24 for every block), choosing between several live servers (unit test only), and status: Rex's OSC 7501 reports could give `NativeStatus`, which returns nothing yet.
 
 # hc
 
@@ -71,3 +111,4 @@ Measured on hc 0.1.19 and the reason the code is the way it is:
 - **Restart identity**: `core.id` survives `hc server restart`, under which terminals keep running; the core pid does not. `ServerRef` returns both, and tasks compare `core_id` when it exists.
 - **A harness can refuse a submitted line**: `hc send` delivers Enter, but omp with no API key for its current model shows `No API key found for <provider>` and keeps the text on the input line. `Submit` then reports the text as typed but not submitted; `read` shows the harness's error. Found on `homebox` (2026-11-09), where omp started on a `tokenharbor` model that has no key on that box; on a model with a key, sends from the Mac submitted.
 [^rex-cli]: Rex CLI reference
+[^iterm2-move]: iTerm2 built-in functions move_session, move_session_to_new_tab, apply_layout
