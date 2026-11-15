@@ -10,6 +10,10 @@ termctl send-text <target> <text...>         # literal, no Enter
 termctl send-key <target> <key...>           # enter, escape, ctrl-c, ctrl-u, up, ...
 termctl capture <target> [-n 40]
 termctl close <target>
+termctl move <target> --to <tab>             # into another tab; <tab>: new, self, tab-of:<pane>, or a tab ID from ls
+termctl pull <target>                        # into your tab (move --to self)
+termctl swap <a> <b>                         # trade places
+termctl arrange [<tab>] --layout even|rows|columns|tiled|main-left|main-top [--main <pane>]
 termctl name <label>
 termctl whoami
 
@@ -21,6 +25,7 @@ harness-ops wait-idle [--timeout S] <target>
 harness-ops spawn <harness> [--where auto|tab|split|window] --cwd D [--prompt T | --prompt-file F] [--label L] [--command CMD]
 harness-ops close [--force] <target>         # only panes made by spawn/task new; never your own
 harness-ops interrupt [--key K] <target>     # stop the current turn (Esc on claude, omp and agy)
+harness-ops move|pull|swap|arrange ...       # as termctl; a moved pane keeps its label and task
 harness-ops which|read|name|whoami           # as agent-ops; send = msg
 
 harness-ops task new <harness> --title T (--brief TEXT | --brief-file F) --cwd D [--where auto|tab|split|window] [--reuse <target>] [--max N]
@@ -35,6 +40,23 @@ harness-ops task close [--force] <id>                # refused until accepted, u
 ```
 
 `--where auto` is the default. A new agent splits the caller's tab, whatever its folder, or a tab of an agent the caller started when the caller's tab is full. It splits the largest pane there along its long side and evens out the pane sizes, up to 12 panes per tab. Otherwise it opens a new tab right after the caller's tab. Herdr ignores `--where`.
+
+## Moving panes
+
+`move`, `pull`, `swap` and `arrange` regroup running panes. The program keeps running: same PID, scrollback, label, task and registry record. A busy harness may be moved; your own pane may not, and a target must resolve to exactly one pane (exit 2).
+
+- A tab is named `self`, `tab-of:<pane>`, or by the tab ID in the TAB column of `ls` (IDs, not positions, which shift). `move --to new` gives the pane a tab of its own, right after its old one.
+- A moved pane splits the largest pane of the destination tab, and that tab is evened out, as after a spawn.
+- `arrange` lays out a whole tab (default: yours). Main is `--main`, else you when you are in the tab.
+
+| Backend | move, pull | move --to new | swap | arrange |
+|---|---|---|---|---|
+| tmux | yes (`join-pane`) | yes (`break-pane`) | yes (`swap-pane`) | yes (`select-layout`; `even` = `tiled`) |
+| iterm2 (3.7+) | yes (`move_session`) | yes (`move_session_to_new_tab`) | yes (`apply_layout`) | yes (`apply_layout`, then even sizes) |
+| rex | yes (`rex move`), untested | no command | yes (`rex swap`), untested | no command |
+| hc, ghostty | no | no | no | no |
+
+An unsupported command exits 1 with `not supported on <backend>` and changes nothing.
 
 ## Tasks
 
