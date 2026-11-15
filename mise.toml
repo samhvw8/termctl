@@ -18,6 +18,11 @@ description = "Run the opt-in hc acceptance tests on a private herdr-core (its o
 env = { TERMCTL_HC_TEST = "1" }
 run = "go test ./e2e -run 'TestHc' -v -count=1"
 
+[tasks."test:rex"]
+description = "Run the opt-in Rex acceptance test on a private Rex server it starts and stops (its own socket under /tmp)"
+env = { TERMCTL_REX_TEST = "1" }
+run = "go test ./e2e -run 'TestRex' -v -count=1"
+
 [tasks.check]
 description = "Tests plus OKF validation"
 depends = ["test"]
