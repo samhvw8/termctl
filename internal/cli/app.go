@@ -95,3 +95,11 @@ func idWidth(panes []*term.Pane) int {
 	}
 	return w
 }
+
+// tabOr is the tab column of a pane table: the tab ID, or "-" where the backend reports none.
+func tabOr(p *term.Pane) string {
+	if p.Tab == "" {
+		return "-"
+	}
+	return term.Cut(p.Tab, 6)
+}

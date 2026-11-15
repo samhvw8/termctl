@@ -26,6 +26,12 @@ Talk to coding-agent panes. Put options before the target: everything after the 
   spawn HARNESS [--where auto|tab|split|window] [--cwd D] [--prompt T | --prompt-file F] [--label L] [--command CMD] [--timeout S]
   close [--force] TARGET                      only panes made by spawn or task new; never your own
   interrupt [--key K] TARGET                  stop the current turn
+  move TARGET --to TAB                        move a pane into another tab; it keeps running, with its label and task
+                                              TAB: new (a tab of its own), self, tab-of:PANE, or a tab ID from ls
+  pull TARGET                                 move a pane into your tab (move --to self)
+  swap A B                                    trade the places of two panes
+  arrange [TAB] --layout L [--main PANE]      lay out a tab again, evenly sized (default: your tab)
+                                              L: even, rows, columns, tiled, main-left, main-top
   name LABEL                                  label the current pane
   whoami
   task new HARNESS --title T (--brief TEXT | --brief-file F) [--cwd D] [--where W] [--reuse TARGET] [--command CMD] [--max N] [--timeout S]
@@ -60,17 +66,18 @@ type row struct {
 	Folder  string `json:"folder"`
 	Self    bool   `json:"self"`
 	Status  string `json:"status"`
+	Tab     string `json:"tab"` // the tab (tmux: window) ID, "" where the backend reports none
 }
 
 func (a *App) printTable(panes []*term.Pane) {
 	w := idWidth(panes)
-	fmt.Fprintf(a.Out, "%-*s %-9s %-14s %-34s %-36s STATUS\n", w, "ID", "HARNESS", "LABEL", "TITLE", "FOLDER")
+	fmt.Fprintf(a.Out, "%-*s %-6s %-9s %-14s %-34s %-36s STATUS\n", w, "ID", "TAB", "HARNESS", "LABEL", "TITLE", "FOLDER")
 	for _, p := range panes {
 		mark := ""
 		if p.IsSelf {
 			mark = " (you)"
 		}
-		fmt.Fprintf(a.Out, "%-*s %-9s %-14s %-34s %-36s %s\n", w, p.Short(), term.Cut(harness.HarnessName(p), 9), term.Cut(p.Label, 14),
+		fmt.Fprintf(a.Out, "%-*s %-6s %-9s %-14s %-34s %-36s %s\n", w, p.Short(), tabOr(p), term.Cut(harness.HarnessName(p), 9), term.Cut(p.Label, 14),
 			term.Cut(term.Cut(p.Title, 28)+mark, 34), term.Cut(p.Folder, 36), term.Cut(p.Status, 60))
 	}
 }
@@ -215,6 +222,8 @@ func (a *App) harness(argv []string) error {
 		return a.ls(o, p.bools["--all"], p.bools["--json"], p.bools["--mine"])
 	case "whoami", "name":
 		return a.selfCmd(cmd, rest, o)
+	case "move", "pull", "swap", "arrange":
+		return a.harnessLayout(cmd, rest, o)
 	case "which", "read", "capture":
 		return a.lookCmd(cmd, rest, o)
 	case "msg", "send":
@@ -490,7 +499,7 @@ func (a *App) ls(o *Options, all, asJSON, mine bool) error {
 	if asJSON {
 		rows := []row{}
 		for _, p := range panes {
-			rows = append(rows, row{p.Address(), p.ID, p.TTY, p.Title, p.Label, harness.HarnessName(p), p.Folder, p.IsSelf, p.Status})
+			rows = append(rows, row{p.Address(), p.ID, p.TTY, p.Title, p.Label, harness.HarnessName(p), p.Folder, p.IsSelf, p.Status, p.Tab})
 		}
 		data, _ := json.MarshalIndent(rows, "", " ")
 		fmt.Fprintln(a.Out, string(data))

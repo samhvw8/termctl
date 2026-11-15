@@ -23,6 +23,12 @@ Drive terminal panes through backends (iterm2, tmux, rex, hc, ghostty).
   send-key TARGET KEY...          press keys: enter, escape, tab, ctrl-c, ctrl-u, ...
   capture TARGET [-n LINES]       print the last lines of a pane's screen
   close TARGET                    close a pane
+  move TARGET --to TAB            move a pane into another tab, beside its largest pane; it keeps running
+                                  TAB: new (a tab of its own), self, tab-of:PANE, or a tab ID from ls
+  pull TARGET                     move a pane into your tab (move --to self)
+  swap A B                        trade the places of two panes
+  arrange [TAB] --layout L [--main PANE]   lay out a tab again, evenly sized (default: your tab)
+                                  L: even, rows, columns, tiled, main-left, main-top
   name LABEL                      label the current pane
   whoami                          print the current pane
 
@@ -33,13 +39,13 @@ var labelRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,40}$`)
 
 func (a *App) printPanes(panes []*term.Pane) {
 	w := idWidth(panes)
-	fmt.Fprintf(a.Out, "%-*s %-12s %-14s %-34s FOLDER\n", w, "ID", "PROCESS", "LABEL", "TITLE")
+	fmt.Fprintf(a.Out, "%-*s %-6s %-12s %-14s %-34s FOLDER\n", w, "ID", "TAB", "PROCESS", "LABEL", "TITLE")
 	for _, p := range panes {
 		mark := ""
 		if p.IsSelf {
 			mark = " (you)"
 		}
-		fmt.Fprintf(a.Out, "%-*s %-12s %-14s %-34s %s\n", w, p.Short(), term.Cut(p.Process, 12), term.Cut(p.Label, 14), term.Cut(term.Cut(p.Title, 28)+mark, 34), p.Folder)
+		fmt.Fprintf(a.Out, "%-*s %-6s %-12s %-14s %-34s %s\n", w, p.Short(), tabOr(p), term.Cut(p.Process, 12), term.Cut(p.Label, 14), term.Cut(term.Cut(p.Title, 28)+mark, 34), p.Folder)
 	}
 }
 
@@ -55,6 +61,7 @@ type paneJSON struct {
 	IsSelf  bool   `json:"is_self"`
 	Status  string `json:"status"`
 	Address string `json:"address"`
+	Tab     string `json:"tab"` // the tab (tmux: window) ID, "" where the backend reports none
 }
 
 func (a *App) pick(b term.Backend, target string, refuseSelf bool) (*term.Pane, error) {
@@ -114,7 +121,7 @@ func (a *App) termctl(argv []string) error {
 		if p.bools["--json"] {
 			rows := []paneJSON{}
 			for _, x := range panes {
-				rows = append(rows, paneJSON{x.ID, x.Backend, x.Native, x.TTY, x.Title, x.Label, x.Process, x.Folder, x.IsSelf, x.Status, x.Address()})
+				rows = append(rows, paneJSON{x.ID, x.Backend, x.Native, x.TTY, x.Title, x.Label, x.Process, x.Folder, x.IsSelf, x.Status, x.Address(), x.Tab})
 			}
 			data, _ := json.MarshalIndent(rows, "", " ")
 			fmt.Fprintln(a.Out, string(data))
@@ -176,6 +183,8 @@ func (a *App) termctl(argv []string) error {
 		}
 		fmt.Fprintf(a.Out, "labelled this pane: %s\n", p.pos[0])
 		return nil
+	case "move", "pull", "swap", "arrange":
+		return a.termctlLayout(cmd, rest, o)
 	case "which", "capture", "close", "send-key", "send-text":
 		restAfter := -1
 		if cmd == "send-text" {
