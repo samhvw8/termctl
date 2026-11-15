@@ -60,10 +60,15 @@ message SplitPaneRequest {
 message ListSessionsRequest {
 }
 
+// iTerm2 declares app and method as members of one oneof; set at most one. app is the context of
+// the built-in functions that move sessions and apply layouts (move_session, apply_layout, ...).
 message InvokeFunctionRequest {
+  optional InvokeFunctionRequest.App app = 4;
   optional InvokeFunctionRequest.Method method = 7;
   optional string invocation = 5;
   optional double timeout = 6;
+  message App {
+  }
   message Method {
     optional string receiver = 1;
   }
