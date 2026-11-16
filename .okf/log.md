@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-11-16
+* **Release**: v0.3.1 — panes behind a maximized iTerm2 pane stay listed and reachable (the fix below). Installed through `mise use -g github:samhvw8/termctl` in the dotfiles, replacing the hand-built copies in `~/.local/bin`. Runs: nothing new.
 * **Fix**: on iTerm2, maximizing a pane hid the other panes of its tab from `ls`, and `send`, `read`, `which` and `wait-idle` failed with "no pane matches". Cause: `ListSessions` keeps only the maximized pane in the tab's split tree and lists the rest in `Tab.minimized_sessions`, which termctl did not read (the field was not in our messages). Those panes are now listed, marked `(hidden)`, and reachable; `move`, `pull`, `swap` and `arrange` refuse a maximized tab with exit 2. Found as "random dropouts" of a lead's agents. Reproduced and checked on real iTerm2 3.7.6 (`mise run test:iterm`). See [backends](architecture/backends.md#moving-and-arranging). Runs: nothing new; `move` makes one more `ListSessions` call.
 
 ## 2026-11-15
