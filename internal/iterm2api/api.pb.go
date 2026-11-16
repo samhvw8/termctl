@@ -638,6 +638,65 @@ func (LineContents_Continuation) EnumDescriptor() ([]byte, []int) {
 	return file_internal_iterm2api_api_proto_rawDescGZIP(), []int{22, 0}
 }
 
+type MenuItemResponse_Status int32
+
+const (
+	MenuItemResponse_OK             MenuItemResponse_Status = 0
+	MenuItemResponse_BAD_IDENTIFIER MenuItemResponse_Status = 1
+	MenuItemResponse_DISABLED       MenuItemResponse_Status = 2
+)
+
+// Enum value maps for MenuItemResponse_Status.
+var (
+	MenuItemResponse_Status_name = map[int32]string{
+		0: "OK",
+		1: "BAD_IDENTIFIER",
+		2: "DISABLED",
+	}
+	MenuItemResponse_Status_value = map[string]int32{
+		"OK":             0,
+		"BAD_IDENTIFIER": 1,
+		"DISABLED":       2,
+	}
+)
+
+func (x MenuItemResponse_Status) Enum() *MenuItemResponse_Status {
+	p := new(MenuItemResponse_Status)
+	*p = x
+	return p
+}
+
+func (x MenuItemResponse_Status) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (MenuItemResponse_Status) Descriptor() protoreflect.EnumDescriptor {
+	return file_internal_iterm2api_api_proto_enumTypes[10].Descriptor()
+}
+
+func (MenuItemResponse_Status) Type() protoreflect.EnumType {
+	return &file_internal_iterm2api_api_proto_enumTypes[10]
+}
+
+func (x MenuItemResponse_Status) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Do not use.
+func (x *MenuItemResponse_Status) UnmarshalJSON(b []byte) error {
+	num, err := protoimpl.X.UnmarshalJSONEnum(x.Descriptor(), b)
+	if err != nil {
+		return err
+	}
+	*x = MenuItemResponse_Status(num)
+	return nil
+}
+
+// Deprecated: Use MenuItemResponse_Status.Descriptor instead.
+func (MenuItemResponse_Status) EnumDescriptor() ([]byte, []int) {
+	return file_internal_iterm2api_api_proto_rawDescGZIP(), []int{27, 0}
+}
+
 type SetTabLayoutResponse_Status int32
 
 const (
@@ -674,11 +733,11 @@ func (x SetTabLayoutResponse_Status) String() string {
 }
 
 func (SetTabLayoutResponse_Status) Descriptor() protoreflect.EnumDescriptor {
-	return file_internal_iterm2api_api_proto_enumTypes[10].Descriptor()
+	return file_internal_iterm2api_api_proto_enumTypes[11].Descriptor()
 }
 
 func (SetTabLayoutResponse_Status) Type() protoreflect.EnumType {
-	return &file_internal_iterm2api_api_proto_enumTypes[10]
+	return &file_internal_iterm2api_api_proto_enumTypes[11]
 }
 
 func (x SetTabLayoutResponse_Status) Number() protoreflect.EnumNumber {
@@ -697,7 +756,7 @@ func (x *SetTabLayoutResponse_Status) UnmarshalJSON(b []byte) error {
 
 // Deprecated: Use SetTabLayoutResponse_Status.Descriptor instead.
 func (SetTabLayoutResponse_Status) EnumDescriptor() ([]byte, []int) {
-	return file_internal_iterm2api_api_proto_rawDescGZIP(), []int{27, 0}
+	return file_internal_iterm2api_api_proto_rawDescGZIP(), []int{29, 0}
 }
 
 type ClientOriginatedMessage struct {
@@ -710,6 +769,7 @@ type ClientOriginatedMessage struct {
 	SplitPaneRequest      *SplitPaneRequest      `protobuf:"bytes,109,opt,name=split_pane_request,json=splitPaneRequest" json:"split_pane_request,omitempty"`
 	ActivateRequest       *ActivateRequest       `protobuf:"bytes,114,opt,name=activate_request,json=activateRequest" json:"activate_request,omitempty"`
 	VariableRequest       *VariableRequest       `protobuf:"bytes,115,opt,name=variable_request,json=variableRequest" json:"variable_request,omitempty"`
+	MenuItemRequest       *MenuItemRequest       `protobuf:"bytes,121,opt,name=menu_item_request,json=menuItemRequest" json:"menu_item_request,omitempty"`
 	SetTabLayoutRequest   *SetTabLayoutRequest   `protobuf:"bytes,122,opt,name=set_tab_layout_request,json=setTabLayoutRequest" json:"set_tab_layout_request,omitempty"`
 	CloseRequest          *CloseRequest          `protobuf:"bytes,131,opt,name=close_request,json=closeRequest" json:"close_request,omitempty"`
 	InvokeFunctionRequest *InvokeFunctionRequest `protobuf:"bytes,132,opt,name=invoke_function_request,json=invokeFunctionRequest" json:"invoke_function_request,omitempty"`
@@ -803,6 +863,13 @@ func (x *ClientOriginatedMessage) GetVariableRequest() *VariableRequest {
 	return nil
 }
 
+func (x *ClientOriginatedMessage) GetMenuItemRequest() *MenuItemRequest {
+	if x != nil {
+		return x.MenuItemRequest
+	}
+	return nil
+}
+
 func (x *ClientOriginatedMessage) GetSetTabLayoutRequest() *SetTabLayoutRequest {
 	if x != nil {
 		return x.SetTabLayoutRequest
@@ -835,6 +902,7 @@ type ServerOriginatedMessage struct {
 	SplitPaneResponse      *SplitPaneResponse      `protobuf:"bytes,109,opt,name=split_pane_response,json=splitPaneResponse" json:"split_pane_response,omitempty"`
 	ActivateResponse       *ActivateResponse       `protobuf:"bytes,114,opt,name=activate_response,json=activateResponse" json:"activate_response,omitempty"`
 	VariableResponse       *VariableResponse       `protobuf:"bytes,115,opt,name=variable_response,json=variableResponse" json:"variable_response,omitempty"`
+	MenuItemResponse       *MenuItemResponse       `protobuf:"bytes,121,opt,name=menu_item_response,json=menuItemResponse" json:"menu_item_response,omitempty"`
 	SetTabLayoutResponse   *SetTabLayoutResponse   `protobuf:"bytes,122,opt,name=set_tab_layout_response,json=setTabLayoutResponse" json:"set_tab_layout_response,omitempty"`
 	CloseResponse          *CloseResponse          `protobuf:"bytes,131,opt,name=close_response,json=closeResponse" json:"close_response,omitempty"`
 	InvokeFunctionResponse *InvokeFunctionResponse `protobuf:"bytes,132,opt,name=invoke_function_response,json=invokeFunctionResponse" json:"invoke_function_response,omitempty"`
@@ -931,6 +999,13 @@ func (x *ServerOriginatedMessage) GetActivateResponse() *ActivateResponse {
 func (x *ServerOriginatedMessage) GetVariableResponse() *VariableResponse {
 	if x != nil {
 		return x.VariableResponse
+	}
+	return nil
+}
+
+func (x *ServerOriginatedMessage) GetMenuItemResponse() *MenuItemResponse {
+	if x != nil {
+		return x.MenuItemResponse
 	}
 	return nil
 }
@@ -2280,6 +2355,119 @@ func (x *Size) GetHeight() int32 {
 
 // The tree must match the tab's tree exactly, `vertical` included. Only grid sizes may change, and
 // they must add up to the same totals in every dimension, or the window resizes.
+// Selects a main-menu item by identifier, in the key window (tests maximize a pane with it).
+type MenuItemRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Identifier    *string                `protobuf:"bytes,1,opt,name=identifier" json:"identifier,omitempty"`
+	QueryOnly     *bool                  `protobuf:"varint,2,opt,name=query_only,json=queryOnly" json:"query_only,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MenuItemRequest) Reset() {
+	*x = MenuItemRequest{}
+	mi := &file_internal_iterm2api_api_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MenuItemRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MenuItemRequest) ProtoMessage() {}
+
+func (x *MenuItemRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_iterm2api_api_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MenuItemRequest.ProtoReflect.Descriptor instead.
+func (*MenuItemRequest) Descriptor() ([]byte, []int) {
+	return file_internal_iterm2api_api_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *MenuItemRequest) GetIdentifier() string {
+	if x != nil && x.Identifier != nil {
+		return *x.Identifier
+	}
+	return ""
+}
+
+func (x *MenuItemRequest) GetQueryOnly() bool {
+	if x != nil && x.QueryOnly != nil {
+		return *x.QueryOnly
+	}
+	return false
+}
+
+type MenuItemResponse struct {
+	state         protoimpl.MessageState   `protogen:"open.v1"`
+	Status        *MenuItemResponse_Status `protobuf:"varint,1,opt,name=status,enum=iterm2api.MenuItemResponse_Status" json:"status,omitempty"`
+	Checked       *bool                    `protobuf:"varint,2,opt,name=checked" json:"checked,omitempty"`
+	Enabled       *bool                    `protobuf:"varint,3,opt,name=enabled" json:"enabled,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MenuItemResponse) Reset() {
+	*x = MenuItemResponse{}
+	mi := &file_internal_iterm2api_api_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MenuItemResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MenuItemResponse) ProtoMessage() {}
+
+func (x *MenuItemResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_iterm2api_api_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MenuItemResponse.ProtoReflect.Descriptor instead.
+func (*MenuItemResponse) Descriptor() ([]byte, []int) {
+	return file_internal_iterm2api_api_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *MenuItemResponse) GetStatus() MenuItemResponse_Status {
+	if x != nil && x.Status != nil {
+		return *x.Status
+	}
+	return MenuItemResponse_OK
+}
+
+func (x *MenuItemResponse) GetChecked() bool {
+	if x != nil && x.Checked != nil {
+		return *x.Checked
+	}
+	return false
+}
+
+func (x *MenuItemResponse) GetEnabled() bool {
+	if x != nil && x.Enabled != nil {
+		return *x.Enabled
+	}
+	return false
+}
+
 type SetTabLayoutRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Root          *SplitTreeNode         `protobuf:"bytes,1,opt,name=root" json:"root,omitempty"`
@@ -2290,7 +2478,7 @@ type SetTabLayoutRequest struct {
 
 func (x *SetTabLayoutRequest) Reset() {
 	*x = SetTabLayoutRequest{}
-	mi := &file_internal_iterm2api_api_proto_msgTypes[26]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2302,7 +2490,7 @@ func (x *SetTabLayoutRequest) String() string {
 func (*SetTabLayoutRequest) ProtoMessage() {}
 
 func (x *SetTabLayoutRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_iterm2api_api_proto_msgTypes[26]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2315,7 +2503,7 @@ func (x *SetTabLayoutRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetTabLayoutRequest.ProtoReflect.Descriptor instead.
 func (*SetTabLayoutRequest) Descriptor() ([]byte, []int) {
-	return file_internal_iterm2api_api_proto_rawDescGZIP(), []int{26}
+	return file_internal_iterm2api_api_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *SetTabLayoutRequest) GetRoot() *SplitTreeNode {
@@ -2341,7 +2529,7 @@ type SetTabLayoutResponse struct {
 
 func (x *SetTabLayoutResponse) Reset() {
 	*x = SetTabLayoutResponse{}
-	mi := &file_internal_iterm2api_api_proto_msgTypes[27]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2353,7 +2541,7 @@ func (x *SetTabLayoutResponse) String() string {
 func (*SetTabLayoutResponse) ProtoMessage() {}
 
 func (x *SetTabLayoutResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_iterm2api_api_proto_msgTypes[27]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2366,7 +2554,7 @@ func (x *SetTabLayoutResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetTabLayoutResponse.ProtoReflect.Descriptor instead.
 func (*SetTabLayoutResponse) Descriptor() ([]byte, []int) {
-	return file_internal_iterm2api_api_proto_rawDescGZIP(), []int{27}
+	return file_internal_iterm2api_api_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *SetTabLayoutResponse) GetStatus() SetTabLayoutResponse_Status {
@@ -2384,7 +2572,7 @@ type InvokeFunctionRequest_App struct {
 
 func (x *InvokeFunctionRequest_App) Reset() {
 	*x = InvokeFunctionRequest_App{}
-	mi := &file_internal_iterm2api_api_proto_msgTypes[28]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2396,7 +2584,7 @@ func (x *InvokeFunctionRequest_App) String() string {
 func (*InvokeFunctionRequest_App) ProtoMessage() {}
 
 func (x *InvokeFunctionRequest_App) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_iterm2api_api_proto_msgTypes[28]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2421,7 +2609,7 @@ type InvokeFunctionRequest_Method struct {
 
 func (x *InvokeFunctionRequest_Method) Reset() {
 	*x = InvokeFunctionRequest_Method{}
-	mi := &file_internal_iterm2api_api_proto_msgTypes[29]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2433,7 +2621,7 @@ func (x *InvokeFunctionRequest_Method) String() string {
 func (*InvokeFunctionRequest_Method) ProtoMessage() {}
 
 func (x *InvokeFunctionRequest_Method) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_iterm2api_api_proto_msgTypes[29]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2465,7 +2653,7 @@ type CloseRequest_CloseSessions struct {
 
 func (x *CloseRequest_CloseSessions) Reset() {
 	*x = CloseRequest_CloseSessions{}
-	mi := &file_internal_iterm2api_api_proto_msgTypes[30]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2477,7 +2665,7 @@ func (x *CloseRequest_CloseSessions) String() string {
 func (*CloseRequest_CloseSessions) ProtoMessage() {}
 
 func (x *CloseRequest_CloseSessions) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_iterm2api_api_proto_msgTypes[30]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2510,7 +2698,7 @@ type VariableRequest_Set struct {
 
 func (x *VariableRequest_Set) Reset() {
 	*x = VariableRequest_Set{}
-	mi := &file_internal_iterm2api_api_proto_msgTypes[31]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2522,7 +2710,7 @@ func (x *VariableRequest_Set) String() string {
 func (*VariableRequest_Set) ProtoMessage() {}
 
 func (x *VariableRequest_Set) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_iterm2api_api_proto_msgTypes[31]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2562,7 +2750,7 @@ type InvokeFunctionResponse_Error struct {
 
 func (x *InvokeFunctionResponse_Error) Reset() {
 	*x = InvokeFunctionResponse_Error{}
-	mi := &file_internal_iterm2api_api_proto_msgTypes[32]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2574,7 +2762,7 @@ func (x *InvokeFunctionResponse_Error) String() string {
 func (*InvokeFunctionResponse_Error) ProtoMessage() {}
 
 func (x *InvokeFunctionResponse_Error) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_iterm2api_api_proto_msgTypes[32]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2613,7 +2801,7 @@ type InvokeFunctionResponse_Success struct {
 
 func (x *InvokeFunctionResponse_Success) Reset() {
 	*x = InvokeFunctionResponse_Success{}
-	mi := &file_internal_iterm2api_api_proto_msgTypes[33]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2625,7 +2813,7 @@ func (x *InvokeFunctionResponse_Success) String() string {
 func (*InvokeFunctionResponse_Success) ProtoMessage() {}
 
 func (x *InvokeFunctionResponse_Success) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_iterm2api_api_proto_msgTypes[33]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2659,7 +2847,7 @@ type ListSessionsResponse_Window struct {
 
 func (x *ListSessionsResponse_Window) Reset() {
 	*x = ListSessionsResponse_Window{}
-	mi := &file_internal_iterm2api_api_proto_msgTypes[34]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2671,7 +2859,7 @@ func (x *ListSessionsResponse_Window) String() string {
 func (*ListSessionsResponse_Window) ProtoMessage() {}
 
 func (x *ListSessionsResponse_Window) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_iterm2api_api_proto_msgTypes[34]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2709,16 +2897,18 @@ func (x *ListSessionsResponse_Window) GetSelectedTabId() string {
 }
 
 type ListSessionsResponse_Tab struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Root          *SplitTreeNode         `protobuf:"bytes,3,opt,name=root" json:"root,omitempty"`
-	TabId         *string                `protobuf:"bytes,2,opt,name=tab_id,json=tabId" json:"tab_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Root  *SplitTreeNode         `protobuf:"bytes,3,opt,name=root" json:"root,omitempty"`
+	TabId *string                `protobuf:"bytes,2,opt,name=tab_id,json=tabId" json:"tab_id,omitempty"`
+	// While a pane is maximized, root holds only that pane; the tab's other sessions are here.
+	MinimizedSessions []*SessionSummary `protobuf:"bytes,6,rep,name=minimized_sessions,json=minimizedSessions" json:"minimized_sessions,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *ListSessionsResponse_Tab) Reset() {
 	*x = ListSessionsResponse_Tab{}
-	mi := &file_internal_iterm2api_api_proto_msgTypes[35]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2730,7 +2920,7 @@ func (x *ListSessionsResponse_Tab) String() string {
 func (*ListSessionsResponse_Tab) ProtoMessage() {}
 
 func (x *ListSessionsResponse_Tab) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_iterm2api_api_proto_msgTypes[35]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2760,6 +2950,13 @@ func (x *ListSessionsResponse_Tab) GetTabId() string {
 	return ""
 }
 
+func (x *ListSessionsResponse_Tab) GetMinimizedSessions() []*SessionSummary {
+	if x != nil {
+		return x.MinimizedSessions
+	}
+	return nil
+}
+
 type SplitTreeNode_SplitTreeLink struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Session       *SessionSummary        `protobuf:"bytes,1,opt,name=session" json:"session,omitempty"`
@@ -2770,7 +2967,7 @@ type SplitTreeNode_SplitTreeLink struct {
 
 func (x *SplitTreeNode_SplitTreeLink) Reset() {
 	*x = SplitTreeNode_SplitTreeLink{}
-	mi := &file_internal_iterm2api_api_proto_msgTypes[36]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2782,7 +2979,7 @@ func (x *SplitTreeNode_SplitTreeLink) String() string {
 func (*SplitTreeNode_SplitTreeLink) ProtoMessage() {}
 
 func (x *SplitTreeNode_SplitTreeLink) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_iterm2api_api_proto_msgTypes[36]
+	mi := &file_internal_iterm2api_api_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2816,7 +3013,7 @@ var File_internal_iterm2api_api_proto protoreflect.FileDescriptor
 
 const file_internal_iterm2api_api_proto_rawDesc = "" +
 	"\n" +
-	"\x1cinternal/iterm2api/api.proto\x12\titerm2api\"\xa3\x06\n" +
+	"\x1cinternal/iterm2api/api.proto\x12\titerm2api\"\xeb\x06\n" +
 	"\x17ClientOriginatedMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12I\n" +
 	"\x12get_buffer_request\x18d \x01(\v2\x1b.iterm2api.GetBufferRequestR\x10getBufferRequest\x12R\n" +
@@ -2825,10 +3022,11 @@ const file_internal_iterm2api_api_proto_rawDesc = "" +
 	"\x12create_tab_request\x18l \x01(\v2\x1b.iterm2api.CreateTabRequestR\x10createTabRequest\x12I\n" +
 	"\x12split_pane_request\x18m \x01(\v2\x1b.iterm2api.SplitPaneRequestR\x10splitPaneRequest\x12E\n" +
 	"\x10activate_request\x18r \x01(\v2\x1a.iterm2api.ActivateRequestR\x0factivateRequest\x12E\n" +
-	"\x10variable_request\x18s \x01(\v2\x1a.iterm2api.VariableRequestR\x0fvariableRequest\x12S\n" +
+	"\x10variable_request\x18s \x01(\v2\x1a.iterm2api.VariableRequestR\x0fvariableRequest\x12F\n" +
+	"\x11menu_item_request\x18y \x01(\v2\x1a.iterm2api.MenuItemRequestR\x0fmenuItemRequest\x12S\n" +
 	"\x16set_tab_layout_request\x18z \x01(\v2\x1e.iterm2api.SetTabLayoutRequestR\x13setTabLayoutRequest\x12=\n" +
 	"\rclose_request\x18\x83\x01 \x01(\v2\x17.iterm2api.CloseRequestR\fcloseRequest\x12Y\n" +
-	"\x17invoke_function_request\x18\x84\x01 \x01(\v2 .iterm2api.InvokeFunctionRequestR\x15invokeFunctionRequest\"\xd7\x06\n" +
+	"\x17invoke_function_request\x18\x84\x01 \x01(\v2 .iterm2api.InvokeFunctionRequestR\x15invokeFunctionRequest\"\xa2\a\n" +
 	"\x17ServerOriginatedMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12L\n" +
@@ -2838,7 +3036,8 @@ const file_internal_iterm2api_api_proto_rawDesc = "" +
 	"\x13create_tab_response\x18l \x01(\v2\x1c.iterm2api.CreateTabResponseR\x11createTabResponse\x12L\n" +
 	"\x13split_pane_response\x18m \x01(\v2\x1c.iterm2api.SplitPaneResponseR\x11splitPaneResponse\x12H\n" +
 	"\x11activate_response\x18r \x01(\v2\x1b.iterm2api.ActivateResponseR\x10activateResponse\x12H\n" +
-	"\x11variable_response\x18s \x01(\v2\x1b.iterm2api.VariableResponseR\x10variableResponse\x12V\n" +
+	"\x11variable_response\x18s \x01(\v2\x1b.iterm2api.VariableResponseR\x10variableResponse\x12I\n" +
+	"\x12menu_item_response\x18y \x01(\v2\x1b.iterm2api.MenuItemResponseR\x10menuItemResponse\x12V\n" +
 	"\x17set_tab_layout_response\x18z \x01(\v2\x1f.iterm2api.SetTabLayoutResponseR\x14setTabLayoutResponse\x12@\n" +
 	"\x0eclose_response\x18\x83\x01 \x01(\v2\x18.iterm2api.CloseResponseR\rcloseResponse\x12\\\n" +
 	"\x18invoke_function_response\x18\x84\x01 \x01(\v2!.iterm2api.InvokeFunctionResponseR\x16invokeFunctionResponse\"\xd8\x01\n" +
@@ -2964,16 +3163,17 @@ const file_internal_iterm2api_api_proto_rawDesc = "" +
 	"\x06status\x18\x01 \x01(\x0e2\".iterm2api.SendTextResponse.StatusR\x06status\"'\n" +
 	"\x06Status\x12\x06\n" +
 	"\x02OK\x10\x00\x12\x15\n" +
-	"\x11SESSION_NOT_FOUND\x10\x01\"\xad\x02\n" +
+	"\x11SESSION_NOT_FOUND\x10\x01\"\xf8\x02\n" +
 	"\x14ListSessionsResponse\x12@\n" +
 	"\awindows\x18\x01 \x03(\v2&.iterm2api.ListSessionsResponse.WindowR\awindows\x1a\x86\x01\n" +
 	"\x06Window\x127\n" +
 	"\x04tabs\x18\x01 \x03(\v2#.iterm2api.ListSessionsResponse.TabR\x04tabs\x12\x1b\n" +
 	"\twindow_id\x18\x02 \x01(\tR\bwindowId\x12&\n" +
-	"\x0fselected_tab_id\x18\x05 \x01(\tR\rselectedTabId\x1aJ\n" +
+	"\x0fselected_tab_id\x18\x05 \x01(\tR\rselectedTabId\x1a\x94\x01\n" +
 	"\x03Tab\x12,\n" +
 	"\x04root\x18\x03 \x01(\v2\x18.iterm2api.SplitTreeNodeR\x04root\x12\x15\n" +
-	"\x06tab_id\x18\x02 \x01(\tR\x05tabId\"\xf8\x01\n" +
+	"\x06tab_id\x18\x02 \x01(\tR\x05tabId\x12H\n" +
+	"\x12minimized_sessions\x18\x06 \x03(\v2\x19.iterm2api.SessionSummaryR\x11minimizedSessions\"\xf8\x01\n" +
 	"\x10VariableResponse\x12:\n" +
 	"\x06status\x18\x01 \x01(\x0e2\".iterm2api.VariableResponse.StatusR\x06status\x12\x16\n" +
 	"\x06values\x18\x02 \x03(\tR\x06values\"\x8f\x01\n" +
@@ -3007,7 +3207,21 @@ const file_internal_iterm2api_api_proto_rawDesc = "" +
 	"\tgrid_size\x18\x03 \x01(\v2\x0f.iterm2api.SizeR\bgridSize\"4\n" +
 	"\x04Size\x12\x14\n" +
 	"\x05width\x18\x01 \x01(\x05R\x05width\x12\x16\n" +
-	"\x06height\x18\x02 \x01(\x05R\x06height\"Z\n" +
+	"\x06height\x18\x02 \x01(\x05R\x06height\"P\n" +
+	"\x0fMenuItemRequest\x12\x1e\n" +
+	"\n" +
+	"identifier\x18\x01 \x01(\tR\n" +
+	"identifier\x12\x1d\n" +
+	"\n" +
+	"query_only\x18\x02 \x01(\bR\tqueryOnly\"\xb6\x01\n" +
+	"\x10MenuItemResponse\x12:\n" +
+	"\x06status\x18\x01 \x01(\x0e2\".iterm2api.MenuItemResponse.StatusR\x06status\x12\x18\n" +
+	"\achecked\x18\x02 \x01(\bR\achecked\x12\x18\n" +
+	"\aenabled\x18\x03 \x01(\bR\aenabled\"2\n" +
+	"\x06Status\x12\x06\n" +
+	"\x02OK\x10\x00\x12\x12\n" +
+	"\x0eBAD_IDENTIFIER\x10\x01\x12\f\n" +
+	"\bDISABLED\x10\x02\"Z\n" +
 	"\x13SetTabLayoutRequest\x12,\n" +
 	"\x04root\x18\x01 \x01(\v2\x18.iterm2api.SplitTreeNodeR\x04root\x12\x15\n" +
 	"\x06tab_id\x18\x02 \x01(\tR\x05tabId\"\x9a\x01\n" +
@@ -3033,8 +3247,8 @@ func file_internal_iterm2api_api_proto_rawDescGZIP() []byte {
 	return file_internal_iterm2api_api_proto_rawDescData
 }
 
-var file_internal_iterm2api_api_proto_enumTypes = make([]protoimpl.EnumInfo, 11)
-var file_internal_iterm2api_api_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
+var file_internal_iterm2api_api_proto_enumTypes = make([]protoimpl.EnumInfo, 12)
+var file_internal_iterm2api_api_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
 var file_internal_iterm2api_api_proto_goTypes = []any{
 	(SplitPaneRequest_SplitDirection)(0),   // 0: iterm2api.SplitPaneRequest.SplitDirection
 	(CreateTabResponse_Status)(0),          // 1: iterm2api.CreateTabResponse.Status
@@ -3046,99 +3260,106 @@ var file_internal_iterm2api_api_proto_goTypes = []any{
 	(SendTextResponse_Status)(0),           // 7: iterm2api.SendTextResponse.Status
 	(VariableResponse_Status)(0),           // 8: iterm2api.VariableResponse.Status
 	(LineContents_Continuation)(0),         // 9: iterm2api.LineContents.Continuation
-	(SetTabLayoutResponse_Status)(0),       // 10: iterm2api.SetTabLayoutResponse.Status
-	(*ClientOriginatedMessage)(nil),        // 11: iterm2api.ClientOriginatedMessage
-	(*ServerOriginatedMessage)(nil),        // 12: iterm2api.ServerOriginatedMessage
-	(*ActivateRequest)(nil),                // 13: iterm2api.ActivateRequest
-	(*SplitPaneRequest)(nil),               // 14: iterm2api.SplitPaneRequest
-	(*ListSessionsRequest)(nil),            // 15: iterm2api.ListSessionsRequest
-	(*InvokeFunctionRequest)(nil),          // 16: iterm2api.InvokeFunctionRequest
-	(*SendTextRequest)(nil),                // 17: iterm2api.SendTextRequest
-	(*CloseRequest)(nil),                   // 18: iterm2api.CloseRequest
-	(*VariableRequest)(nil),                // 19: iterm2api.VariableRequest
-	(*CreateTabRequest)(nil),               // 20: iterm2api.CreateTabRequest
-	(*GetBufferRequest)(nil),               // 21: iterm2api.GetBufferRequest
-	(*CreateTabResponse)(nil),              // 22: iterm2api.CreateTabResponse
-	(*GetBufferResponse)(nil),              // 23: iterm2api.GetBufferResponse
-	(*ActivateResponse)(nil),               // 24: iterm2api.ActivateResponse
-	(*InvokeFunctionResponse)(nil),         // 25: iterm2api.InvokeFunctionResponse
-	(*SplitPaneResponse)(nil),              // 26: iterm2api.SplitPaneResponse
-	(*CloseResponse)(nil),                  // 27: iterm2api.CloseResponse
-	(*SendTextResponse)(nil),               // 28: iterm2api.SendTextResponse
-	(*ListSessionsResponse)(nil),           // 29: iterm2api.ListSessionsResponse
-	(*VariableResponse)(nil),               // 30: iterm2api.VariableResponse
-	(*ProfileProperty)(nil),                // 31: iterm2api.ProfileProperty
-	(*LineRange)(nil),                      // 32: iterm2api.LineRange
-	(*LineContents)(nil),                   // 33: iterm2api.LineContents
-	(*SplitTreeNode)(nil),                  // 34: iterm2api.SplitTreeNode
-	(*SessionSummary)(nil),                 // 35: iterm2api.SessionSummary
-	(*Size)(nil),                           // 36: iterm2api.Size
-	(*SetTabLayoutRequest)(nil),            // 37: iterm2api.SetTabLayoutRequest
-	(*SetTabLayoutResponse)(nil),           // 38: iterm2api.SetTabLayoutResponse
-	(*InvokeFunctionRequest_App)(nil),      // 39: iterm2api.InvokeFunctionRequest.App
-	(*InvokeFunctionRequest_Method)(nil),   // 40: iterm2api.InvokeFunctionRequest.Method
-	(*CloseRequest_CloseSessions)(nil),     // 41: iterm2api.CloseRequest.CloseSessions
-	(*VariableRequest_Set)(nil),            // 42: iterm2api.VariableRequest.Set
-	(*InvokeFunctionResponse_Error)(nil),   // 43: iterm2api.InvokeFunctionResponse.Error
-	(*InvokeFunctionResponse_Success)(nil), // 44: iterm2api.InvokeFunctionResponse.Success
-	(*ListSessionsResponse_Window)(nil),    // 45: iterm2api.ListSessionsResponse.Window
-	(*ListSessionsResponse_Tab)(nil),       // 46: iterm2api.ListSessionsResponse.Tab
-	(*SplitTreeNode_SplitTreeLink)(nil),    // 47: iterm2api.SplitTreeNode.SplitTreeLink
+	(MenuItemResponse_Status)(0),           // 10: iterm2api.MenuItemResponse.Status
+	(SetTabLayoutResponse_Status)(0),       // 11: iterm2api.SetTabLayoutResponse.Status
+	(*ClientOriginatedMessage)(nil),        // 12: iterm2api.ClientOriginatedMessage
+	(*ServerOriginatedMessage)(nil),        // 13: iterm2api.ServerOriginatedMessage
+	(*ActivateRequest)(nil),                // 14: iterm2api.ActivateRequest
+	(*SplitPaneRequest)(nil),               // 15: iterm2api.SplitPaneRequest
+	(*ListSessionsRequest)(nil),            // 16: iterm2api.ListSessionsRequest
+	(*InvokeFunctionRequest)(nil),          // 17: iterm2api.InvokeFunctionRequest
+	(*SendTextRequest)(nil),                // 18: iterm2api.SendTextRequest
+	(*CloseRequest)(nil),                   // 19: iterm2api.CloseRequest
+	(*VariableRequest)(nil),                // 20: iterm2api.VariableRequest
+	(*CreateTabRequest)(nil),               // 21: iterm2api.CreateTabRequest
+	(*GetBufferRequest)(nil),               // 22: iterm2api.GetBufferRequest
+	(*CreateTabResponse)(nil),              // 23: iterm2api.CreateTabResponse
+	(*GetBufferResponse)(nil),              // 24: iterm2api.GetBufferResponse
+	(*ActivateResponse)(nil),               // 25: iterm2api.ActivateResponse
+	(*InvokeFunctionResponse)(nil),         // 26: iterm2api.InvokeFunctionResponse
+	(*SplitPaneResponse)(nil),              // 27: iterm2api.SplitPaneResponse
+	(*CloseResponse)(nil),                  // 28: iterm2api.CloseResponse
+	(*SendTextResponse)(nil),               // 29: iterm2api.SendTextResponse
+	(*ListSessionsResponse)(nil),           // 30: iterm2api.ListSessionsResponse
+	(*VariableResponse)(nil),               // 31: iterm2api.VariableResponse
+	(*ProfileProperty)(nil),                // 32: iterm2api.ProfileProperty
+	(*LineRange)(nil),                      // 33: iterm2api.LineRange
+	(*LineContents)(nil),                   // 34: iterm2api.LineContents
+	(*SplitTreeNode)(nil),                  // 35: iterm2api.SplitTreeNode
+	(*SessionSummary)(nil),                 // 36: iterm2api.SessionSummary
+	(*Size)(nil),                           // 37: iterm2api.Size
+	(*MenuItemRequest)(nil),                // 38: iterm2api.MenuItemRequest
+	(*MenuItemResponse)(nil),               // 39: iterm2api.MenuItemResponse
+	(*SetTabLayoutRequest)(nil),            // 40: iterm2api.SetTabLayoutRequest
+	(*SetTabLayoutResponse)(nil),           // 41: iterm2api.SetTabLayoutResponse
+	(*InvokeFunctionRequest_App)(nil),      // 42: iterm2api.InvokeFunctionRequest.App
+	(*InvokeFunctionRequest_Method)(nil),   // 43: iterm2api.InvokeFunctionRequest.Method
+	(*CloseRequest_CloseSessions)(nil),     // 44: iterm2api.CloseRequest.CloseSessions
+	(*VariableRequest_Set)(nil),            // 45: iterm2api.VariableRequest.Set
+	(*InvokeFunctionResponse_Error)(nil),   // 46: iterm2api.InvokeFunctionResponse.Error
+	(*InvokeFunctionResponse_Success)(nil), // 47: iterm2api.InvokeFunctionResponse.Success
+	(*ListSessionsResponse_Window)(nil),    // 48: iterm2api.ListSessionsResponse.Window
+	(*ListSessionsResponse_Tab)(nil),       // 49: iterm2api.ListSessionsResponse.Tab
+	(*SplitTreeNode_SplitTreeLink)(nil),    // 50: iterm2api.SplitTreeNode.SplitTreeLink
 }
 var file_internal_iterm2api_api_proto_depIdxs = []int32{
-	21, // 0: iterm2api.ClientOriginatedMessage.get_buffer_request:type_name -> iterm2api.GetBufferRequest
-	15, // 1: iterm2api.ClientOriginatedMessage.list_sessions_request:type_name -> iterm2api.ListSessionsRequest
-	17, // 2: iterm2api.ClientOriginatedMessage.send_text_request:type_name -> iterm2api.SendTextRequest
-	20, // 3: iterm2api.ClientOriginatedMessage.create_tab_request:type_name -> iterm2api.CreateTabRequest
-	14, // 4: iterm2api.ClientOriginatedMessage.split_pane_request:type_name -> iterm2api.SplitPaneRequest
-	13, // 5: iterm2api.ClientOriginatedMessage.activate_request:type_name -> iterm2api.ActivateRequest
-	19, // 6: iterm2api.ClientOriginatedMessage.variable_request:type_name -> iterm2api.VariableRequest
-	37, // 7: iterm2api.ClientOriginatedMessage.set_tab_layout_request:type_name -> iterm2api.SetTabLayoutRequest
-	18, // 8: iterm2api.ClientOriginatedMessage.close_request:type_name -> iterm2api.CloseRequest
-	16, // 9: iterm2api.ClientOriginatedMessage.invoke_function_request:type_name -> iterm2api.InvokeFunctionRequest
-	23, // 10: iterm2api.ServerOriginatedMessage.get_buffer_response:type_name -> iterm2api.GetBufferResponse
-	29, // 11: iterm2api.ServerOriginatedMessage.list_sessions_response:type_name -> iterm2api.ListSessionsResponse
-	28, // 12: iterm2api.ServerOriginatedMessage.send_text_response:type_name -> iterm2api.SendTextResponse
-	22, // 13: iterm2api.ServerOriginatedMessage.create_tab_response:type_name -> iterm2api.CreateTabResponse
-	26, // 14: iterm2api.ServerOriginatedMessage.split_pane_response:type_name -> iterm2api.SplitPaneResponse
-	24, // 15: iterm2api.ServerOriginatedMessage.activate_response:type_name -> iterm2api.ActivateResponse
-	30, // 16: iterm2api.ServerOriginatedMessage.variable_response:type_name -> iterm2api.VariableResponse
-	38, // 17: iterm2api.ServerOriginatedMessage.set_tab_layout_response:type_name -> iterm2api.SetTabLayoutResponse
-	27, // 18: iterm2api.ServerOriginatedMessage.close_response:type_name -> iterm2api.CloseResponse
-	25, // 19: iterm2api.ServerOriginatedMessage.invoke_function_response:type_name -> iterm2api.InvokeFunctionResponse
-	0,  // 20: iterm2api.SplitPaneRequest.split_direction:type_name -> iterm2api.SplitPaneRequest.SplitDirection
-	31, // 21: iterm2api.SplitPaneRequest.custom_profile_properties:type_name -> iterm2api.ProfileProperty
-	39, // 22: iterm2api.InvokeFunctionRequest.app:type_name -> iterm2api.InvokeFunctionRequest.App
-	40, // 23: iterm2api.InvokeFunctionRequest.method:type_name -> iterm2api.InvokeFunctionRequest.Method
-	41, // 24: iterm2api.CloseRequest.sessions:type_name -> iterm2api.CloseRequest.CloseSessions
-	42, // 25: iterm2api.VariableRequest.set:type_name -> iterm2api.VariableRequest.Set
-	31, // 26: iterm2api.CreateTabRequest.custom_profile_properties:type_name -> iterm2api.ProfileProperty
-	32, // 27: iterm2api.GetBufferRequest.line_range:type_name -> iterm2api.LineRange
-	1,  // 28: iterm2api.CreateTabResponse.status:type_name -> iterm2api.CreateTabResponse.Status
-	2,  // 29: iterm2api.GetBufferResponse.status:type_name -> iterm2api.GetBufferResponse.Status
-	33, // 30: iterm2api.GetBufferResponse.contents:type_name -> iterm2api.LineContents
-	3,  // 31: iterm2api.ActivateResponse.status:type_name -> iterm2api.ActivateResponse.Status
-	43, // 32: iterm2api.InvokeFunctionResponse.error:type_name -> iterm2api.InvokeFunctionResponse.Error
-	44, // 33: iterm2api.InvokeFunctionResponse.success:type_name -> iterm2api.InvokeFunctionResponse.Success
-	5,  // 34: iterm2api.SplitPaneResponse.status:type_name -> iterm2api.SplitPaneResponse.Status
-	6,  // 35: iterm2api.CloseResponse.statuses:type_name -> iterm2api.CloseResponse.Status
-	7,  // 36: iterm2api.SendTextResponse.status:type_name -> iterm2api.SendTextResponse.Status
-	45, // 37: iterm2api.ListSessionsResponse.windows:type_name -> iterm2api.ListSessionsResponse.Window
-	8,  // 38: iterm2api.VariableResponse.status:type_name -> iterm2api.VariableResponse.Status
-	47, // 39: iterm2api.SplitTreeNode.links:type_name -> iterm2api.SplitTreeNode.SplitTreeLink
-	36, // 40: iterm2api.SessionSummary.grid_size:type_name -> iterm2api.Size
-	34, // 41: iterm2api.SetTabLayoutRequest.root:type_name -> iterm2api.SplitTreeNode
-	10, // 42: iterm2api.SetTabLayoutResponse.status:type_name -> iterm2api.SetTabLayoutResponse.Status
-	4,  // 43: iterm2api.InvokeFunctionResponse.Error.status:type_name -> iterm2api.InvokeFunctionResponse.Status
-	46, // 44: iterm2api.ListSessionsResponse.Window.tabs:type_name -> iterm2api.ListSessionsResponse.Tab
-	34, // 45: iterm2api.ListSessionsResponse.Tab.root:type_name -> iterm2api.SplitTreeNode
-	35, // 46: iterm2api.SplitTreeNode.SplitTreeLink.session:type_name -> iterm2api.SessionSummary
-	34, // 47: iterm2api.SplitTreeNode.SplitTreeLink.node:type_name -> iterm2api.SplitTreeNode
-	48, // [48:48] is the sub-list for method output_type
-	48, // [48:48] is the sub-list for method input_type
-	48, // [48:48] is the sub-list for extension type_name
-	48, // [48:48] is the sub-list for extension extendee
-	0,  // [0:48] is the sub-list for field type_name
+	22, // 0: iterm2api.ClientOriginatedMessage.get_buffer_request:type_name -> iterm2api.GetBufferRequest
+	16, // 1: iterm2api.ClientOriginatedMessage.list_sessions_request:type_name -> iterm2api.ListSessionsRequest
+	18, // 2: iterm2api.ClientOriginatedMessage.send_text_request:type_name -> iterm2api.SendTextRequest
+	21, // 3: iterm2api.ClientOriginatedMessage.create_tab_request:type_name -> iterm2api.CreateTabRequest
+	15, // 4: iterm2api.ClientOriginatedMessage.split_pane_request:type_name -> iterm2api.SplitPaneRequest
+	14, // 5: iterm2api.ClientOriginatedMessage.activate_request:type_name -> iterm2api.ActivateRequest
+	20, // 6: iterm2api.ClientOriginatedMessage.variable_request:type_name -> iterm2api.VariableRequest
+	38, // 7: iterm2api.ClientOriginatedMessage.menu_item_request:type_name -> iterm2api.MenuItemRequest
+	40, // 8: iterm2api.ClientOriginatedMessage.set_tab_layout_request:type_name -> iterm2api.SetTabLayoutRequest
+	19, // 9: iterm2api.ClientOriginatedMessage.close_request:type_name -> iterm2api.CloseRequest
+	17, // 10: iterm2api.ClientOriginatedMessage.invoke_function_request:type_name -> iterm2api.InvokeFunctionRequest
+	24, // 11: iterm2api.ServerOriginatedMessage.get_buffer_response:type_name -> iterm2api.GetBufferResponse
+	30, // 12: iterm2api.ServerOriginatedMessage.list_sessions_response:type_name -> iterm2api.ListSessionsResponse
+	29, // 13: iterm2api.ServerOriginatedMessage.send_text_response:type_name -> iterm2api.SendTextResponse
+	23, // 14: iterm2api.ServerOriginatedMessage.create_tab_response:type_name -> iterm2api.CreateTabResponse
+	27, // 15: iterm2api.ServerOriginatedMessage.split_pane_response:type_name -> iterm2api.SplitPaneResponse
+	25, // 16: iterm2api.ServerOriginatedMessage.activate_response:type_name -> iterm2api.ActivateResponse
+	31, // 17: iterm2api.ServerOriginatedMessage.variable_response:type_name -> iterm2api.VariableResponse
+	39, // 18: iterm2api.ServerOriginatedMessage.menu_item_response:type_name -> iterm2api.MenuItemResponse
+	41, // 19: iterm2api.ServerOriginatedMessage.set_tab_layout_response:type_name -> iterm2api.SetTabLayoutResponse
+	28, // 20: iterm2api.ServerOriginatedMessage.close_response:type_name -> iterm2api.CloseResponse
+	26, // 21: iterm2api.ServerOriginatedMessage.invoke_function_response:type_name -> iterm2api.InvokeFunctionResponse
+	0,  // 22: iterm2api.SplitPaneRequest.split_direction:type_name -> iterm2api.SplitPaneRequest.SplitDirection
+	32, // 23: iterm2api.SplitPaneRequest.custom_profile_properties:type_name -> iterm2api.ProfileProperty
+	42, // 24: iterm2api.InvokeFunctionRequest.app:type_name -> iterm2api.InvokeFunctionRequest.App
+	43, // 25: iterm2api.InvokeFunctionRequest.method:type_name -> iterm2api.InvokeFunctionRequest.Method
+	44, // 26: iterm2api.CloseRequest.sessions:type_name -> iterm2api.CloseRequest.CloseSessions
+	45, // 27: iterm2api.VariableRequest.set:type_name -> iterm2api.VariableRequest.Set
+	32, // 28: iterm2api.CreateTabRequest.custom_profile_properties:type_name -> iterm2api.ProfileProperty
+	33, // 29: iterm2api.GetBufferRequest.line_range:type_name -> iterm2api.LineRange
+	1,  // 30: iterm2api.CreateTabResponse.status:type_name -> iterm2api.CreateTabResponse.Status
+	2,  // 31: iterm2api.GetBufferResponse.status:type_name -> iterm2api.GetBufferResponse.Status
+	34, // 32: iterm2api.GetBufferResponse.contents:type_name -> iterm2api.LineContents
+	3,  // 33: iterm2api.ActivateResponse.status:type_name -> iterm2api.ActivateResponse.Status
+	46, // 34: iterm2api.InvokeFunctionResponse.error:type_name -> iterm2api.InvokeFunctionResponse.Error
+	47, // 35: iterm2api.InvokeFunctionResponse.success:type_name -> iterm2api.InvokeFunctionResponse.Success
+	5,  // 36: iterm2api.SplitPaneResponse.status:type_name -> iterm2api.SplitPaneResponse.Status
+	6,  // 37: iterm2api.CloseResponse.statuses:type_name -> iterm2api.CloseResponse.Status
+	7,  // 38: iterm2api.SendTextResponse.status:type_name -> iterm2api.SendTextResponse.Status
+	48, // 39: iterm2api.ListSessionsResponse.windows:type_name -> iterm2api.ListSessionsResponse.Window
+	8,  // 40: iterm2api.VariableResponse.status:type_name -> iterm2api.VariableResponse.Status
+	50, // 41: iterm2api.SplitTreeNode.links:type_name -> iterm2api.SplitTreeNode.SplitTreeLink
+	37, // 42: iterm2api.SessionSummary.grid_size:type_name -> iterm2api.Size
+	10, // 43: iterm2api.MenuItemResponse.status:type_name -> iterm2api.MenuItemResponse.Status
+	35, // 44: iterm2api.SetTabLayoutRequest.root:type_name -> iterm2api.SplitTreeNode
+	11, // 45: iterm2api.SetTabLayoutResponse.status:type_name -> iterm2api.SetTabLayoutResponse.Status
+	4,  // 46: iterm2api.InvokeFunctionResponse.Error.status:type_name -> iterm2api.InvokeFunctionResponse.Status
+	49, // 47: iterm2api.ListSessionsResponse.Window.tabs:type_name -> iterm2api.ListSessionsResponse.Tab
+	35, // 48: iterm2api.ListSessionsResponse.Tab.root:type_name -> iterm2api.SplitTreeNode
+	36, // 49: iterm2api.ListSessionsResponse.Tab.minimized_sessions:type_name -> iterm2api.SessionSummary
+	36, // 50: iterm2api.SplitTreeNode.SplitTreeLink.session:type_name -> iterm2api.SessionSummary
+	35, // 51: iterm2api.SplitTreeNode.SplitTreeLink.node:type_name -> iterm2api.SplitTreeNode
+	52, // [52:52] is the sub-list for method output_type
+	52, // [52:52] is the sub-list for method input_type
+	52, // [52:52] is the sub-list for extension type_name
+	52, // [52:52] is the sub-list for extension extendee
+	0,  // [0:52] is the sub-list for field type_name
 }
 
 func init() { file_internal_iterm2api_api_proto_init() }
@@ -3151,8 +3372,8 @@ func file_internal_iterm2api_api_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_iterm2api_api_proto_rawDesc), len(file_internal_iterm2api_api_proto_rawDesc)),
-			NumEnums:      11,
-			NumMessages:   37,
+			NumEnums:      12,
+			NumMessages:   39,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

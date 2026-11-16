@@ -45,6 +45,9 @@ func (a *App) printPanes(panes []*term.Pane) {
 		if p.IsSelf {
 			mark = " (you)"
 		}
+		if p.Hidden {
+			mark += " (hidden)"
+		}
 		fmt.Fprintf(a.Out, "%-*s %-6s %-12s %-14s %-34s %s\n", w, p.Short(), tabOr(p), term.Cut(p.Process, 12), term.Cut(p.Label, 14), term.Cut(term.Cut(p.Title, 28)+mark, 34), p.Folder)
 	}
 }
@@ -61,7 +64,8 @@ type paneJSON struct {
 	IsSelf  bool   `json:"is_self"`
 	Status  string `json:"status"`
 	Address string `json:"address"`
-	Tab     string `json:"tab"` // the tab (tmux: window) ID, "" where the backend reports none
+	Tab     string `json:"tab"`              // the tab (tmux: window) ID, "" where the backend reports none
+	Hidden  bool   `json:"hidden,omitempty"` // behind a maximized pane (iTerm2)
 }
 
 func (a *App) pick(b term.Backend, target string, refuseSelf bool) (*term.Pane, error) {
@@ -121,7 +125,7 @@ func (a *App) termctl(argv []string) error {
 		if p.bools["--json"] {
 			rows := []paneJSON{}
 			for _, x := range panes {
-				rows = append(rows, paneJSON{x.ID, x.Backend, x.Native, x.TTY, x.Title, x.Label, x.Process, x.Folder, x.IsSelf, x.Status, x.Address(), x.Tab})
+				rows = append(rows, paneJSON{x.ID, x.Backend, x.Native, x.TTY, x.Title, x.Label, x.Process, x.Folder, x.IsSelf, x.Status, x.Address(), x.Tab, x.Hidden})
 			}
 			data, _ := json.MarshalIndent(rows, "", " ")
 			fmt.Fprintln(a.Out, string(data))

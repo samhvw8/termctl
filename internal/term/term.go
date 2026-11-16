@@ -41,6 +41,7 @@ type Pane struct {
 	Rows                                   int    // screen height, when the backend reports it; 0 otherwise
 	Width, Height                          int    // pane size in cells for placement, when the backend reports it; 0 otherwise
 	Tab                                    string // the tab (tmux: window) holding the pane, when the backend reports it
+	Hidden                                 bool   // behind a maximized pane of its tab (iTerm2): still running and reachable, not on screen
 }
 
 // Address is the ID to print and to put in message tags. iTerm2 session IDs are UUIDs and

@@ -1,5 +1,8 @@
 # Update Log
 
+## 2026-11-16
+* **Fix**: on iTerm2, maximizing a pane hid the other panes of its tab from `ls`, and `send`, `read`, `which` and `wait-idle` failed with "no pane matches". Cause: `ListSessions` keeps only the maximized pane in the tab's split tree and lists the rest in `Tab.minimized_sessions`, which termctl did not read (the field was not in our messages). Those panes are now listed, marked `(hidden)`, and reachable; `move`, `pull`, `swap` and `arrange` refuse a maximized tab with exit 2. Found as "random dropouts" of a lead's agents. Reproduced and checked on real iTerm2 3.7.6 (`mise run test:iterm`). See [backends](architecture/backends.md#moving-and-arranging). Runs: nothing new; `move` makes one more `ListSessions` call.
+
 ## 2026-11-15
 * **Release**: v0.3.0 — `move`, `pull`, `swap` and `arrange`, and a Rex backend that works against a real Rex. Runs: nothing new.
 * **Fix**: the Rex backend, written from the docs, failed against a real Rex 0.1.0-preview.19: `block ls -A --json` is refused, the JSON field names differed, creation results nest the block ID, and a bare `rex` talks to (and autostarts) a server other than the app's. The backend now finds the CLI and the server itself, lists through one Lua script, and does all four pane moves, including `move --to new` and `arrange`. `mise run test:rex` runs it on a private server; `ls` was checked on the live app. See [backends](architecture/backends.md#rex). Runs: nothing new.

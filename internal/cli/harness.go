@@ -66,7 +66,8 @@ type row struct {
 	Folder  string `json:"folder"`
 	Self    bool   `json:"self"`
 	Status  string `json:"status"`
-	Tab     string `json:"tab"` // the tab (tmux: window) ID, "" where the backend reports none
+	Tab     string `json:"tab"`              // the tab (tmux: window) ID, "" where the backend reports none
+	Hidden  bool   `json:"hidden,omitempty"` // behind a maximized pane (iTerm2)
 }
 
 func (a *App) printTable(panes []*term.Pane) {
@@ -76,6 +77,9 @@ func (a *App) printTable(panes []*term.Pane) {
 		mark := ""
 		if p.IsSelf {
 			mark = " (you)"
+		}
+		if p.Hidden {
+			mark += " (hidden)"
 		}
 		fmt.Fprintf(a.Out, "%-*s %-6s %-9s %-14s %-34s %-36s %s\n", w, p.Short(), tabOr(p), term.Cut(harness.HarnessName(p), 9), term.Cut(p.Label, 14),
 			term.Cut(term.Cut(p.Title, 28)+mark, 34), term.Cut(p.Folder, 36), term.Cut(p.Status, 60))
@@ -499,7 +503,7 @@ func (a *App) ls(o *Options, all, asJSON, mine bool) error {
 	if asJSON {
 		rows := []row{}
 		for _, p := range panes {
-			rows = append(rows, row{p.Address(), p.ID, p.TTY, p.Title, p.Label, harness.HarnessName(p), p.Folder, p.IsSelf, p.Status, p.Tab})
+			rows = append(rows, row{p.Address(), p.ID, p.TTY, p.Title, p.Label, harness.HarnessName(p), p.Folder, p.IsSelf, p.Status, p.Tab, p.Hidden})
 		}
 		data, _ := json.MarshalIndent(rows, "", " ")
 		fmt.Fprintln(a.Out, string(data))

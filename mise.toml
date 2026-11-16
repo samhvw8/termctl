@@ -11,7 +11,7 @@ run = "go test ./..."
 [tasks."test:iterm"]
 description = "Run the opt-in iTerm2 acceptance tests: they act only on scratch tabs they open, and close them"
 env = { TERMCTL_ITERM_TEST = "1" }
-run = "go test ./e2e -run 'TestClearFirstOnITerm2|TestMoveOnITerm2' -v -count=1"
+run = "go test ./e2e -run 'TestClearFirstOnITerm2|TestMoveOnITerm2|TestMaximizedPaneOnITerm2' -v -count=1"
 
 [tasks."test:hc"]
 description = "Run the opt-in hc acceptance tests on a private herdr-core (its own HC_SESSION and XDG paths)"

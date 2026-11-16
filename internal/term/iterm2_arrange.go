@@ -44,6 +44,7 @@ type itermTab struct {
 	id, window string
 	index      int // position in its window
 	root       *api.SplitTreeNode
+	hidden     []string
 }
 
 func (b *ITerm2Backend) tabs() ([]itermTab, error) {
@@ -51,13 +52,31 @@ func (b *ITerm2Backend) tabs() ([]itermTab, error) {
 	if err != nil {
 		return nil, err
 	}
+	return tabsOf(resp.GetListSessionsResponse()), nil
+}
+
+func tabsOf(r *api.ListSessionsResponse) []itermTab {
 	var out []itermTab
-	for _, w := range resp.GetListSessionsResponse().GetWindows() {
+	for _, w := range r.GetWindows() {
 		for i, t := range w.GetTabs() {
-			out = append(out, itermTab{t.GetTabId(), w.GetWindowId(), i, t.GetRoot()})
+			tab := itermTab{id: t.GetTabId(), window: w.GetWindowId(), index: i, root: t.GetRoot()}
+			for _, s := range t.GetMinimizedSessions() {
+				tab.hidden = append(tab.hidden, s.GetUniqueIdentifier())
+			}
+			out = append(out, tab)
 		}
 	}
-	return out, nil
+	return out
+}
+
+// maximizedErr refuses to move, swap or lay out panes in a tab while one of its panes is maximized
+// (View > Maximize Active Pane): iTerm2's split tree then holds only the maximized pane, so a layout
+// built from it would drop the hidden ones. Nothing has changed when it refuses.
+func maximizedErr(t *itermTab) *Error {
+	if t != nil && len(t.hidden) > 0 {
+		return TargetErr("tab %s has a maximized pane, with %d more hidden behind it; restore it first (View > Maximize Active Pane, Shift-Cmd-Return)", t.id, len(t.hidden))
+	}
+	return nil
 }
 
 // sessionIDs lists the sessions of a split tree in iTerm2's order: left to right, top to bottom.
@@ -69,7 +88,7 @@ func sessionIDs(root *api.SplitTreeNode) []string {
 
 func tabOf(tabs []itermTab, session string) *itermTab {
 	for i := range tabs {
-		for _, id := range sessionIDs(tabs[i].root) {
+		for _, id := range append(sessionIDs(tabs[i].root), tabs[i].hidden...) {
 			if id == session {
 				return &tabs[i]
 			}
@@ -90,13 +109,21 @@ func tabByID(tabs []itermTab, tab string) *itermTab {
 // MovePane splits anchor with p, then evens out anchor's tab. iTerm2 reports success even when it
 // did nothing (a locked layout or session, no room to split), so the result is checked.
 func (b *ITerm2Backend) MovePane(p, anchor *Pane) error {
+	tabs, err := b.tabs()
+	if err != nil {
+		return err
+	}
+	for _, s := range []string{p.Native, anchor.Native} {
+		if err := maximizedErr(tabOf(tabs, s)); err != nil {
+			return err
+		}
+	}
 	inv := fmt.Sprintf("iterm2.move_session(session: %s, destination: %s, vertical: %t, before: false)",
 		jsonValue(p.Native), jsonValue(anchor.Native), SideBySide(anchor.Width, anchor.Height))
 	if _, err := b.invokeApp("move_session", inv); err != nil {
 		return err
 	}
-	tabs, err := b.tabs()
-	if err != nil {
+	if tabs, err = b.tabs(); err != nil {
 		return err
 	}
 	now, dest := tabOf(tabs, p.Native), tabOf(tabs, anchor.Native)
@@ -121,6 +148,9 @@ func (b *ITerm2Backend) BreakPane(p *Pane) error {
 	from := tabOf(tabs, p.Native)
 	if from == nil {
 		return TargetErr("iTerm2 has no session %s in a tab", p.Native)
+	}
+	if err := maximizedErr(from); err != nil {
+		return err
 	}
 	inv := fmt.Sprintf("iterm2.move_session_to_new_tab(session: %s, window_id: %s, tab_index: %d)",
 		jsonValue(p.Native), jsonValue(from.window), from.index+1)
@@ -147,6 +177,11 @@ func (b *ITerm2Backend) SwapPanes(x, y *Pane) error {
 	tx, ty := tabOf(tabs, x.Native), tabOf(tabs, y.Native)
 	if tx == nil || ty == nil {
 		return TargetErr("iTerm2 has no session %s or %s in a tab", x.Native, y.Native)
+	}
+	for _, t := range []*itermTab{tx, ty} {
+		if err := maximizedErr(t); err != nil {
+			return err
+		}
 	}
 	type planned struct {
 		tab  string
@@ -194,6 +229,9 @@ func (b *ITerm2Backend) Arrange(tab, layout string, main *Pane) error {
 	t := tabByID(tabs, tab)
 	if t == nil {
 		return TargetErr("iTerm2 has no tab %s", tab)
+	}
+	if err := maximizedErr(t); err != nil {
+		return err
 	}
 	ids := sessionIDs(t.root)
 	if main != nil {

@@ -16,6 +16,7 @@ message ClientOriginatedMessage {
   optional SplitPaneRequest split_pane_request = 109;
   optional ActivateRequest activate_request = 114;
   optional VariableRequest variable_request = 115;
+  optional MenuItemRequest menu_item_request = 121;
   optional SetTabLayoutRequest set_tab_layout_request = 122;
   optional CloseRequest close_request = 131;
   optional InvokeFunctionRequest invoke_function_request = 132;
@@ -31,6 +32,7 @@ message ServerOriginatedMessage {
   optional SplitPaneResponse split_pane_response = 109;
   optional ActivateResponse activate_response = 114;
   optional VariableResponse variable_response = 115;
+  optional MenuItemResponse menu_item_response = 121;
   optional SetTabLayoutResponse set_tab_layout_response = 122;
   optional CloseResponse close_response = 131;
   optional InvokeFunctionResponse invoke_function_response = 132;
@@ -203,6 +205,8 @@ message ListSessionsResponse {
   message Tab {
     optional SplitTreeNode root = 3;
     optional string tab_id = 2;
+    // While a pane is maximized, root holds only that pane; the tab's other sessions are here.
+    repeated SessionSummary minimized_sessions = 6;
   }
 }
 
@@ -259,6 +263,23 @@ message Size {
 
 // The tree must match the tab's tree exactly, `vertical` included. Only grid sizes may change, and
 // they must add up to the same totals in every dimension, or the window resizes.
+// Selects a main-menu item by identifier, in the key window (tests maximize a pane with it).
+message MenuItemRequest {
+  optional string identifier = 1;
+  optional bool query_only = 2;
+}
+
+message MenuItemResponse {
+  enum Status {
+    OK = 0;
+    BAD_IDENTIFIER = 1;
+    DISABLED = 2;
+  }
+  optional Status status = 1;
+  optional bool checked = 2;
+  optional bool enabled = 3;
+}
+
 message SetTabLayoutRequest {
   optional SplitTreeNode root = 1;
   optional string tab_id = 2;

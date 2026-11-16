@@ -3,7 +3,7 @@ type: Architecture
 title: Backends
 description: The Backend interface and the state of each terminal backend.
 tags: [architecture, backends]
-generated: { by: claude-code/opus-5.5, at: '2026-11-15T16:30:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-16T16:05:00Z' }
 sources:
   - id: rex-cli
     resource: https://www.superlogical.com/rex/docs/reference/cli
@@ -11,6 +11,9 @@ sources:
   - id: iterm2-move
     resource: https://github.com/gnachman/iTerm2/tree/master/sources/Language/BuiltInFunctions
     title: iTerm2 built-in functions move_session, move_session_to_new_tab, apply_layout (MoveSessionBuiltInFunction.swift, MoveSessionBuiltInFunctions.swift, ApplyLayoutBuiltInFunction.swift)
+  - id: iterm2-proto
+    resource: https://github.com/gnachman/iTerm2/blob/master/proto/api.proto
+    title: iTerm2 API messages (ListSessionsResponse.Tab.minimized_sessions, MenuItemRequest)
 ---
 
 # Interface
@@ -69,6 +72,14 @@ hc ignores `--where`, so placement never lists hc panes. Checked on real iTerm2 
 
 **iTerm2.** `api.proto` has no message that moves a session; `SetTabLayoutRequest` changes sizes only and refuses another tree. The moves go through built-in functions invoked with `InvokeFunctionRequest` in the app context (`app`, field 4, added to our messages), the same ones the Python API calls: `move_session` (API 1.11), `move_session_to_new_tab` (1.13), `apply_layout` (1.14, base64 JSON spec; it refuses a splitter with one child and same-orientation nesting, so specs are flattened). iTerm2 3.7.6 speaks API 1.21.[^iterm2-move] `move_session` returns success even when it did nothing (a locked layout or session, no room to split), so the result is read back from `ListSessions` and a no-op exits 1. It briefly puts every window in split-selection mode, as a drag does. Checked on real iTerm2 3.7.6 (2026-11-15, `TestMoveOnITerm2`, two scratch tabs of `sleep`): every command kept each `sleep`'s PID.
 
+**Maximized panes (iTerm2).** While a pane is maximized (View > Maximize Active Pane, Shift-Cmd-Return), `ListSessions` puts only that pane in the tab's split tree (`root`). The other panes of the tab still run, and iTerm2 lists them in `Tab.minimized_sessions` (field 6), with no grid size.[^iterm2-proto] Before 2026-11-16 termctl walked only `root`, so those panes vanished from `ls`, and `send`, `read`, `which` and `wait-idle` failed with "no pane matches" until the pane was restored. Now:
+
+- `ls` lists them in their tab, marked `(hidden)` after the title and `"hidden": true` in `--json` (`Pane.Hidden`). `which`, `read`, `msg` and `wait-idle` reach them, and none of them restores the tab.
+- `move`, `pull`, `swap` and `arrange` refuse a pane in a maximized tab, or a maximized destination tab, with exit 2 before anything changes: a layout built from `root` would drop the hidden panes. The message says to restore the tab first. The even layout after a spawn warns and skips such a tab.
+- A split of the maximized pane (an `auto` spawn into that tab picks it, as the largest pane) restores the tab: iTerm2 puts every pane back in `root`. Checked on iTerm2 3.7.6; placement does not avoid this yet.
+
+Checked on real iTerm2 3.7.6 (2026-11-16) by `TestMaximizedPaneOnITerm2` in `mise run test:iterm`: a scratch tab of three panes, one maximized through `MenuItemRequest` "Maximize Active Pane" (field 121, added to the messages for the test). The item acts on the key window's active pane, so the test first activates its own pane, checks that no other tab changed, and restores the tab before it closes it. It fails with `DISABLED` while another app is in front. Unit tests: `internal/term/iterm2_maximize_test.go`.
+
 **Rex.** Rex has no single call that breaks a block out into a new window or applies a layout, so `move --to new` and `arrange` are built from `session.move_block`, `detach_block`, `resize_pane`, `move_window` and `new_window`. Checked on a private Rex 0.1.0-preview.19 server (2026-11-15, `mise run test:rex`): every command kept each `sleep`'s PID, and a fake-harness task was messaged, moved to a new window and messaged again.
 
 **hc.** herdr-core has no tabs or splits; the Herdr app lays out terminals (`herdr.space`/`herdr.tab` labels, and its own `herdr-app do pane.swap` command). termctl does not drive the app and cannot test it without Sam's live app, so hc refuses all four.
@@ -112,3 +123,4 @@ Measured on hc 0.1.19 and the reason the code is the way it is:
 - **A harness can refuse a submitted line**: `hc send` delivers Enter, but omp with no API key for its current model shows `No API key found for <provider>` and keeps the text on the input line. `Submit` then reports the text as typed but not submitted; `read` shows the harness's error. Found on `homebox` (2026-11-09), where omp started on a `tokenharbor` model that has no key on that box; on a model with a key, sends from the Mac submitted.
 [^rex-cli]: Rex CLI reference
 [^iterm2-move]: iTerm2 built-in functions move_session, move_session_to_new_tab, apply_layout
+[^iterm2-proto]: iTerm2 API messages (ListSessionsResponse.Tab.minimized_sessions, MenuItemRequest)

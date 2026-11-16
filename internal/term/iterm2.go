@@ -108,6 +108,7 @@ type itermSession struct {
 	id, window, tab, selectedTab string
 	tabIndex                     int // the tab's position in its window
 	cols, rows                   int // grid size in cells; 0 when iTerm2 does not report it
+	hidden                       bool
 }
 
 func walkSplit(n *api.SplitTreeNode, fn func(*api.SessionSummary)) {
@@ -125,17 +126,27 @@ func (b *ITerm2Backend) sessions() ([]itermSession, error) {
 	if err != nil {
 		return nil, err
 	}
+	return sessionsOf(resp.GetListSessionsResponse()), nil
+}
+
+func sessionsOf(r *api.ListSessionsResponse) []itermSession {
 	var out []itermSession
-	for _, w := range resp.GetListSessionsResponse().GetWindows() {
+	for _, w := range r.GetWindows() {
 		for ti, t := range w.GetTabs() {
 			walkSplit(t.GetRoot(), func(ss *api.SessionSummary) {
 				g := ss.GetGridSize()
-				out = append(out, itermSession{ss.GetUniqueIdentifier(), w.GetWindowId(), t.GetTabId(), w.GetSelectedTabId(), ti,
-					int(g.GetWidth()), int(g.GetHeight())})
+				out = append(out, itermSession{id: ss.GetUniqueIdentifier(), window: w.GetWindowId(), tab: t.GetTabId(),
+					selectedTab: w.GetSelectedTabId(), tabIndex: ti, cols: int(g.GetWidth()), rows: int(g.GetHeight())})
 			})
+			// While a pane is maximized, the split tree holds only that pane. The tab's other
+			// sessions still run, and iTerm2 lists them here, with no grid size.
+			for _, ss := range t.GetMinimizedSessions() {
+				out = append(out, itermSession{id: ss.GetUniqueIdentifier(), window: w.GetWindowId(), tab: t.GetTabId(),
+					selectedTab: w.GetSelectedTabId(), tabIndex: ti, hidden: true})
+			}
 		}
 	}
-	return out, nil
+	return out
 }
 
 func jsonString(raw string) string {
@@ -174,6 +185,7 @@ func (b *ITerm2Backend) ListPanes() ([]*Pane, error) {
 	type row struct {
 		id, tab, tty, title, label string
 		cols, rows                 int
+		hidden                     bool
 	}
 	rows := make([]row, 0, len(sess))
 	for _, s := range sess {
@@ -181,7 +193,7 @@ func (b *ITerm2Backend) ListPanes() ([]*Pane, error) {
 		if err != nil {
 			return nil, err
 		}
-		rows = append(rows, row{s.id, s.tab, strings.TrimPrefix(v[0], "/dev/"), CleanTitle(v[1]), v[2], s.cols, s.rows})
+		rows = append(rows, row{s.id, s.tab, strings.TrimPrefix(v[0], "/dev/"), CleanTitle(v[1]), v[2], s.cols, s.rows, s.hidden})
 	}
 	procs, err := processesByTTY()
 	if err != nil {
@@ -207,7 +219,7 @@ func (b *ITerm2Backend) ListPanes() ([]*Pane, error) {
 		}
 		panes = append(panes, &Pane{
 			ID: "iterm2:" + r.id, Backend: "iterm2", Native: r.id, TTY: r.tty, Title: r.title, Label: r.label,
-			Process: name, Folder: Tilde(cwds[p.pid]), IsSelf: r.id == me, Tab: r.tab, Width: r.cols, Height: r.rows,
+			Process: name, Folder: Tilde(cwds[p.pid]), IsSelf: r.id == me, Tab: r.tab, Width: r.cols, Height: r.rows, Hidden: r.hidden,
 		})
 	}
 	return panes, nil
@@ -469,17 +481,16 @@ func (b *ITerm2Backend) evenTab(tab string) error {
 	if err != nil {
 		return err
 	}
-	for _, w := range resp.GetListSessionsResponse().GetWindows() {
-		for _, t := range w.GetTabs() {
-			if t.GetTabId() != tab {
-				continue
-			}
-			root := evenTree(t.GetRoot())
-			if root == nil {
-				return nil
-			}
-			return b.setLayout(tab, root)
-		}
+	t := tabByID(tabsOf(resp.GetListSessionsResponse()), tab)
+	if t == nil {
+		return BackendErr("iTerm2 tab layout: tab %s not found", tab)
 	}
-	return BackendErr("iTerm2 tab layout: tab %s not found", tab)
+	if err := maximizedErr(t); err != nil {
+		return err
+	}
+	root := evenTree(t.root)
+	if root == nil {
+		return nil
+	}
+	return b.setLayout(tab, root)
 }
