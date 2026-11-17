@@ -522,11 +522,14 @@ func (w *watchState) between(interval, statusEvery float64) {
 		clock.Sleep(interval)
 		return
 	}
-	for left := interval; left > 0; {
-		step := min(statusEvery, left)
-		clock.Sleep(step)
-		left -= step
+	end := clock.Now() + interval // a deadline: time spent reading and announcing between polls counts too
+	for {
+		left := end - clock.Now()
 		if left <= 0 {
+			return
+		}
+		clock.Sleep(min(statusEvery, left))
+		if clock.Now() >= end {
 			return
 		}
 		status := programStatuses(polled, w.statusErr)

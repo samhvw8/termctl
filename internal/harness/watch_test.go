@@ -359,3 +359,31 @@ func TestStoppingWatcherServesATaskCreatedMeanwhile(t *testing.T) {
 		t.Fatalf("no second round under the lock: lists=%d held=%v logs=%q", p.lists, heldInRound2, logs)
 	}
 }
+
+// A worker that turns blocked between rounds is read and announced at once, which takes clock time; the
+// next round still starts Interval after the last, not that time later (agy review A12.1).
+func TestRoundsKeepTheirCadenceWhenAStatusPollAnnounces(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	r.pane(x).Process = "claude"
+	p := &probe{Fake: r.b, clock: r.clock}
+	p.onPoll = func(n int) {
+		if n == 2 { // the first poll between rounds
+			r.b.State[x.Pane].Dialog = &termtest.Dialog{Body: "touch x", Options: []string{"Yes", "No"}, Selected: 1}
+			r.b.Statuses = map[string]term.ProgramStatus{x.Pane: {State: "blocked", Msg: "Run touch x?"}}
+		}
+	}
+	var starts []float64
+	if err := probeTasks(r, p).Watch(WatchOpts{Rounds: 2, Interval: 3, StatusEvery: 1, Restart: func() bool {
+		starts = append(starts, r.clock.T)
+		return false
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ownerNotes(r)) != 1 || len(starts) != 2 {
+		t.Fatal(ownerNotes(r), starts)
+	}
+	if took := starts[1] - starts[0]; took < 3 || took > 3.01 {
+		t.Fatalf("round 2 started %.2f s after round 1, want 3", took)
+	}
+}
