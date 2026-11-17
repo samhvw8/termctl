@@ -78,15 +78,16 @@ Each round also delivers held-back results. The watcher stops when the owner has
 
 ## task answer and task deny
 
-`task answer ID N [--expect FP] [--persist]` re-reads the worker's screen first.
+`task answer ID N --expect FP [--persist]` and `task deny ID --expect FP` re-read the worker's screen first. `--expect` is required since 2026-11-17: without it a key could land on a dialog the lead never read.
 
 | Case | Exit |
 |---|---|
+| `--expect` is missing | 2 |
 | The caller is not the task's owner, or the target is a pane the caller did not start (`PaneRecord` owner), or its own pane | 2 |
 | The harness has no calibrated dialog reader, or N is not an option | 2 |
 | No dialog on screen, or `--expect` names another fingerprint | 7 |
 | Option N grants more than this request and `--persist` is not given | 6 |
-| The selection did not reach N, or the dialog is still there 3 s after Enter (the harness did not take the key, or asked the same request again: the mark is dropped, so a re-ask is announced) | 1 |
+| The dialog changed before a key (re-read before the first arrow key and right before Enter or Esc), the selection did not reach N, or the dialog is still there 3 s after Enter (the harness did not take the key, or asked the same request again: the mark is dropped, so a re-ask is announced) | 1 |
 
 `task deny` picks the first option starting with "No". Only when there is none does it press Esc, and it says so.
 

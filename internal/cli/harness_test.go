@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -346,9 +347,11 @@ func TestTaskDialogCommands(t *testing.T) {
 		args []string
 		code int
 	}{
-		{[]string{"task", "answer", id, "2"}, 6},
+		{[]string{"task", "answer", id, "2", "--expect", fp}, 6},
+		{[]string{"task", "answer", id, "1"}, 2}, // --expect is required
+		{[]string{"task", "deny", id}, 2},
 		{[]string{"task", "answer", id, "1", "--expect", "00000000"}, 7},
-		{[]string{"task", "answer", id, "x"}, 2},
+		{[]string{"task", "answer", id, "x", "--expect", fp}, 2},
 		{[]string{"task", "answer", id}, 2},
 	} {
 		if code, _, stderr := e.run(c.args...); code != c.code {
@@ -358,18 +361,20 @@ func TestTaskDialogCommands(t *testing.T) {
 	if code, out, stderr := e.run("task", "answer", id, "1", "--expect", fp); code != 0 || !strings.Contains(out, "answered dialog "+fp) || dlg.Answer != 1 {
 		t.Fatal(code, out, stderr)
 	}
-	if code, _, stderr := e.run("task", "answer", id, "1"); code != 7 || !strings.Contains(stderr, "no dialog") {
+	if code, _, stderr := e.run("task", "answer", id, "1", "--expect", fp); code != 7 || !strings.Contains(stderr, "no dialog") {
 		t.Fatal(code, stderr)
 	}
 	e.b.State[worker.ID].Dialog = &termtest.Dialog{Body: "rm -rf build", Options: []string{"Yes", "No"}, Selected: 1}
-	if code, out, _ := e.run("task", "wait", "--any", "--timeout", "10"); code != 0 || !strings.Contains(out, "DIALOG task "+id) ||
+	code, out, _ = e.run("task", "wait", "--any", "--timeout", "10")
+	if code != 0 || !strings.Contains(out, "DIALOG task "+id) ||
 		!strings.Contains(out, "rm -rf build") || !strings.Contains(out, "harness-ops task answer "+id+" <n> --expect ") {
 		t.Fatal(code, out)
 	}
+	fp2 := regexp.MustCompile(`fingerprint: +([0-9a-f]{8})`).FindStringSubmatch(out)[1]
 	if code, out, _ := e.run("task", "ls"); code != 0 || !strings.Contains(out, "[dialog ") {
 		t.Fatal(code, out)
 	}
-	if code, out, stderr := e.run("task", "deny", id); code != 0 || !strings.Contains(out, "2. No") {
+	if code, out, stderr := e.run("task", "deny", id, "--expect", fp2); code != 0 || !strings.Contains(out, "2. No") {
 		t.Fatal(code, out, stderr)
 	}
 	if code, out, _ := e.run("--help"); code != 0 || !strings.Contains(out, "task answer") || !strings.Contains(out, "7 no dialog") || !strings.Contains(out, "watch") {

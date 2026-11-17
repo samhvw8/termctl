@@ -476,3 +476,41 @@ func TestPaneAddressAnswerThenReaskIsAnnounced(t *testing.T) {
 		t.Errorf("re-asked dialog after a pane-address answer: %d notice(s), want 2", n)
 	}
 }
+
+// A dialog that replaced the expected one after Answer read it never gets Enter, even with the choice
+// already selected (review F6).
+func TestEnterLandsOnlyOnTheExpectedDialog(t *testing.T) {
+	r := newRig(t)
+	x, _ := dialogTask(t, r)
+	fp := readFP(t, r, x)
+	b := &termtest.Dialog{Body: "rm -rf build", Options: []string{"Yes", "Yes, and don't ask again for touch commands", "No"}, Selected: 1}
+	s := &swapper{Fake: r.b, pane: x.Pane}
+	s.onCapture = func(n int) {
+		if n == 1 { // right after Answer's read: A answered in the pane, B drawn
+			r.b.State[x.Pane].Dialog = b
+		}
+	}
+	_, _, err := swapTasks(r, s).Answer(x.ID, AnswerOpts{N: 1, Expect: fp})
+	if b.Answer != 0 || !isCode(err, term.CodeBackend) || !strings.Contains(err.Error(), "Enter was not pressed") {
+		t.Errorf("Enter approved a different dialog (%q) under --expect %s; err=%v", b.Body, fp, err)
+	}
+}
+
+// A dialog that closed before the arrow keys gets none: "up" on Claude Code's input line recalls history
+// (review F17).
+func TestNoArrowKeyAfterTheDialogClosed(t *testing.T) {
+	r := newRig(t)
+	x, dlg := dialogTask(t, r)
+	dlg.Selected = 3 // moved by hand; choice 1 needs "up"
+	before := len(keys(r, x))
+	s := &swapper{Fake: r.b, pane: x.Pane}
+	s.onCapture = func(n int) {
+		if n == 1 {
+			dlg.Answer = 3 // answered in the pane right after the read
+		}
+	}
+	_, _, err := swapTasks(r, s).Answer(x.ID, AnswerOpts{N: 1})
+	if got := keys(r, x)[before:]; len(got) != 0 || err == nil {
+		t.Fatalf("keys %v after the dialog closed; err=%v", got, err)
+	}
+}

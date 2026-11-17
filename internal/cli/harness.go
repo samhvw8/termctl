@@ -40,8 +40,8 @@ Talk to coding-agent panes. Put options before the target: everything after the 
   task show ID [--json]
   task send [--force] ID TEXT...
   task wait (ID | --any) [--timeout S] [--json]   returns when a task stops running or its worker shows a dialog
-  task answer ID N [--expect FP] [--persist]  choose N in the dialog on the worker; ID may be a pane you started
-  task deny ID [--expect FP]                  choose the dialog's "No" choice (Esc when it has none)
+  task answer ID N --expect FP [--persist]    choose N in the dialog FP on the worker; ID may be a pane you started
+  task deny ID --expect FP                    choose the dialog's "No" choice (Esc when it has none)
   task done ID --status ok|failed|blocked (--summary TEXT | --summary-file F)   the worker reports; the session stays open
   task accept ID [--close]                    the lead's verdict; only the owner can finish a task
   task review ID --blind --harness H [--model M] [--brief-file F]   a new session that never sees the worker's report
@@ -793,7 +793,10 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 			want = 2
 		}
 		if len(p.pos) != want {
-			return term.UsageErr("usage: task answer ID N [--expect FP] [--persist] | task deny ID [--expect FP]")
+			return term.UsageErr("usage: task answer ID N --expect FP [--persist] | task deny ID --expect FP")
+		}
+		if p.vals["--expect"] == "" {
+			return term.UsageErr("task %s needs --expect FP, the fingerprint of the dialog you read (from the notice or task wait): a key must never land on a dialog you have not seen", cmd)
 		}
 		opts := harness.AnswerOpts{Deny: cmd == "deny", Expect: p.vals["--expect"], Persist: p.bools["--persist"]}
 		if cmd == "answer" {

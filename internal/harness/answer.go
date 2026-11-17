@@ -49,6 +49,8 @@ func noDialog(p *term.Pane) error {
 // Answer picks a choice of the dialog on a pane. It moves the selection with up and down, checks on screen
 // that the selection reached the choice and the dialog is the same, and only then presses Enter: digit keys
 // submit at once on Claude Code, with no chance to check. A choice that widens permission needs Persist.
+// The dialog is read again right before the first key and right before Enter (or Esc), on every path, so
+// a key never lands on a dialog that replaced the one read, nor on the input line of one that closed.
 func (o *Ops) Answer(p *term.Pane, opts AnswerOpts) (*Answered, error) {
 	d, err := o.ReadDialog(p)
 	if err != nil {
@@ -65,6 +67,9 @@ func (o *Ops) Answer(p *term.Pane, opts AnswerOpts) (*Answered, error) {
 	if opts.Deny {
 		if n = d.DenyOption(); n == 0 {
 			res.Escaped = true
+			if _, err := o.recheck(p, d, "Esc"); err != nil {
+				return nil, err
+			}
 			if err := o.Backend.SendKey(p, "escape"); err != nil {
 				return nil, err
 			}
@@ -83,6 +88,9 @@ func (o *Ops) Answer(p *term.Pane, opts AnswerOpts) (*Answered, error) {
 		if steps < 0 {
 			key, steps = "up", -steps
 		}
+		if _, err := o.recheck(p, d, "the arrow keys"); err != nil { // an arrow key on an input line recalls history
+			return nil, err
+		}
 		for i := 0; i < steps; i++ {
 			if err := o.Backend.SendKey(p, key); err != nil {
 				return nil, err
@@ -92,10 +100,30 @@ func (o *Ops) Answer(p *term.Pane, opts AnswerOpts) (*Answered, error) {
 			return nil, err
 		}
 	}
+	now, err := o.recheck(p, d, "Enter")
+	if err != nil {
+		return nil, err
+	}
+	if now.Selected != n {
+		return nil, term.BackendErr("the selection on %s is at %d, not %d; Enter was not pressed", p.Address(), now.Selected, n)
+	}
 	if err := o.Backend.SendKey(p, "enter"); err != nil {
 		return nil, err
 	}
 	return res, o.awaitGone(p, d, res)
+}
+
+// recheck reads the dialog once more right before a key and returns it; a different dialog, or none, stops
+// the answer before that key.
+func (o *Ops) recheck(p *term.Pane, d *Dialog, key string) (*Dialog, error) {
+	now, err := o.ReadDialog(p)
+	if err != nil {
+		return nil, err
+	}
+	if now == nil || now.Fingerprint != d.Fingerprint {
+		return nil, term.BackendErr("the dialog on %s changed before %s; %s was not pressed. Read it again before answering", p.Address(), key, key)
+	}
+	return now, nil
 }
 
 // awaitSelected waits until the dialog shows choice n selected. Claude Code redraws the selection

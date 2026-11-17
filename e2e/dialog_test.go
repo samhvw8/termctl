@@ -58,7 +58,7 @@ func TestDialogWatchAndAnswer(t *testing.T) {
 	if code, _, _ := r.ops(r.harness, "task", "answer", id, "1", "--expect", "00000000"); code != 7 {
 		t.Fatal(code)
 	}
-	if code, _, _ := r.ops(r.sender, "task", "answer", id, "1"); code != 2 {
+	if code, _, _ := r.ops(r.sender, "task", "answer", id, "1", "--expect", fp); code != 2 {
 		t.Fatal("only the owner answers: ", code)
 	}
 	code, out, stderr = r.ops(r.harness, "task", "answer", id, "3", "--expect", fp)
@@ -66,7 +66,7 @@ func TestDialogWatchAndAnswer(t *testing.T) {
 		t.Fatal(code, out, stderr)
 	}
 	waitFor(t, "answer logged", func() bool { return strings.Contains(strings.Join(readLog(workerLog), "\n"), "<<ANSWER 3>>") })
-	if code, _, _ := r.ops(r.harness, "task", "answer", id, "1"); code != 7 {
+	if code, _, _ := r.ops(r.harness, "task", "answer", id, "1", "--expect", fp); code != 7 {
 		t.Fatal("no dialog left: ", code)
 	}
 
@@ -76,7 +76,8 @@ func TestDialogWatchAndAnswer(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "DIALOG task "+id) || !strings.Contains(out, "[persist]") {
 		t.Fatal(code, out, stderr)
 	}
-	if code, out, stderr := r.ops(r.harness, "task", "deny", id); code != 0 || !strings.Contains(out, "3. No, cancel") {
+	fp = regexp.MustCompile(`fingerprint: +([0-9a-f]{8})`).FindStringSubmatch(out)[1]
+	if code, out, stderr := r.ops(r.harness, "task", "deny", id, "--expect", fp); code != 0 || !strings.Contains(out, "3. No, cancel") {
 		t.Fatal(code, out, stderr)
 	}
 	waitFor(t, "deny logged", func() bool { return strings.Count(strings.Join(readLog(workerLog), "\n"), "<<ANSWER 3>>") == 2 })
