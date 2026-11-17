@@ -73,7 +73,7 @@ type Pending struct {
 	Text     string            `json:"text"`
 	Created  float64           `json:"created"`
 	Claimed  float64           `json:"claimed"`
-	Kind     string            `json:"kind,omitempty"`        // "" for a task result; "dialog" or another signal kind
+	Kind     string            `json:"kind,omitempty"`        // "" for a task result; "dialog" for a dialog notice
 	Dialog   string            `json:"fingerprint,omitempty"` // the dialog a "dialog" notice is about
 }
 

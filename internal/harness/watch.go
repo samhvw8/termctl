@@ -17,11 +17,10 @@ import (
 // Signal is one thing learned about a task's worker. Kind "dialog" carries the dialog on its screen;
 // "clear" means its input line is back with no dialog. Status is the program's own reason from the
 // terminal's status (the OSC 7501 msg) when it reported itself blocked; it rides along with a dialog
-// and is never a dialog on its own. Other kinds reach the owner as "<KIND>: <Text>".
+// and is never a dialog on its own.
 type Signal struct {
 	Task   string
 	Kind   string
-	Text   string
 	Dialog *Dialog
 	Status string
 	At     float64 // when the screen was captured; 0 when unknown
@@ -158,7 +157,7 @@ func (t *Tasks) read(ws []worker, status map[string]term.ProgramStatus) []Signal
 		switch {
 		case screens[i] == nil:
 		case dialogs[i] != nil:
-			sig := Signal{Task: w.task.ID, Kind: "dialog", Text: dialogs[i].Question, Dialog: dialogs[i], At: ats[i]}
+			sig := Signal{Task: w.task.ID, Kind: "dialog", Dialog: dialogs[i], At: ats[i]}
 			if st := status[w.p.ID]; st.Blocked() {
 				sig.Status = st.Msg
 			}
@@ -270,11 +269,6 @@ func (t *Tasks) apply(sigs []Signal, notify bool) error {
 					x.Dialog.Notified = true
 					d.Pending = append(d.Pending, &Pending{Task: x.ID, Owner: x.Owner, OwnerRef: x.OwnerRef, Tag: dialogTag(x),
 						Text: dialogNotice(x, s), Created: now, Kind: "dialog", Dialog: s.Dialog.Fingerprint})
-				}
-			default:
-				if notify {
-					d.Pending = append(d.Pending, &Pending{Task: x.ID, Owner: x.Owner, OwnerRef: x.OwnerRef, Tag: dialogTag(x),
-						Text: fmt.Sprintf("task %s (%s) %s: %s", x.ID, x.Title, strings.ToUpper(s.Kind), s.Text), Created: now, Kind: s.Kind})
 				}
 			}
 		}

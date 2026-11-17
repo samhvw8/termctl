@@ -314,21 +314,6 @@ func mustGet(t *testing.T, r *rig, id string) *Task {
 	return x
 }
 
-func TestOtherSignalKindsReachTheOwner(t *testing.T) {
-	r := newRig(t)
-	x := r.mustNew(t, nil, NewOpts{})
-	if err := r.tasks.apply([]Signal{{Task: x.ID, Kind: "alert", Text: "build finished"}}, true); err != nil {
-		t.Fatal(err)
-	}
-	r.tasks.FlushPending()
-	if !termtest.Contains(r.b.Texts(r.owner.ID), "ALERT: build finished") {
-		t.Fatal(r.b.Texts(r.owner.ID))
-	}
-	if g, _ := r.tasks.Get(x.ID); g.Notify != "none" {
-		t.Fatal(g.Notify)
-	}
-}
-
 // vrule is Claude Code's full-width rule above a dialog.
 var vrule = strings.Repeat("─", 60)
 
