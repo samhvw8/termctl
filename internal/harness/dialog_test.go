@@ -92,7 +92,17 @@ func TestAnswerAPaneTarget(t *testing.T) {
 		return nil
 	})
 	_, _, err = r.as(r.other).Answer(r.owner.ID, AnswerOpts{N: 1})
-	wantCode(t, err, term.CodeUsage) // never a pane of someone else, nor your own
+	wantCode(t, err, term.CodeUsage) // never a pane of someone else
+	// Nor your own, even with a record you own: the self check refuses it, not the record check.
+	r.owner.Process = "claude"
+	r.b.State[r.owner.ID].Dialog = &termtest.Dialog{Body: "rm y", Options: []string{"Yes", "No"}, Selected: 1}
+	r.reg.Update(func(d *Data) error {
+		d.Panes[r.owner.ID] = &PaneRecord{Harness: "claude", Owner: r.owner.ID}
+		return nil
+	})
+	if _, _, err = r.tasks.Answer(r.owner.ID, AnswerOpts{N: 1}); !isCode(err, term.CodeUsage) || !strings.Contains(err.Error(), "your own pane") {
+		t.Fatal("own pane:", err)
+	}
 	if _, _, err := r.tasks.Answer(r.other.ID, AnswerOpts{N: 1}); err != nil || r.b.State[r.other.ID].Dialog.Answer != 1 {
 		t.Fatal(err)
 	}
@@ -165,8 +175,8 @@ func TestWaitReturnsADialogOnce(t *testing.T) {
 	if err != nil || w.Dialog == nil || w.Task.ID != x.ID || w.Dialog.Question != "Do you want to proceed?" || w.Task.Status != "running" {
 		t.Fatal(w, err)
 	}
-	if w2, err := r.tasks.Wait(x.ID, false, 10); err == nil {
-		t.Fatal("the same dialog came back", w2)
+	if w2, err := r.tasks.Wait(x.ID, false, 10); !isCode(err, term.CodeTimeout) {
+		t.Fatal("the same dialog came back, or another error:", w2, err)
 	}
 	// Answered, then the same request again: a new dialog.
 	r.tasks.Answer(x.ID, AnswerOpts{N: 1})
@@ -672,5 +682,41 @@ func TestWaitReadsOnlyMarkedScreensWhileAWatcherRuns(t *testing.T) {
 	ts.apply(sigs, false)
 	if w, err := ts.Wait(x.ID, false, 9); err != nil || w.Dialog == nil {
 		t.Fatal(w, err)
+	}
+}
+
+// A dialog that changes while the arrow keys move the selection gets no Enter (review F27).
+func TestAnswerStopsWhenTheDialogChangesWhileChoosing(t *testing.T) {
+	r := newRig(t)
+	x, dlg := dialogTask(t, r)
+	b := &termtest.Dialog{Body: "rm -rf build", Options: []string{"Yes", "No"}, Selected: 1}
+	s := &swapper{Fake: r.b, pane: x.Pane}
+	s.onCapture = func(n int) {
+		if n == 2 { // after the read before the arrow keys: another dialog takes its place
+			r.b.State[x.Pane].Dialog = b
+		}
+	}
+	before := len(keys(r, x))
+	_, _, err := swapTasks(r, s).Answer(x.ID, AnswerOpts{N: 3})
+	if !isCode(err, term.CodeBackend) || !strings.Contains(err.Error(), "changed while choosing") || dlg.Answer != 0 || b.Answer != 0 {
+		t.Fatal(err, dlg.Answer, b.Answer)
+	}
+	for _, k := range keys(r, x)[before:] {
+		if k == "key:enter" {
+			t.Fatal("Enter pressed on a dialog that changed")
+		}
+	}
+}
+
+// task deny checks --expect like task answer (review F27).
+func TestDenyChecksExpect(t *testing.T) {
+	r := newRig(t)
+	x, dlg := dialogTask(t, r)
+	fp := readFP(t, r, x)
+	if _, _, err := r.tasks.Answer(x.ID, AnswerOpts{Deny: true, Expect: "deadbeef"}); !isCode(err, term.CodeDialog) || dlg.Answer != 0 {
+		t.Fatal(err, dlg.Answer)
+	}
+	if res, _, err := r.tasks.Answer(x.ID, AnswerOpts{Deny: true, Expect: fp}); err != nil || res.Chosen.N != 3 || dlg.Answer != 3 {
+		t.Fatal(err, res, dlg.Answer)
 	}
 }
