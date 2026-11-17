@@ -268,6 +268,8 @@ type hcTerminal struct {
 	Foreground *hcForeground     `json:"foreground"`
 	Status     *struct {
 		State string `json:"state"`
+		Kind  string `json:"kind"`
+		Msg   string `json:"msg"`
 	} `json:"status"`
 }
 
@@ -628,6 +630,36 @@ func (b *HcBackend) Close(p *Pane) error {
 func (b *HcBackend) SetLabel(p *Pane, label string) error {
 	_, err := b.call("label", "--json", p.Native, hcLabelKey+"="+label)
 	return err
+}
+
+// ProgramStatuses reads every terminal's status word with one hc ls, and the reason (kind, msg) of a
+// blocked one with hc get: ls has the word only.
+func (b *HcBackend) ProgramStatuses(panes []*Pane) (map[string]ProgramStatus, error) {
+	out := map[string]ProgramStatus{}
+	if len(panes) == 0 || !b.running() {
+		return out, nil
+	}
+	entries, err := b.list()
+	if err != nil {
+		return nil, err
+	}
+	want := map[string]bool{}
+	for _, p := range panes {
+		want[p.Native] = true
+	}
+	for _, e := range entries {
+		if !want[e.Address] || e.Status == "" {
+			continue
+		}
+		st := ProgramStatus{State: strings.ToLower(e.Status)}
+		if st.Blocked() {
+			if t, err := b.get(e.Address); err == nil && t.Status != nil {
+				st.Kind, st.Msg = t.Status.Kind, t.Status.Msg
+			}
+		}
+		out["hc:"+e.Address] = st
+	}
+	return out, nil
 }
 
 // NativeStatus is hc's status word: idle, working, done, blocked, error. "" when the program never said.

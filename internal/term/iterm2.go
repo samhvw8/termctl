@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,11 +17,9 @@ import (
 )
 
 const (
-	itermApp      = "/Applications/iTerm.app"
-	nativeIT2     = itermApp + "/Contents/Resources/utilities/it2"
-	labelVar      = "user.agent"
-	apiTimeout    = 30 * time.Second // a stalled API call must fail, not hang every caller
-	statusTimeout = 5 * time.Second
+	itermApp   = "/Applications/iTerm.app"
+	labelVar   = "user.agent"
+	apiTimeout = 30 * time.Second // a stalled API call must fail, not hang every caller
 )
 
 var itermKeys = map[string]string{
@@ -444,35 +441,73 @@ func (b *ITerm2Backend) SetLabel(p *Pane, label string) error {
 	return nil
 }
 
-// NativeStatus reads iTerm2's own it2 status (Claude Code sets it). "" when unavailable.
+// itermStatus is what iTerm2's built-in get_session_status answers: what the session's program set with
+// OSC 7501 (or set_session_status). Unset fields are null.
+type itermStatus struct {
+	Status *string `json:"status"`
+	Detail *string `json:"detail"`
+}
+
+// sessionStatus calls iterm2.get_session_status over the open websocket. It is what
+// "it2 session get-status" prints, without starting a Python process per call.
+func (b *ITerm2Backend) sessionStatus(native string) (itermStatus, error) {
+	var s itermStatus
+	out, err := b.invokeAppHint("get_session_status", fmt.Sprintf("iterm2.get_session_status(session_id: %s)", jsonValue(native)),
+		"program status needs iTerm2 3.7.6 or later")
+	if err != nil {
+		return s, err
+	}
+	if err := json.Unmarshal([]byte(out), &s); err != nil {
+		return s, BackendErr("iTerm2 get_session_status: bad JSON: %v", err)
+	}
+	return s, nil
+}
+
+// NativeStatus is iTerm2's own status of the session ("status" or "status: detail"), as Claude Code,
+// agy and omp set it with OSC 7501. "" when unset or unavailable.
 func (b *ITerm2Backend) NativeStatus(p *Pane) string {
-	if _, err := os.Stat(nativeIT2); err != nil {
+	s, err := b.sessionStatus(p.Native)
+	if err != nil || s.Status == nil || *s.Status == "" {
 		return ""
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), statusTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, nativeIT2, "session", "get-status", "-s", p.Native)
-	// The native CLI authenticates by itself; a borrowed cookie would break it.
-	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, "ITERM2_COOKIE=") && !strings.HasPrefix(kv, "ITERM2_KEY=") {
-			cmd.Env = append(cmd.Env, kv)
+	if s.Detail != nil && *s.Detail != "" {
+		return *s.Status + ": " + *s.Detail
+	}
+	return *s.Status
+}
+
+// itermProgramStatus maps iTerm2's status to the common form. iTerm2 shows an OSC 7501 "blocked" as
+// "waiting", with the program's msg as the detail; it keeps no kind.
+func itermProgramStatus(s itermStatus) (ProgramStatus, bool) {
+	if s.Status == nil || *s.Status == "" {
+		return ProgramStatus{}, false
+	}
+	st := ProgramStatus{State: strings.ToLower(*s.Status)}
+	if st.State == "waiting" {
+		st.State = "blocked"
+	}
+	if s.Detail != nil {
+		st.Msg = *s.Detail
+	}
+	return st, true
+}
+
+// ProgramStatuses reads each session's status over the websocket: one function call per pane, no subprocess.
+// StatusIsFree: the status is a call on the websocket the backend already holds.
+func (b *ITerm2Backend) StatusIsFree() bool { return true }
+
+func (b *ITerm2Backend) ProgramStatuses(panes []*Pane) (map[string]ProgramStatus, error) {
+	out := map[string]ProgramStatus{}
+	for _, p := range panes {
+		s, err := b.sessionStatus(p.Native)
+		if err != nil {
+			continue // a session that ended since the list; others still count
+		}
+		if st, ok := itermProgramStatus(s); ok {
+			out[p.ID] = st
 		}
 	}
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	var d struct {
-		Status *string `json:"status"`
-		Detail *string `json:"detail"`
-	}
-	if json.Unmarshal(out, &d) != nil || d.Status == nil || *d.Status == "" {
-		return ""
-	}
-	if d.Detail != nil && *d.Detail != "" {
-		return *d.Status + ": " + *d.Detail
-	}
-	return *d.Status
+	return out, nil
 }
 
 // evenTab resizes the panes of a tab to even shares (see evenTree), keeping the window's size.

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -503,5 +504,91 @@ func (b *RexBackend) SetLabel(p *Pane, label string) error {
 	return err
 }
 
-func (b *RexBackend) NativeStatus(*Pane) string    { return "" }
+func (b *RexBackend) NativeStatus(*Pane) string { return "" }
+
+// rexStatusRecord is one OSC 7501 record of a block, as its program_status method gives it. A block
+// keeps one record per id the program reported under.
+type rexStatusRecord struct {
+	State string `json:"state"`
+	Kind  string `json:"kind"`
+	Msg   string `json:"msg"`
+}
+
+// statusRank orders states by urgency: the record a person must act on comes first.
+var statusRank = map[string]int{"blocked": 5, "error": 4, "working": 3, "done": 2, "idle": 1}
+
+// rexProgramStatus picks a block's most urgent record.
+func rexProgramStatus(records []rexStatusRecord) (ProgramStatus, bool) {
+	var best *rexStatusRecord
+	for i := range records {
+		r := &records[i]
+		if r.State == "" || r.State == "clear" {
+			continue
+		}
+		if best == nil || statusRank[r.State] > statusRank[best.State] {
+			best = r
+		}
+	}
+	if best == nil {
+		return ProgramStatus{}, false
+	}
+	return ProgramStatus{State: strings.ToLower(best.State), Kind: best.Kind, Msg: best.Msg}, true
+}
+
+// rexStatusLua reads program_status of the given blocks, keyed by block ID, attaching each session
+// once: a session's blocks answer methods only while it is attached.
+func rexStatusLua(blocks map[string]string) string {
+	var b strings.Builder
+	b.WriteString("local want = {\n")
+	for block, session := range blocks {
+		fmt.Fprintf(&b, "  {s = %s, b = %s},\n", strconv.Quote(session), strconv.Quote("block:"+block))
+	}
+	b.WriteString(`}
+local out, attached = {}, {}
+for _, w in ipairs(want) do
+  if not attached[w.s] then
+    rex.call("session.attach", {session_id = w.s})
+    attached[w.s] = true
+  end
+  out[w.b] = rex.call("block.method", {session_id = w.s, block_id = w.b, method = "program_status"}) or {}
+end
+return out
+`)
+	return b.String()
+}
+
+// ProgramStatuses reads the OSC 7501 status of every given block in one rex do call: each CLI call
+// costs about 180 ms, so one per block would not do.
+func (b *RexBackend) ProgramStatuses(panes []*Pane) (map[string]ProgramStatus, error) {
+	out := map[string]ProgramStatus{}
+	want := map[string]string{}
+	for _, p := range panes {
+		sid, err := b.session(p.Native)
+		if err != nil {
+			continue // gone since the list
+		}
+		want[p.Native] = sid
+	}
+	if len(want) == 0 {
+		return out, nil
+	}
+	raw, err := b.call("do", "-e", rexStatusLua(want), "--json")
+	if err != nil {
+		return nil, err
+	}
+	var got map[string]struct {
+		Records []rexStatusRecord `json:"records"`
+	}
+	if t := strings.TrimSpace(raw); t != "" && t != "{}" && t != "null" && t != "[]" {
+		if err := json.Unmarshal([]byte(t), &got); err != nil {
+			return nil, BackendErr("rex program_status: bad JSON: %v", err)
+		}
+	}
+	for id, v := range got {
+		if st, ok := rexProgramStatus(v.Records); ok {
+			out["rex:"+rexID(id)] = st
+		}
+	}
+	return out, nil
+}
 func (b *RexBackend) ServerRef() map[string]string { return map[string]string{} }

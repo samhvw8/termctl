@@ -24,6 +24,7 @@ const (
 	CodeDraft   = 4
 	CodeTimeout = 5
 	CodeGuard   = 6
+	CodeDialog  = 7 // no dialog on screen, or a different one than expected
 )
 
 func Errf(code int, format string, a ...any) *Error { return &Error{code, fmt.Sprintf(format, a...)} }
@@ -84,6 +85,31 @@ type Backend interface {
 	NativeStatus(p *Pane) string // the terminal's own busy/idle report, or ""
 	Available() bool
 	ServerRef() map[string]string // enough to reopen this server and to notice a restart
+}
+
+// ProgramStatus is what the program in a pane last reported about itself (OSC 7501 and alike), as the
+// terminal keeps it. State is the terminal's word, lower case: idle, working, done, blocked, error.
+// iTerm2's "waiting" (its name for an OSC 7501 "blocked") is given as "blocked". Kind and Msg are the
+// program's own reason ("permission", the request), when the terminal keeps them.
+type ProgramStatus struct {
+	State, Kind, Msg string
+}
+
+// Blocked says the program reported that it waits on a person. It is a hint, never proof of a dialog.
+func (s ProgramStatus) Blocked() bool { return s.State == "blocked" }
+
+// StatusReader is an optional backend interface: the program status of many panes in one cheap read
+// (no subprocess per pane). Panes the terminal knows no status for are left out of the map, which is
+// keyed by Pane.ID. tmux and Ghostty have none: tmux does not answer OSC 7501, so agents do not send it there.
+type StatusReader interface {
+	ProgramStatuses(panes []*Pane) (map[string]ProgramStatus, error)
+}
+
+// FreeStatus marks a StatusReader whose read starts no process: iTerm2 asks over its open websocket.
+// The watcher polls only these between screen rounds. Rex (a rex do process per read) and hc (an hc ls)
+// are read once per round, so a watcher never starts a process every second.
+type FreeStatus interface {
+	StatusIsFree() bool
 }
 
 // Submitter is for a backend that cannot type without pressing Enter (hc). A backend that has it

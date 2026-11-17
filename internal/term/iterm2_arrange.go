@@ -27,6 +27,11 @@ const itermMoveHint = "moving sessions needs iTerm2 3.7 or later"
 
 // invokeApp calls a built-in function in the app context and returns its JSON result.
 func (b *ITerm2Backend) invokeApp(name, invocation string) (string, error) {
+	return b.invokeAppHint(name, invocation, itermMoveHint)
+}
+
+// invokeAppHint is invokeApp with the hint its error names.
+func (b *ITerm2Backend) invokeAppHint(name, invocation, hint string) (string, error) {
 	resp, err := b.call(&api.ClientOriginatedMessage{InvokeFunctionRequest: &api.InvokeFunctionRequest{
 		Invocation: proto.String(invocation), App: &api.InvokeFunctionRequest_App{}, Timeout: proto.Float64(-1),
 	}})
@@ -35,7 +40,7 @@ func (b *ITerm2Backend) invokeApp(name, invocation string) (string, error) {
 	}
 	r := resp.GetInvokeFunctionResponse()
 	if e := r.GetError(); e != nil {
-		return "", BackendErr("iTerm2 %s: %s: %s (%s)", name, e.GetStatus(), e.GetErrorReason(), itermMoveHint)
+		return "", BackendErr("iTerm2 %s: %s: %s (%s)", name, e.GetStatus(), e.GetErrorReason(), hint)
 	}
 	return r.GetSuccess().GetJsonResult(), nil
 }

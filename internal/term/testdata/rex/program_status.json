@@ -1,0 +1,16 @@
+{
+  "block:01a1e938-008e-7678-9c4f-8b50f4fb8faa": {
+    "records": [
+      {
+        "kind": "permission",
+        "msg": "Run touch fake-file?",
+        "owner": {
+          "name": "bash",
+          "pid": 38182
+        },
+        "state": "blocked",
+        "updated_at": "2026-11-17T18:15:23.966679+07:00"
+      }
+    ]
+  }
+}
