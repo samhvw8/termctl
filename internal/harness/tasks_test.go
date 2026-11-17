@@ -453,9 +453,60 @@ func TestClaimedNotificationIsNotDeliveredTwice(t *testing.T) {
 	if n, _ := r.tasks.FlushPending(); n != 0 || len(r.b.Texts(r.owner.ID)) != 0 {
 		t.Fatal(n)
 	}
-	r.clock.T += 31 // the claimer crashed
+	r.clock.T += claimTTL + 1 // the claimer crashed
 	if n, _ := r.tasks.FlushPending(); n != 1 {
 		t.Fatal(n)
+	}
+}
+
+// slowSend is a send that takes as long as hc send may (term.SendTimeout), during which another
+// process flushes the same notices.
+type slowSend struct {
+	*termtest.Fake
+	clock  *termtest.Clock
+	during func()
+}
+
+func (s *slowSend) SendText(p *term.Pane, text string) error {
+	s.clock.T += term.SendTimeout.Seconds()
+	if f := s.during; f != nil {
+		s.during = nil
+		f()
+	}
+	return s.Fake.SendText(p, text)
+}
+
+// A claim outlives the slowest delivery, so a second flusher never takes over a notice still being delivered.
+func TestSlowDeliveryIsNotDeliveredTwice(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	st := r.b.State[r.owner.ID]
+	st.Input = "owner typing"
+	r.done(t, x, "ok", "finished")
+	st.Input = ""
+	slow := &slowSend{Fake: r.b, clock: r.clock}
+	first, second := r.as(r.owner), r.as(r.other)
+	for _, ts := range []*Tasks{first, second} {
+		ts.Backend = slow
+		ts.Factory = func(string, map[string]string) (term.Backend, error) { return slow, nil }
+	}
+	slow.during = func() {
+		if n, _ := second.FlushPending(); n != 0 {
+			t.Errorf("the second flusher delivered %d notice(s) still being delivered", n)
+		}
+	}
+	if n, _ := first.FlushPending(); n != 1 {
+		t.Fatal(n)
+	}
+	if texts := r.b.Texts(r.owner.ID); len(texts) != 1 {
+		t.Fatalf("delivered %d times: %q", len(texts), texts)
+	}
+}
+
+// claimTTL must exceed the longest a delivery can take while every backend call stays inside its deadline.
+func TestClaimOutlastsTheLongestDelivery(t *testing.T) {
+	if bound := deliveryBound(); claimTTL <= bound {
+		t.Fatalf("claimTTL %gs is not above the longest delivery, %gs", claimTTL, bound)
 	}
 }
 

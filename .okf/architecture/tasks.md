@@ -3,7 +3,7 @@ type: Architecture
 title: Tasks and pane safety
 description: How harness-ops tracks a job given to another harness session, tells its owner of a permission dialog, and what stops it closing or spawning the wrong thing.
 tags: [architecture, harness, tasks, safety]
-generated: { by: claude-code/opus-5.5, at: '2026-11-17T16:12:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-17T16:34:31Z' }
 ---
 
 # Overview
@@ -51,7 +51,7 @@ The read-only flags per harness are in [harness profiles](/architecture/harness-
 
 # Notifications
 
-`task done` stores a pending entry, then tries for 10 seconds. A draft on the owner's input line means retry, never join. Any later harness-ops call retries, for one hour. Claims under the lock stop two processes from delivering the same result; a claim older than 30 seconds belongs to a process that died.
+`task done` stores a pending entry, then tries for 10 seconds. A draft on the owner's input line means retry, never join. Any later harness-ops call retries, for one hour. Claims under the lock stop two processes from delivering the same result; a claim older than 10 minutes belongs to a process that died. 10 minutes is above the longest a delivery can take while each backend call stays inside its [deadline](/architecture/backends.md#deadlines): 543 s, from 16 calls of 30 s one after another (the owner's pane list, counted as 5 for hc with up to 32 terminals; the server check; draft, status and busy reads; up to 4 reads of the input line with 3 Enters between them), one hc send of 60 s, and 3.2 s of pauses (`deliveryBound` in `internal/harness/tasks.go`; `TestClaimOutlastsTheLongestDelivery` keeps `claimTTL` above it). The cost: a notice whose deliverer died waits up to 10 minutes of its hour. Until 2026-11-17 a claim lasted 30 s, shorter than one hc send, so a second flusher could send a notice twice (`TestSlowDeliveryIsNotDeliveredTwice`).
 
 # Dialogs
 

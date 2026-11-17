@@ -23,7 +23,7 @@ const (
 	notifyRetry      = 10.0 // how long `task done` keeps trying before it leaves the result pending
 	notifyPoll       = 2.0
 	PendingTTL       = 3600.0
-	claimTTL         = 30.0  // a claim older than this belongs to a process that died
+	claimTTL         = 600.0 // a claim older than this belongs to a process that died; above deliveryBound
 	reservationTTL   = 600.0 // a task with no pane after this long never got one
 	reuseIdleTimeout = 5.0
 )
@@ -971,6 +971,23 @@ func (t *Tasks) Done(id, status, summary, summaryFile string) (*Task, error) {
 		}
 		t.sleep(notifyPoll)
 	}
+}
+
+// deliveryBound is the longest one delivery can take while every backend call stays inside its deadline
+// (term.CallTimeout; hc send term.SendTimeout): 543 s. A slower call fails and ends the delivery. claimTTL
+// must stay above it, or a second flusher takes over a notice still being delivered and sends it twice.
+// In order, a delivery makes these calls:
+//   - the owner's pane list: one call, but on hc an hc ls plus an hc get per terminal, 8 at once; 5 calls
+//     cover 32 terminals (tmux and iTerm2 add ps and lsof: 3 calls);
+//   - the server check, a draft read, a status read and a busy read: 4;
+//   - the send: one hc send, or paste and Enter (2 calls);
+//   - up to submitRetries+1 reads of the input line, with an Enter between two: 7;
+//   - and the pauses: enterDelay once, submitSettle before each read.
+func deliveryBound() float64 {
+	call := term.CallTimeout.Seconds()
+	calls := 5.0 + 4 + float64(2*submitRetries+1)
+	send := max(term.SendTimeout.Seconds(), 2*call)
+	return calls*call + send + enterDelay + float64(submitRetries+1)*submitSettle
 }
 
 // FlushPending delivers held-back results. A claim under the lock stops two processes delivering the same one.
