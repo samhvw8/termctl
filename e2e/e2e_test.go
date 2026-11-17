@@ -32,6 +32,10 @@ func TestMain(m *testing.M) {
 	if out, err := exec.Command("go", "build", "-o", filepath.Join(dir, "fakeharness"), "../internal/termtest/fakeharness").CombinedOutput(); err != nil {
 		panic(string(out))
 	}
+	// The same fake under the name agy: its pane reads as agy, so harness-ops reads its dialog with agy's parser.
+	if out, err := exec.Command("go", "build", "-o", filepath.Join(dir, "agy", "agy"), "../internal/termtest/fakeharness").CombinedOutput(); err != nil {
+		panic(string(out))
+	}
 	// A child process that forgets its own setting must still miss the live registry.
 	state, err := os.MkdirTemp("", "termctl-e2e-state")
 	if err != nil {
@@ -110,7 +114,13 @@ func newRig(t *testing.T) *rig {
 
 func (r *rig) ops(pane string, args ...string) (int, string, string) {
 	r.t.Helper()
-	cmd := exec.Command(filepath.Join(binDir, "harness-ops"), append([]string{"--backend", "tmux", "-L", socket}, args...)...)
+	return r.opsBin(filepath.Join(binDir, "harness-ops"), pane, args...)
+}
+
+// opsBin is ops through another copy of harness-ops.
+func (r *rig) opsBin(bin, pane string, args ...string) (int, string, string) {
+	r.t.Helper()
+	cmd := exec.Command(bin, append([]string{"--backend", "tmux", "-L", socket}, args...)...)
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "ITERM_SESSION_ID=") && !strings.HasPrefix(kv, "REX_") && !strings.HasPrefix(kv, "TMUX") {
 			cmd.Env = append(cmd.Env, kv)

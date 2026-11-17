@@ -43,6 +43,15 @@ func rexCLI() string {
 	return ""
 }
 
+// shortTmp is where private servers keep their sockets: a Unix socket path is limited to about 104
+// bytes. TERMCTL_TEST_SHORT_DIR overrides /tmp (say, a short symlink to a scratch folder).
+func shortTmp() string {
+	if d := os.Getenv("TERMCTL_TEST_SHORT_DIR"); d != "" {
+		return d
+	}
+	return "/tmp"
+}
+
 func newRexRig(t *testing.T) *rexRig {
 	t.Helper()
 	if os.Getenv("TERMCTL_REX_TEST") != "1" {
@@ -52,7 +61,15 @@ func newRexRig(t *testing.T) *rexRig {
 	if bin == "" {
 		t.Skip("the Rex CLI is not installed")
 	}
-	dir, err := os.MkdirTemp("/tmp", "rxt") // short: a Unix socket path is limited to about 104 bytes
+	r := startRexServer(t, bin)
+	r.addBlocks()
+	return r
+}
+
+// startRexServer starts a private Rex server and stops it when the test ends.
+func startRexServer(t *testing.T, bin string) *rexRig {
+	t.Helper()
+	dir, err := os.MkdirTemp(shortTmp(), "rxt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +116,13 @@ func newRexRig(t *testing.T) *rexRig {
 		os.RemoveAll(dir)
 	})
 	waitFor(t, "the private Rex server", func() bool { _, err := r.rexErr("whoami"); return err == nil })
+	return r
+}
 
+// addBlocks makes a session with the caller's block and a block in a second window, both running sleep.
+func (r *rexRig) addBlocks() {
+	t := r.t
+	t.Helper()
 	var created struct {
 		SessionID      string `json:"session_id"`
 		InitialWindows []struct {
@@ -118,7 +141,6 @@ func newRexRig(t *testing.T) *rexRig {
 	r.other, r.other2 = uuid(win.BlockIDs[0]), uuid(win.WindowID)
 	r.rex("block", "rename", r.caller, "caller")
 	r.rex("block", "rename", r.other, "other")
-	return r
 }
 
 func uuid(id string) string { _, u, _ := strings.Cut(id, ":"); return u }

@@ -45,8 +45,14 @@ func newHcRig(t *testing.T) *hcRig {
 	if _, err := exec.LookPath("hc"); err != nil {
 		t.Skip("hc not installed")
 	}
+	return startHcRig(t)
+}
+
+// startHcRig sets up a private core's environment; the core starts on first use and stops when the test ends.
+func startHcRig(t *testing.T) *hcRig {
+	t.Helper()
 	tmp := t.TempDir()
-	runtime, err := os.MkdirTemp("/tmp", "hc")
+	runtime, err := os.MkdirTemp(shortTmp(), "hc")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -23,6 +23,11 @@ description = "Run the opt-in Rex acceptance test on a private Rex server it sta
 env = { TERMCTL_REX_TEST = "1" }
 run = "go test ./e2e -run 'TestRex' -v -count=1"
 
+[tasks."test:dialogs"]
+description = "Opt-in, costs model turns: real claude (haiku) and agy dialogs answered through harness-ops on iTerm2 scratch tabs, a private tmux socket, a private Rex server and a private hc core; prints the matrix and the 6-worker notice latency"
+env = { TERMCTL_DIALOGS_TEST = "1" }
+run = "go test ./e2e -run 'TestDialogsReal' -v -count=1 -timeout 120m"
+
 [tasks.check]
 description = "Tests plus OKF validation"
 depends = ["test"]
