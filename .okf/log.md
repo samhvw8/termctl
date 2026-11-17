@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-11-18
+* **Fix**: Rex program status takes a block's newest record (`updated_at`), with urgency only breaking a tie. The most urgent record across all ids won, so a stale or spoofed `blocked` stuck and cost a screen re-read every round (review A11). Test: `TestRexPrefersTheNewestRecord`; `mise run test:rex` passes. See [backends](architecture/backends.md#program-status). Runs: nothing new.
 * **Fix**: a dialog notice is checked against the task's mark right before it is sent, not only when the batch is claimed; a dialog answered while an earlier notice was on its way was still announced (review A5.3). Cost: one registry read per dialog notice. Test: `TestDialogAnsweredDuringAnEarlierNoticeIsNotAnnounced`. See [tasks](architecture/tasks.md#watcher). Runs: nothing new.
 * **Fix**: `task wait` no longer returns a dialog whose watcher notice already reached the owner; it returned it as new, so the lead heard of it twice (review A8.1). Test: `TestWatchThenWaitDoesNotReportTwice`. See [tasks](architecture/tasks.md#dialogs). Runs: nothing new.
 * **Fix**: `task wait ID` refuses a caller that does not own the task (exit 2), checked as `task answer` checks it. Any pane could wait on another owner's task, take its dialog as returned, and the owner was never told (review A8.2). Test: `TestOnlyTheOwnerWaitsForATask`. See [tasks](architecture/tasks.md#dialogs). Runs: nothing new.

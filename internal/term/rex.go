@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // RexBackend drives Rex (superlogical.com/rex) through its CLI. Checked against Rex 0.1.0-preview.19
@@ -513,24 +514,29 @@ func (b *RexBackend) NativeStatus(*Pane) string { return "" }
 // rexStatusRecord is one OSC 7501 record of a block, as its program_status method gives it. A block
 // keeps one record per id the program reported under.
 type rexStatusRecord struct {
-	State string `json:"state"`
-	Kind  string `json:"kind"`
-	Msg   string `json:"msg"`
+	State     string `json:"state"`
+	Kind      string `json:"kind"`
+	Msg       string `json:"msg"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // statusRank orders states by urgency: the record a person must act on comes first.
 var statusRank = map[string]int{"blocked": 5, "error": 4, "working": 3, "done": 2, "idle": 1}
 
-// rexProgramStatus picks a block's most urgent record.
+// rexProgramStatus picks a block's newest record, the most urgent among records of the same time (or
+// with none). A block keeps a record per id, and one the program stopped updating, such as a "blocked"
+// under an id it no longer uses, must not outrank what it reports now (agy review A11).
 func rexProgramStatus(records []rexStatusRecord) (ProgramStatus, bool) {
 	var best *rexStatusRecord
+	var bestAt time.Time
 	for i := range records {
 		r := &records[i]
 		if r.State == "" || r.State == "clear" {
 			continue
 		}
-		if best == nil || statusRank[r.State] > statusRank[best.State] {
-			best = r
+		at, _ := time.Parse(time.RFC3339Nano, r.UpdatedAt) // none or unreadable: the zero time, the oldest
+		if best == nil || at.After(bestAt) || (at.Equal(bestAt) && statusRank[r.State] > statusRank[best.State]) {
+			best, bestAt = r, at
 		}
 	}
 	if best == nil {

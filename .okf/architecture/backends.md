@@ -3,7 +3,7 @@ type: Architecture
 title: Backends
 description: The Backend interface and the state of each terminal backend.
 tags: [architecture, backends]
-generated: { by: claude-code/opus-5.5, at: '2026-11-17T16:50:15Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-17T17:09:57Z' }
 sources:
   - id: iterm2-status
     resource: https://github.com/gnachman/iTerm2/blob/master/sources/Language/BuiltInFunctions/SetStatusBuiltInFunction.swift
@@ -44,7 +44,7 @@ Agents report what they do with OSC 7501 (`ESC ] 7501 ; state=blocked:kind=permi
 | Backend | Source | Cost | Kind, Msg |
 |---|---|---|---|
 | iTerm2 | built-in `iterm2.get_session_status(session_id:)` in the app context, over the open websocket (`InvokeFunctionRequest`)[^iterm2-status] | one function call per pane, no subprocess | Msg is the `detail` (the decoded msg); no kind |
-| Rex | block method `program_status` for every wanted block in one `rex do` Lua script; each session attached once | one CLI call per read | Kind and Msg from the most urgent record (blocked, error, working, done, idle) |
+| Rex | block method `program_status` for every wanted block in one `rex do` Lua script; each session attached once | one CLI call per read | State, Kind and Msg from the newest record (`updated_at`); urgency (blocked, error, working, done, idle) breaks a tie. Until 2026-11-18 the most urgent record of any id won, so a `blocked` under an id the program stopped updating stuck (review A11) |
 | hc | `hc ls --json` (the word for every terminal), then `hc get` for a blocked one | one CLI call, plus one per blocked terminal | from `get`'s `status` |
 | tmux | none | | tmux does not answer the check, so agents send nothing there; screen only |
 | Ghostty | none | | unsupported, see the table below |

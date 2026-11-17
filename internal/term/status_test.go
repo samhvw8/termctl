@@ -47,6 +47,24 @@ func TestRexPicksTheMostUrgentRecord(t *testing.T) {
 	}
 }
 
+// A block keeps a record per id. A "blocked" under an id the program stopped updating outranked what it
+// reports now, so a stale or spoofed blocked stuck (agy review A11). The newest record wins; urgency only
+// breaks a tie.
+func TestRexPrefersTheNewestRecord(t *testing.T) {
+	got, ok := rexProgramStatus([]rexStatusRecord{
+		{State: "blocked", Kind: "permission", Msg: "Run old?", UpdatedAt: "2026-11-17T18:15:23.966679+07:00"},
+		{State: "working", UpdatedAt: "2026-11-17T18:16:01.5+07:00"},
+		{State: "done"}, // no time: the oldest
+	})
+	if !ok || got != (ProgramStatus{State: "working"}) {
+		t.Fatal(got, ok)
+	}
+	got, _ = rexProgramStatus([]rexStatusRecord{{State: "working", UpdatedAt: "2026-11-17T11:16:01Z"}, {State: "blocked", Msg: "Run?", UpdatedAt: "2026-11-17T18:16:01+07:00"}})
+	if got.State != "blocked" {
+		t.Fatal("the same time in another zone is a tie, broken by urgency:", got)
+	}
+}
+
 // One rex do call reads every block, against JSON captured from Rex 0.1.0-preview.19 on a private server.
 func TestRexProgramStatusesIsOneCall(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("testdata", "rex", "program_status.json"))
