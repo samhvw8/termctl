@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-11-17
+* **Fix**: a registry write that failed (write or sync) left its temp file open; it is now closed on every path, so a long-lived watcher cannot run out of descriptors. Test: `TestFailedWriteClosesItsTempFile`. Runs: nothing new.
 * **Fix**: a task created while the watcher was stopping went unwatched: `task new` saw the lock still held and started none. The watcher now lets go of its lock, reads the registry again, and goes on if a running task or held notice appeared. See [tasks](architecture/tasks.md#watcher). Runs: nothing new.
 * **Fix**: a dialog notice dropped before it reached the owner (past its hour, or the owner pane gone) no longer leaves the dialog marked as told: the watcher announces it again while it stays on screen. A dialog that `task wait` returned stays told. See [tasks](architecture/tasks.md#watcher). Runs: nothing new.
 * **Fix**: a delivery claim lasts 10 minutes, was 30 s. One hc send may take 60 s, so a second flusher took over a notice still being delivered and sent it twice. 10 minutes is above the longest delivery while every call keeps its deadline (543 s); a notice whose deliverer died waits that long. See [tasks](architecture/tasks.md#notifications). Runs: nothing new.

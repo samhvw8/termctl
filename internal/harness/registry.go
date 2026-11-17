@@ -197,6 +197,9 @@ func (r *Registry) Update(fn func(*Data) error) error {
 	return r.write(d)
 }
 
+// syncFile flushes a file or a directory to disk; tests replace it.
+var syncFile = (*os.File).Sync
+
 func (r *Registry) write(d *Data) error {
 	data, err := json.MarshalIndent(d, "", " ")
 	if err != nil {
@@ -207,10 +210,12 @@ func (r *Registry) write(d *Data) error {
 		return term.BackendErr("task registry: %v", err)
 	}
 	defer os.Remove(f.Name())
-	if _, err = f.Write(data); err == nil {
-		if err = f.Sync(); err == nil {
-			err = f.Close()
-		}
+	_, err = f.Write(data)
+	if err == nil {
+		err = syncFile(f)
+	}
+	if cerr := f.Close(); err == nil { // closed on every path: a watcher writes for hours
+		err = cerr
 	}
 	if err != nil {
 		return term.BackendErr("task registry: %v", err)

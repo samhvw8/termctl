@@ -46,6 +46,37 @@ func TestFailedUpdateWritesNothing(t *testing.T) {
 	}
 }
 
+// stubSync replaces syncFile for one test.
+func stubSync(t *testing.T, fn func(*os.File) error) {
+	old := syncFile
+	syncFile = fn
+	t.Cleanup(func() { syncFile = old })
+}
+
+// A write that fails closes its temp file: a long-lived watcher must not run out of descriptors (review O8).
+func TestFailedWriteClosesItsTempFile(t *testing.T) {
+	r := NewRegistry(t.TempDir())
+	var temp *os.File
+	stubSync(t, func(f *os.File) error {
+		if temp == nil {
+			temp = f
+		}
+		return errors.New("disk full")
+	})
+	if err := r.Update(func(d *Data) error { d.Tasks["a"] = &Task{ID: "a"}; return nil }); err == nil {
+		t.Fatal("a failed sync must fail the update")
+	}
+	if temp == nil {
+		t.Fatal("no file was synced")
+	}
+	if _, err := temp.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("the temp file is still open after a failed write: %v", err)
+	}
+	if entries, _ := os.ReadDir(r.Root); len(entries) != 1 || entries[0].Name() != "registry.lock" {
+		t.Fatalf("the failed write left files: %v", entries)
+	}
+}
+
 func TestCorruptRegistryIsAnErrorNotAReset(t *testing.T) {
 	r := NewRegistry(t.TempDir())
 	r.Update(func(*Data) error { return nil })
