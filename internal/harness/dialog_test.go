@@ -416,3 +416,63 @@ func TestPersistUnlessKnownOneShot(t *testing.T) {
 		}
 	}
 }
+
+// A watcher round that read the screen before an answer must not bring the answered dialog back, nor
+// tell the owner of it (review F1).
+func TestStaleReadDoesNotBringAnAnsweredDialogBack(t *testing.T) {
+	r := newRig(t)
+	x, dlg := dialogTask(t, r)
+	fp := readFP(t, r, x)
+	sigs := screenSource{r.tasks}.Signals([]*Task{mustGet(t, r, x.ID)}) // the watcher's capture
+	if _, _, err := r.tasks.Answer(x.ID, AnswerOpts{N: 1, Expect: fp}); err != nil || dlg.Answer != 1 {
+		t.Fatal(err)
+	}
+	r.tasks.apply(sigs, true) // the watcher's apply, after the answer
+	r.tasks.FlushPending()
+	g := mustGet(t, r, x.ID)
+	if n := ownerNotes(r); len(n) != 0 || g.Dialog != nil {
+		t.Fatalf("answered dialog came back: notes=%q mark=%+v", n, g.Dialog)
+	}
+}
+
+// The worker asks the same request again at once, so the answer cannot tell it from a dialog that did
+// not take the key: it says both, and the re-ask is announced (review F7).
+func TestIdenticalReaskRightAfterEnterIsAnnounced(t *testing.T) {
+	r := newRig(t)
+	x, _ := dialogTask(t, r)
+	s := &swapper{Fake: r.b, pane: x.Pane}
+	ts := swapTasks(r, s)
+	if err := ts.Watch(WatchOpts{Rounds: 1}); err != nil {
+		t.Fatal(err)
+	}
+	s.onEnter = func() {
+		r.b.State[x.Pane].Dialog = &termtest.Dialog{Body: "touch x", Options: []string{"Yes", "Yes, and don't ask again for touch commands", "No"}, Selected: 1}
+	}
+	_, _, err := ts.Answer(x.ID, AnswerOpts{N: 1})
+	s.onEnter = nil
+	if !isCode(err, term.CodeBackend) || !strings.Contains(err.Error(), "asked the same request again") {
+		t.Fatal(err)
+	}
+	ts.Watch(WatchOpts{Rounds: 2})
+	if n := len(ownerNotes(r)); n != 2 {
+		t.Errorf("notices=%d, want 2: the re-ask is a new request", n)
+	}
+}
+
+// Answered through the pane address, then asked again before any round saw the input line: the mark
+// went with the answer, so the new ask is announced (review F7).
+func TestPaneAddressAnswerThenReaskIsAnnounced(t *testing.T) {
+	r := newRig(t)
+	x, dlg := dialogTask(t, r)
+	if err := r.tasks.Watch(WatchOpts{Rounds: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.tasks.Answer(x.Pane, AnswerOpts{N: 1}); err != nil {
+		t.Fatal("pane-address answer refused:", err)
+	}
+	dlg.Answer, dlg.Selected = 0, 1 // asked again before the watcher looked
+	r.tasks.Watch(WatchOpts{Rounds: 2})
+	if n := len(ownerNotes(r)); n != 2 {
+		t.Errorf("re-asked dialog after a pane-address answer: %d notice(s), want 2", n)
+	}
+}

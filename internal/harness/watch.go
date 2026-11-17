@@ -24,6 +24,7 @@ type Signal struct {
 	Text   string
 	Dialog *Dialog
 	Status string
+	At     float64 // when the screen was captured; 0 when unknown
 }
 
 // Source finds signals for tasks. The screen source reads each worker's screen.
@@ -135,7 +136,9 @@ func parallel(n int, fn func(i int)) {
 func (t *Tasks) read(ws []worker, status map[string]term.ProgramStatus) []Signal {
 	screens := make([][]string, len(ws))
 	dialogs := make([]*Dialog, len(ws))
+	ats := make([]float64, len(ws))
 	look := func(i int) {
+		ats[i] = t.clock().Now() // before the capture: an answer recorded after this time makes the read stale
 		lines, err := ws[i].b.Capture(ws[i].p, screenLines(ws[i].p))
 		if err != nil {
 			return
@@ -158,13 +161,13 @@ func (t *Tasks) read(ws []worker, status map[string]term.ProgramStatus) []Signal
 		switch {
 		case screens[i] == nil:
 		case dialogs[i] != nil:
-			sig := Signal{Task: w.task.ID, Kind: "dialog", Text: dialogs[i].Question, Dialog: dialogs[i]}
+			sig := Signal{Task: w.task.ID, Kind: "dialog", Text: dialogs[i].Question, Dialog: dialogs[i], At: ats[i]}
 			if st := status[w.p.ID]; st.Blocked() {
 				sig.Status = st.Msg
 			}
 			out = append(out, sig)
 		case w.prof.ReadInput(screens[i]) != nil:
-			out = append(out, Signal{Task: w.task.ID, Kind: "clear"})
+			out = append(out, Signal{Task: w.task.ID, Kind: "clear", At: ats[i]})
 		}
 	}
 	return out
@@ -251,6 +254,7 @@ func dialogNotice(x *Task, s Signal) string {
 
 // apply records signals under the lock: a new dialog replaces the mark, "clear" drops it. With notify,
 // a dialog the owner has not been told about gets a pending notice, once per dialog while it stays on screen.
+// A signal read before the task's last answer is stale: it would bring the answered dialog back.
 func (t *Tasks) apply(sigs []Signal, notify bool) error {
 	if len(sigs) == 0 {
 		return nil
@@ -259,7 +263,7 @@ func (t *Tasks) apply(sigs []Signal, notify bool) error {
 		now := t.clock().Now()
 		for _, s := range sigs {
 			x := d.Tasks[s.Task]
-			if x == nil || !open(x.Status) {
+			if x == nil || !open(x.Status) || (s.At > 0 && s.At < x.AnsweredAt) {
 				continue
 			}
 			switch s.Kind {

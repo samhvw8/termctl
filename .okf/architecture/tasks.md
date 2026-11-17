@@ -63,7 +63,7 @@ A worker can stop on a permission dialog. Its owner learns of it in two ways, an
 
 Each round also delivers held-back results. The watcher stops when the owner has no open task, or when the registry file is gone.
 
-- **Dedup.** The task's `dialog` mark holds the fingerprint on screen and whether the owner was told (`notified`) and whether `task wait` returned it (`returned`). The mark is dropped when the worker's input line is seen again with no dialog, when the lead answers, and on `task done`. So the same request asked again later is new again; remembering every fingerprint forever would hide it. A notice whose dialog is gone before delivery is dropped, not delivered late. Dialog notices never change the task's `notify` field.
+- **Dedup.** The task's `dialog` mark holds the fingerprint on screen and whether the owner was told (`notified`) and whether `task wait` returned it (`returned`). The mark is dropped when the worker's input line is seen again with no dialog, when the lead answers (through the task ID or the task's pane address, and also when the dialog is still there after Enter, which may be the same request asked again), and on `task done`. So the same request asked again later is new again; remembering every fingerprint forever would hide it. An answer stamps the task's `answered_at`, and every signal carries the time its screen was captured: a read taken before the last answer is stale and dropped, so a round that captured the screen just before the answer cannot bring the answered dialog back or announce it. A notice whose dialog is gone before delivery is dropped, not delivered late. Dialog notices never change the task's `notify` field.
 - **One per owner.** A non-blocking `flock` on `watch/<owner>.lock` in the state directory, holding the pid. A second `watch` prints that one runs and exits 0.
 - **Started for you.** `task new` and `task send` start a detached watcher (`setsid`, output to `watch/<owner>.log`) when none runs. It finds the owner pane from the inherited environment. A failed start only warns.
 - **A round.** Rounds start every 3 s, start to start: the time a round takes (lists, reads, notices) is not added on top (at least 0.5 s between rounds). Before 2026-11-17 the 3 s sleep came after the round, and with 6 workers rounds were 5 to 6 s apart. Panes are listed once per backend server for the whole round (reconcile and reads share the list), then every worker's screen is captured in parallel, at most 8 at once. Each backend with a [status source](/architecture/backends.md#program-status) is asked once for all its workers. A worker whose status says blocked but whose screen shows no dialog yet is read again 0.5 s later. Status alone is never a dialog.
@@ -86,7 +86,7 @@ Each round also delivers held-back results. The watcher stops when the owner has
 | The harness has no calibrated dialog reader, or N is not an option | 2 |
 | No dialog on screen, or `--expect` names another fingerprint | 7 |
 | Option N grants more than this request and `--persist` is not given | 6 |
-| The selection did not reach N, or the dialog is still there 3 s after Enter | 1 |
+| The selection did not reach N, or the dialog is still there 3 s after Enter (the harness did not take the key, or asked the same request again: the mark is dropped, so a re-ask is announced) | 1 |
 
 `task deny` picks the first option starting with "No". Only when there is none does it press Esc, and it says so.
 

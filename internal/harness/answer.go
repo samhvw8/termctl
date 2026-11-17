@@ -1,7 +1,6 @@
 package harness
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
@@ -133,7 +132,7 @@ func (o *Ops) awaitGone(p *term.Pane, d *Dialog, res *Answered) error {
 			return nil
 		}
 		if waited >= answerLook {
-			return term.BackendErr("dialog %s is still on %s %gs after the answer; check with read", d.Fingerprint, p.Address(), answerLook)
+			return term.BackendErr("dialog %s is still on %s %gs after the answer: the harness did not take it, or asked the same request again; read it again before answering", d.Fingerprint, p.Address(), answerLook)
 		}
 	}
 }
@@ -185,6 +184,11 @@ func (t *Tasks) answerTarget(target string) (term.Backend, *term.Pane, *Task, er
 	if rec == nil || rec.Owner != t.Sender.ID || !sameServer(rec.Ref, t.Backend.ServerRef()) {
 		return nil, nil, nil, term.TargetErr("%s is not a pane you started with spawn or task new; its dialogs are not yours to answer", p.Address())
 	}
+	for _, x := range d.Tasks { // the pane of a task: the answer must reach its dialog mark too
+		if x.Pane == p.ID && open(x.Status) && x.Owner == t.Sender.ID && sameServer(x.Ref, t.Backend.ServerRef()) {
+			return t.Backend, p, x, nil
+		}
+	}
 	return t.Backend, p, nil, nil
 }
 
@@ -196,17 +200,15 @@ func (t *Tasks) Answer(target string, opts AnswerOpts) (*Answered, *term.Pane, e
 	}
 	res, err := t.ops(b, t.Sender).Answer(p, opts)
 	if x != nil && res != nil {
-		var te *term.Error
-		stuck := errors.As(err, &te) && te.Code == term.CodeBackend
-		if !stuck {
-			if uerr := t.Reg.Update(func(d *Data) error {
-				if c := d.Tasks[x.ID]; c != nil {
-					c.Dialog = nil // answered: the same request asked again later is a new one; a next dialog is read anew
-				}
-				return nil
-			}); uerr != nil {
-				Warn(fmt.Sprintf("could not record the answer: %v", uerr))
+		// A key was pressed. The mark goes, even when the dialog is still on screen: the harness may have
+		// asked the same request again, and that one must be announced. Reads taken until now are stale.
+		if uerr := t.Reg.Update(func(d *Data) error {
+			if c := d.Tasks[x.ID]; c != nil {
+				c.Dialog, c.AnsweredAt = nil, t.clock().Now()
 			}
+			return nil
+		}); uerr != nil {
+			Warn(fmt.Sprintf("could not record the answer: %v", uerr))
 		}
 	}
 	return res, p, err
