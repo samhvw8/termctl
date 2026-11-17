@@ -92,6 +92,6 @@ func TestDialogWatchAndAnswer(t *testing.T) {
 	}
 	waitFor(t, "watcher stops", func() bool {
 		data, _ := os.ReadFile(logs[0])
-		return strings.Contains(string(data), "no open tasks left")
+		return strings.Contains(string(data), "no running task and no held notice left")
 	})
 }

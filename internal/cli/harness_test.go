@@ -383,7 +383,7 @@ func TestTaskDialogCommands(t *testing.T) {
 	if code, _, _ := e.run("task", "close", "--force", id); code != 0 {
 		t.Fatal(code)
 	}
-	if code, out, stderr := e.run("watch", "--interval", "1"); code != 0 || !strings.Contains(out, "no open tasks") {
+	if code, out, stderr := e.run("watch", "--interval", "1"); code != 0 || !strings.Contains(out, "no running task") {
 		t.Fatal(code, out, stderr)
 	}
 }

@@ -289,18 +289,25 @@ func (t *Tasks) apply(sigs []Signal, notify bool) error {
 	})
 }
 
-// running lists the owner's tasks that are running, and whether any task of the owner is still open.
-func ownerTasks(d *Data, owner string) (running []*Task, anyOpen bool) {
+// runningTasks lists the owner's running tasks. Only these can show a live dialog: a ready, failed or
+// blocked worker has reported, and task send makes it running again.
+func runningTasks(d *Data, owner string) (running []*Task) {
 	for _, x := range d.Tasks {
-		if x.Owner != owner || x.Closed || !open(x.Status) {
-			continue
-		}
-		anyOpen = true
-		if x.Status == "running" {
+		if x.Owner == owner && !x.Closed && x.Status == "running" {
 			running = append(running, x)
 		}
 	}
-	return running, anyOpen
+	return running
+}
+
+// holdsNotice reports whether a notice for the owner is still waiting to be delivered.
+func holdsNotice(d *Data, owner string) bool {
+	for _, p := range d.Pending {
+		if p.Owner == owner {
+			return true
+		}
+	}
+	return false
 }
 
 // ErrWatching means another watcher already serves this owner.
@@ -376,8 +383,9 @@ type WatchOpts struct {
 // (draft-safe, claimed under the lock), and delivers held-back results. Every Interval (start to start) it reads every
 // worker's screen (in parallel, panes listed once per backend). In between, every StatusEvery, it asks
 // backends with a status source for their workers' program status, and a worker that turned blocked
-// gets its screen read at once. It returns when the owner has no open task left, with ErrWatching when
-// another watcher serves the owner, or with ErrRestart.
+// gets its screen read at once. It returns when the owner pane is gone, or when the owner has no running
+// task and no notice waiting to be delivered; with ErrWatching when another watcher serves the owner, or
+// with ErrRestart.
 func (t *Tasks) Watch(o WatchOpts) error {
 	owner, err := t.owner()
 	if err != nil {
@@ -421,10 +429,15 @@ func (t *Tasks) Watch(o WatchOpts) error {
 			t.stopMemo()
 			return err
 		}
-		running, anyOpen := ownerTasks(d, owner.ID)
-		if !anyOpen {
+		if _, p, err := t.paneByID(owner.ID, t.SenderRef); err == nil && p == nil {
 			t.stopMemo()
-			say("no open tasks left; stopping")
+			say("the owner pane is gone; stopping")
+			return nil
+		}
+		running := runningTasks(d, owner.ID)
+		if len(running) == 0 && !holdsNotice(d, owner.ID) {
+			t.stopMemo()
+			say("no running task and no held notice left; stopping")
 			return nil
 		}
 		w.ws = t.workers(running)

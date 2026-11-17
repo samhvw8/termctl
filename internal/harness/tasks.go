@@ -819,7 +819,7 @@ func (t *Tasks) waitDialog(d *Data, owner, id string) (*Waited, error) {
 	if id != "" {
 		watch = []*Task{d.Tasks[id]}
 	} else {
-		watch, _ = ownerTasks(d, owner)
+		watch = runningTasks(d, owner)
 	}
 	sigs := t.signals(watch)
 	if err := t.apply(sigs, false); err != nil {

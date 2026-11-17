@@ -214,3 +214,54 @@ func TestWatchStopsForARestartAndFreesItsLock(t *testing.T) {
 		t.Fatal("the lock outlived the watcher, so the restarted one could not take it")
 	}
 }
+
+// A watcher stops when its owner pane is gone, and when nothing of the owner runs: a ready task that is
+// never accepted must not keep it polling (review F12).
+func TestWatcherStopsWhenOwnerGoneOrNothingRuns(t *testing.T) {
+	for _, ownerGone := range []bool{true, false} {
+		r := newRig(t)
+		x := r.mustNew(t, nil, NewOpts{})
+		r.pane(x).Process = "claude"
+		y := r.mustNew(t, nil, NewOpts{})
+		if _, err := r.as(r.pane(x)).Done(x.ID, "ok", "done", ""); err != nil {
+			t.Fatal(err)
+		}
+		if ownerGone {
+			kept := r.b.Panes[:0]
+			for _, p := range r.b.Panes {
+				if p.ID != r.owner.ID {
+					kept = append(kept, p)
+				}
+			}
+			r.b.Panes = kept
+		} else {
+			r.tasks.Close(y.ID, true)
+		}
+		rounds := 0
+		err := r.tasks.Watch(WatchOpts{Restart: func() bool { rounds++; return rounds > 200 }})
+		if err != nil || rounds != 1 {
+			t.Errorf("owner gone=%v: still polling after %d rounds (err %v)", ownerGone, rounds, err)
+		}
+	}
+}
+
+// A notice still waiting for the owner keeps the watcher on until it is delivered.
+func TestWatcherWaitsForAHeldNotice(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	r.b.State[r.owner.ID].Input = "owner typing"
+	if _, err := r.as(r.pane(x)).Done(x.ID, "ok", "done", ""); err != nil {
+		t.Fatal(err)
+	}
+	rounds := 0
+	r.tasks.Watch(WatchOpts{Restart: func() bool {
+		rounds++
+		if rounds == 3 {
+			r.b.State[r.owner.ID].Input = ""
+		}
+		return rounds > 50
+	}})
+	if rounds != 4 || !termtest.Contains(r.b.Texts(r.owner.ID), "RE: task "+x.ID) {
+		t.Fatalf("rounds=%d texts=%q", rounds, r.b.Texts(r.owner.ID))
+	}
+}

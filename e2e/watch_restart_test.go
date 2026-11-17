@@ -79,5 +79,5 @@ func TestWatcherRestartsIntoANewBuild(t *testing.T) {
 	if code, _, stderr := r.ops(r.harness, "task", "close", "--force", id); code != 0 {
 		t.Fatal(stderr)
 	}
-	waitFor(t, "watcher stops", func() bool { return strings.Contains(watchLog(), "no open tasks left") })
+	waitFor(t, "watcher stops", func() bool { return strings.Contains(watchLog(), "no running task and no held notice left") })
 }
