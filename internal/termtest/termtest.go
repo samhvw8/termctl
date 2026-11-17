@@ -78,7 +78,7 @@ type Fake struct {
 	Ref           map[string]string
 	Spawned       []string
 	BackendName   string                        // Name() when set; default "fake"
-	Statuses      map[string]term.ProgramStatus // a pane's program status; without one, Natives gives it as hc does
+	Statuses      map[string]term.ProgramStatus // a pane's program status
 	StatusCalls   int
 	CostlyStatus  bool // the status read costs a process, as on Rex and hc: the watcher reads it once per round
 }
@@ -95,9 +95,6 @@ func (f *Fake) ProgramStatuses(panes []*term.Pane) (map[string]term.ProgramStatu
 	for _, p := range panes {
 		if st, ok := f.Statuses[p.ID]; ok {
 			out[p.ID] = st
-		} else if n := f.Natives[p.ID]; n != "" {
-			word, msg, _ := strings.Cut(n, ": ")
-			out[p.ID] = term.ProgramStatus{State: word, Msg: msg}
 		}
 	}
 	return out, nil

@@ -84,9 +84,8 @@ func (t *Tasks) workers(tasks []*Task) []worker {
 	return out
 }
 
-// programStatuses asks each backend once for the status of its workers' panes. A backend without a
-// StatusReader falls back to NativeStatus, whose first word is the state (free on tmux and Ghostty). A
-// failed read keeps what was read, and its error goes to warn when given.
+// programStatuses asks each backend with a StatusReader once for the status of its workers' panes (tmux
+// and Ghostty have none). A failed read keeps what was read, and its error goes to warn when given.
 func programStatuses(ws []worker, warn func(error)) map[string]term.ProgramStatus {
 	out := map[string]term.ProgramStatus{}
 	groups := map[term.Backend][]*term.Pane{}
@@ -98,21 +97,16 @@ func programStatuses(ws []worker, warn func(error)) map[string]term.ProgramStatu
 		groups[w.b] = append(groups[w.b], w.p)
 	}
 	for _, b := range order {
-		if r, ok := b.(term.StatusReader); ok {
-			st, err := r.ProgramStatuses(groups[b])
-			if err != nil && warn != nil {
-				warn(err)
-			}
-			for id, s := range st {
-				out[id] = s
-			}
+		r, ok := b.(term.StatusReader)
+		if !ok {
 			continue
 		}
-		for _, p := range groups[b] {
-			if n := b.NativeStatus(p); n != "" {
-				word, msg, _ := strings.Cut(n, ": ")
-				out[p.ID] = term.ProgramStatus{State: strings.ToLower(strings.TrimSpace(word)), Msg: msg}
-			}
+		st, err := r.ProgramStatuses(groups[b])
+		if err != nil && warn != nil {
+			warn(err)
+		}
+		for id, s := range st {
+			out[id] = s
 		}
 	}
 	return out

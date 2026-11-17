@@ -285,7 +285,7 @@ func TestBlockedIsAHintToLookAgain(t *testing.T) {
 		x, dlg := dialogTask(t, r)
 		dlg.HideFirst = 1
 		if blocked {
-			r.b.Natives[x.Pane] = "blocked"
+			r.b.Statuses = map[string]term.ProgramStatus{x.Pane: {State: "blocked"}}
 		}
 		sigs := screenSource{r.tasks}.Signals([]*Task{mustGet(t, r, x.ID)})
 		got := len(sigs) == 1 && sigs[0].Kind == "dialog"
@@ -297,7 +297,7 @@ func TestBlockedIsAHintToLookAgain(t *testing.T) {
 	r := newRig(t)
 	x := r.mustNew(t, nil, NewOpts{})
 	r.pane(x).Process = "claude"
-	r.b.Natives[x.Pane] = "blocked"
+	r.b.Statuses = map[string]term.ProgramStatus{x.Pane: {State: "blocked"}}
 	for _, s := range (screenSource{r.tasks}).Signals([]*Task{mustGet(t, r, x.ID)}) {
 		if s.Kind == "dialog" {
 			t.Fatal(s)
@@ -632,8 +632,9 @@ func TestAnswerChecksTheOwnersServer(t *testing.T) {
 	r := newRig(t)
 	x, dlg := dialogTask(t, r)
 	r.reg.Update(func(d *Data) error { d.Tasks[x.ID].OwnerRef = map[string]string{"pid": "111"}; return nil })
-	r.b.Ref = map[string]string{"pid": "222"} // the caller: same pane ID, another server
-	r.reg.Update(func(d *Data) error { d.Tasks[x.ID].Ref = map[string]string{"pid": "222"}; return nil }) // keep the worker reachable
+	// The caller: the same pane ID on another server. The worker stays reachable on it.
+	r.b.Ref = map[string]string{"pid": "222"}
+	r.reg.Update(func(d *Data) error { d.Tasks[x.ID].Ref = map[string]string{"pid": "222"}; return nil })
 	_, _, err := r.tasks.Answer(x.ID, AnswerOpts{N: 1})
 	if !isCode(err, term.CodeUsage) || dlg.Answer != 0 {
 		t.Errorf("a same-ID pane on another server answered the dialog: err=%v answer=%d", err, dlg.Answer)
