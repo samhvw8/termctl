@@ -125,8 +125,9 @@ func readDialog(lines []string, spec dialogSpec) *Dialog {
 		return nil
 	}
 	start, truncated := 0, true // the first line under the rule above the request
+	width := ruleWidth(lines)
 	for i := footer - 1; i >= 0; i-- {
-		if isBoundary(lines[i]) {
+		if isBoundary(lines[i], width) {
 			start, truncated = i+1, false
 			break
 		}
@@ -226,9 +227,24 @@ func readDialog(lines []string, spec dialogSpec) *Dialog {
 	return d
 }
 
-// isBoundary: the rule above a dialog's request.
-func isBoundary(line string) bool {
-	return ruleRe.MatchString(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "│")))
+// ruleWidth is the width of the widest unindented rule on screen. A dialog's own rule spans the pane on
+// Claude Code and the dialog on agy, which draws past messages under shorter rules.
+func ruleWidth(lines []string) int {
+	width := 0
+	for _, ln := range lines {
+		if t := strings.TrimRight(ln, " "); ruleRe.MatchString(t) {
+			width = max(width, utf8.RuneCountInString(t))
+		}
+	}
+	return width
+}
+
+// isBoundary: the rule above a dialog's request is unindented and as wide as the widest rule on screen.
+// Any other run of ─, such as a line of the request itself ("<<'──────────'" in a command), is body text:
+// taking it for the rule hid the request above it from the body and the fingerprint (agy review A1).
+func isBoundary(line string, width int) bool {
+	t := strings.TrimRight(line, " ")
+	return width > 0 && ruleRe.MatchString(t) && utf8.RuneCountInString(t) == width
 }
 
 // ambiguousDialog is the whole dialog as shown, with no options to choose from.
