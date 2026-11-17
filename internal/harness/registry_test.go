@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/samhvw8/termctl/internal/term"
 )
@@ -175,5 +177,40 @@ func TestCleanStateRemovesATestDir(t *testing.T) {
 	}
 	if err := CleanState(dir); err != nil { // already gone is fine
 		t.Fatal(err)
+	}
+}
+
+// A registry lock held for good (a hung process) fails the update loudly after LockTimeout instead of
+// hanging every harness-ops call behind it (review F18).
+func TestRegistryLockHasADeadline(t *testing.T) {
+	reg := NewRegistry(filepath.Join(t.TempDir(), "state"))
+	if err := reg.Update(func(*Data) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	held, err := os.OpenFile(filepath.Join(reg.Root, "registry.lock"), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if err := syscall.Flock(int(held.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	old := LockTimeout
+	LockTimeout = 200 * time.Millisecond
+	defer func() { LockTimeout = old }()
+	done := make(chan error, 1)
+	go func() { done <- reg.Update(func(*Data) error { return nil }) }()
+	select {
+	case err := <-done:
+		var te *term.Error
+		if !errors.As(err, &te) || te.Code != term.CodeBackend || !strings.Contains(err.Error(), "held by another process") {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Update hangs behind a held lock")
+	}
+	syscall.Flock(int(held.Fd()), syscall.LOCK_UN)
+	if err := reg.Update(func(*Data) error { return nil }); err != nil {
+		t.Fatal("a freed lock:", err)
 	}
 }

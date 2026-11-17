@@ -10,7 +10,7 @@ generated: { by: claude-code/opus-5.5, at: '2026-11-17T12:30:00Z' }
 
 A task is one harness session doing one job. The registry is `~/.local/state/termctl/registry.json` (`TERMCTL_STATE_DIR` moves it). Code: `internal/harness/tasks.go` and `registry.go`.
 
-Writes hold an exclusive `flock` on `registry.lock` and replace the file atomically, so readers need no lock. A corrupt file is an error, never a reset, because a reset would forget running tasks.
+Writes hold an exclusive `flock` on `registry.lock` and replace the file atomically, so readers need no lock. The lock is taken without blocking and retried every 20 ms for up to 20 s; a lock held longer belongs to a hung process, and the update fails with exit 1 naming the lock file, instead of hanging every call behind it. A corrupt file is an error, never a reset, because a reset would forget running tasks.
 
 # State directory is live data
 

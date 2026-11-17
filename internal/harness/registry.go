@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/samhvw8/termctl/internal/term"
 )
@@ -155,18 +156,36 @@ func migrate(d *Data) {
 	d.Version = registryVersion
 }
 
+// LockTimeout is how long Update waits for the registry lock. An update holds it for milliseconds, so a
+// lock held this long belongs to a process that hangs: fail loudly rather than hang behind it.
+var LockTimeout = 20 * time.Second
+
+const lockRetry = 20 * time.Millisecond
+
 // Update holds the lock, runs fn on the data, and writes it back only if fn succeeds.
 func (r *Registry) Update(fn func(*Data) error) error {
 	if err := os.MkdirAll(r.Root, 0o755); err != nil {
 		return term.BackendErr("task registry: %v", err)
 	}
-	lock, err := os.OpenFile(filepath.Join(r.Root, "registry.lock"), os.O_CREATE|os.O_WRONLY, 0o644)
+	path := filepath.Join(r.Root, "registry.lock")
+	lock, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return term.BackendErr("task registry: %v", err)
 	}
 	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return term.BackendErr("task registry lock: %v", err)
+	deadline := time.Now().Add(LockTimeout)
+	for {
+		err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			return term.BackendErr("task registry lock: %v", err)
+		}
+		if time.Now().After(deadline) {
+			return term.BackendErr("task registry lock: %s has been held by another process for %v; a harness-ops process may hang (find it with lsof %s)", path, LockTimeout, path)
+		}
+		time.Sleep(lockRetry)
 	}
 	d, err := r.Read()
 	if err != nil {
