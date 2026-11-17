@@ -25,6 +25,7 @@ const (
 	PendingTTL       = 3600.0
 	claimTTL         = 600.0 // a claim older than this belongs to a process that died; above deliveryBound
 	reservationTTL   = 600.0 // a task with no pane after this long never got one
+	unreachableTTL   = 600.0 // a server that has not answered for this long is gone for good
 	reuseIdleTimeout = 5.0
 )
 
@@ -187,13 +188,16 @@ func (t *Tasks) owner() (*term.Pane, error) {
 	return t.Sender, nil
 }
 
-// Reconcile marks active tasks whose pane is gone as lost. Unknown is not gone: a backend error changes nothing.
+// Reconcile marks active tasks whose pane is gone as lost. Unknown is not gone: a server that does not
+// answer changes nothing until it has not answered for unreachableTTL; then it is gone for good, and its
+// tasks are lost. "cannot check" is warned once when a task's server stops answering, not on every call.
 func (t *Tasks) Reconcile() error {
 	d, err := t.Reg.Read()
 	if err != nil {
 		return err
 	}
-	var lost, exited []string
+	var lost, exited, back []string
+	down := map[string]error{} // tasks whose server does not answer, and the first time or past the TTL
 	now := t.clock().Now()
 	for _, x := range d.Tasks {
 		if !open(x.Status) {
@@ -207,8 +211,13 @@ func (t *Tasks) Reconcile() error {
 		}
 		_, p, err := t.paneByID(x.Pane, x.Ref)
 		if err != nil {
-			Warn(fmt.Sprintf("cannot check task %s: %v", x.ID, err))
+			if x.Unreachable == 0 || now-x.Unreachable > unreachableTTL {
+				down[x.ID] = err
+			}
 			continue
+		}
+		if x.Unreachable != 0 {
+			back = append(back, x.ID)
 		}
 		switch {
 		case p == nil:
@@ -217,21 +226,41 @@ func (t *Tasks) Reconcile() error {
 			exited = append(exited, x.ID)
 		}
 	}
-	if len(lost)+len(exited) == 0 {
+	if len(lost)+len(exited)+len(back)+len(down) == 0 {
 		return nil
 	}
 	return t.Reg.Update(func(d *Data) error {
+		lose := func(x *Task, why string) {
+			x.Status, x.Ended = "lost", t.clock().Now()
+			if x.Summary == "" {
+				x.Summary = why
+			}
+			delete(d.Panes, x.Pane)
+		}
 		for _, id := range lost {
 			if x := d.Tasks[id]; x != nil && open(x.Status) {
-				x.Status, x.Ended = "lost", t.clock().Now()
-				if x.Summary == "" {
-					x.Summary = "its pane is gone"
-				}
-				delete(d.Panes, x.Pane)
+				lose(x, "its pane is gone")
 			}
 		}
 		for _, id := range exited {
 			t.markExited(d, id, nil)
+		}
+		for _, id := range back {
+			if x := d.Tasks[id]; x != nil && x.Unreachable != 0 {
+				x.Unreachable = 0
+				Warn(fmt.Sprintf("task %s: its server answers again", x.ID))
+			}
+		}
+		for id, cause := range down { // under the lock, so two processes warn about one task once
+			x := d.Tasks[id]
+			switch {
+			case x == nil || !open(x.Status):
+			case x.Unreachable == 0:
+				x.Unreachable = now
+				Warn(fmt.Sprintf("cannot check task %s: %v; it is lost if its server does not answer for %gs", x.ID, cause, unreachableTTL))
+			case now-x.Unreachable > unreachableTTL:
+				lose(x, fmt.Sprintf("its server has not answered for %gs: %v", unreachableTTL, cause))
+			}
 		}
 		return nil
 	})

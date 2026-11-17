@@ -74,6 +74,32 @@ func probeTasks(r *rig, p *probe) *Tasks {
 	return ts
 }
 
+// A worker's server that goes away for good does not keep the watcher alive: its task is lost after
+// unreachableTTL and the watcher stops, warning once, not every round (round-3 review N1).
+func TestWatcherStopsWhenTheServerStaysUnreachable(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	f := &downFake{Fake: r.b, down: true}
+	ts := r.as(r.owner)
+	ts.Backend = f
+	ts.Factory = func(string, map[string]string) (term.Backend, error) { return f, nil }
+	var warned []string
+	old := Warn
+	Warn = func(m string) { warned = append(warned, m) }
+	defer func() { Warn = old }()
+	rounds, limit := 0, int(2*unreachableTTL/WatchInterval)
+	err := ts.Watch(WatchOpts{Restart: func() bool { rounds++; return rounds > limit }})
+	if err != nil {
+		t.Fatalf("the watcher ran %d rounds and did not stop: %v", rounds, err)
+	}
+	if g := mustGet(t, r, x.ID); g.Status != "lost" {
+		t.Fatalf("task %s with its server gone for good", g.Status)
+	}
+	if len(warned) != 1 {
+		t.Fatalf("warned %d times over %d rounds: %q", len(warned), rounds, warned)
+	}
+}
+
 func TestWatchReadsWorkersInParallelAndListsPanesOnce(t *testing.T) {
 	t.Setenv("TERMCTL_MAX_TASKS", "20")
 	r := newRig(t)

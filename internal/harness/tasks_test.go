@@ -1327,6 +1327,61 @@ func TestReconcileKeepsTasksWhileTheServerDoesNotAnswer(t *testing.T) {
 	}
 }
 
+// A server that stays unreachable for good is gone: after unreachableTTL its task is lost. Until then
+// it stays running, a server that answers again resets the clock, and "cannot check" is warned once per
+// change, not on every reconcile (round-3 review N1).
+func TestReconcileLosesATaskWhoseServerStaysUnreachable(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	f := &downFake{Fake: r.b, down: true}
+	ts := r.as(r.owner)
+	ts.Backend = f
+	ts.Factory = func(string, map[string]string) (term.Backend, error) { return f, nil }
+	var warned []string
+	old := Warn
+	Warn = func(m string) { warned = append(warned, m) }
+	defer func() { Warn = old }()
+	reconcile := func(after float64) string {
+		t.Helper()
+		r.clock.T += after
+		if err := ts.Reconcile(); err != nil {
+			t.Fatal(err)
+		}
+		return r.data().Tasks[x.ID].Status // not Get: it reconciles through the rig's answering backend
+	}
+	for i := 0; i < 5; i++ {
+		if s := reconcile(60); s != "running" {
+			t.Fatalf("lost after %d minutes unreachable", i)
+		}
+	}
+	f.down = false
+	if s := reconcile(60); s != "running" || r.data().Tasks[x.ID].Unreachable != 0 {
+		t.Fatalf("a server that answers again: %s, unreachable since %v", s, r.data().Tasks[x.ID].Unreachable)
+	}
+	f.down = true
+	if s := reconcile(1); s != "running" {
+		t.Fatal(s)
+	}
+	if s := reconcile(unreachableTTL - 1); s != "running" {
+		t.Fatalf("the clock did not restart when the server answered again: %s", s)
+	}
+	if s := reconcile(2); s != "lost" {
+		t.Fatalf("still %s after the server stayed unreachable past %gs", s, unreachableTTL)
+	}
+	if g := r.data().Tasks[x.ID]; !strings.Contains(g.Summary, "server") {
+		t.Fatalf("summary %q does not say the server stopped answering", g.Summary)
+	}
+	checks := 0
+	for _, m := range warned {
+		if strings.Contains(m, "cannot check task "+x.ID) {
+			checks++
+		}
+	}
+	if checks != 2 { // once per time the server went away
+		t.Fatalf("warned %d times, want 2: %q", checks, warned)
+	}
+}
+
 // find tells "several tasks" from "no task" by a sentinel, not by its message, and both stay exit 2
 // (review F25).
 func TestFindTellsSeveralFromNone(t *testing.T) {

@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-11-17
+* **Fix**: a task whose terminal server stays unreachable (an hc core gone for good) is lost after 10 minutes, as it was before the `LiveLister` fix; until then it stays running. Before, it stayed running forever, its watcher never stopped, and it logged `cannot check task` every 3 s (about 29,000 lines a day per task). The warning now comes once per change. Tests: `TestReconcileLosesATaskWhoseServerStaysUnreachable`, `TestWatcherStopsWhenTheServerStaysUnreachable`. See [tasks](architecture/tasks.md#lifecycle). Runs: nothing new.
 * **Fix**: the watcher log no longer grows without bound: a log over 1 MiB is cut to its last 256 KiB of whole lines when a watcher starts. Test: `TestWatcherLogIsCutAtStart`. See [tasks](architecture/tasks.md#watcher). Runs: nothing new.
 * **Fix**: a registry update syncs the state directory after the rename, so a crash cannot bring the old registry back; a failed directory sync warns. Cost: about 5 ms more per update on APFS (10 ms, was 5 ms). See [tasks](architecture/tasks.md#overview). Runs: nothing new.
 * **Fix**: a registry write that failed (write or sync) left its temp file open; it is now closed on every path, so a long-lived watcher cannot run out of descriptors. Test: `TestFailedWriteClosesItsTempFile`. Runs: nothing new.

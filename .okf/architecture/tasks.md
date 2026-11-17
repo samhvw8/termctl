@@ -3,7 +3,7 @@ type: Architecture
 title: Tasks and pane safety
 description: How harness-ops tracks a job given to another harness session, tells its owner of a permission dialog, and what stops it closing or spawning the wrong thing.
 tags: [architecture, harness, tasks, safety]
-generated: { by: claude-code/opus-5.5, at: '2026-11-17T16:39:38Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-17T16:50:15Z' }
 ---
 
 # Overview
@@ -31,9 +31,9 @@ The lead owns "done". The worker's session has the files loaded, so it is the ri
 
 `task send` on a ready, failed or blocked task returns it to `running` and adds one to `round`. The worker's next `task done` returns it to `ready`.
 
-A backend error during reconcile leaves the status alone: unknown is not gone. A terminal server that does not answer (hc's core during a restart) is such an error, not a server with no panes.
+A backend error during reconcile leaves the status alone: unknown is not gone. A terminal server that does not answer (hc's core during a restart) is such an error, not a server with no panes. But a server that stays unreachable is gone for good: the task keeps the time its server first failed (`unreachable`, cleared when it answers again), and after 10 minutes (`unreachableTTL`) the task is `lost` with a summary that says so, so a watcher of it stops. `cannot check task ...` is warned once when the server stops answering, and `its server answers again` once when it comes back, not on every reconcile. Between 2026-11-17 (the hc `LiveLister` fix) and this fix such a task stayed `running` forever and its watcher logged a warning every 3 s. Test: `TestReconcileLosesATaskWhoseServerStaysUnreachable`, `TestWatcherStopsWhenTheServerStaysUnreachable`.
 
-The registry version is still 2, although 2026-11-17 added fields (`dialog` marks, `answered_at`, a pending notice's `kind` and fingerprint) that an older binary does not know: while agents still run v0.3.1, any registry write by an old binary drops those fields, so a mark can be lost and a dialog announced or returned once more; the version is not bumped so that those agents keep working during the upgrade. Registry version 1 files are migrated on read.
+The registry version is still 2, although 2026-11-17 added fields (`dialog` marks, `answered_at`, `unreachable`, a pending notice's `kind` and fingerprint) that an older binary does not know: while agents still run v0.3.1, any registry write by an old binary drops those fields, so a mark can be lost and a dialog announced or returned once more, or an unreachable server's 10 minutes start again; the version is not bumped so that those agents keep working during the upgrade. Registry version 1 files are migrated on read.
 
 # Surviving tabs
 

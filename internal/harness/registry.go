@@ -43,6 +43,9 @@ type Task struct {
 	// AnsweredAt is when task answer or deny last pressed a key on the worker's dialog. A screen read
 	// taken before it is stale, and is dropped.
 	AnsweredAt float64 `json:"answered_at,omitempty"`
+	// Unreachable is when the task's server first failed to answer, 0 while it answers. A server that
+	// stays unreachable past unreachableTTL is gone, and the task is lost.
+	Unreachable float64 `json:"unreachable,omitempty"`
 }
 
 // DialogMark is the dialog on a worker's screen. It is dropped when the worker's input line is seen again
