@@ -754,3 +754,15 @@ func TestHcEnvUsesTheTerminalsSocket(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// An unreachable core lists nothing for ls, and is an error for a caller that must tell a gone pane from
+// an unknown one (review F10).
+func TestHcUnreachableCoreIsUnknown(t *testing.T) {
+	b := &HcBackend{probe: func() bool { return false }}
+	if panes, err := b.ListPanes(); err != nil || len(panes) != 0 {
+		t.Fatalf("ls: panes=%v err=%v", panes, err)
+	}
+	if panes, err := ListLive(b); err == nil {
+		t.Errorf("unreachable core: panes=%v err=nil (reconcile would mark every hc task lost)", panes)
+	}
+}

@@ -31,7 +31,7 @@ The lead owns "done". The worker's session has the files loaded, so it is the ri
 
 `task send` on a ready, failed or blocked task returns it to `running` and adds one to `round`. The worker's next `task done` returns it to `ready`.
 
-A backend error during reconcile leaves the status alone: unknown is not gone. Registry version 1 files are migrated on read.
+A backend error during reconcile leaves the status alone: unknown is not gone. A terminal server that does not answer (hc's core during a restart) is such an error, not a server with no panes. Registry version 1 files are migrated on read.
 
 # Surviving tabs
 

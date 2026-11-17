@@ -228,7 +228,7 @@ func (t *Tasks) listPanes(paneID string, ref map[string]string) (term.Backend, [
 	if err != nil {
 		return nil, nil, err
 	}
-	panes, err := b.ListPanes()
+	panes, err := term.ListLive(b) // a server that does not answer is unknown, not a server with no panes
 	if m != nil {
 		m.lists[key] = &paneList{b, panes, err}
 	}

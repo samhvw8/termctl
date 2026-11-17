@@ -1237,3 +1237,40 @@ func TestReuseLabelsThePaneWithTheTaskID(t *testing.T) {
 		t.Fatalf("label %q, want %q", r.other.Label, x.ID)
 	}
 }
+
+// downFake is a backend whose server stops answering, as hc's core during a restart: ListPanes says
+// nothing, ListLive fails.
+type downFake struct {
+	*termtest.Fake
+	down bool
+}
+
+func (f *downFake) ListPanes() ([]*term.Pane, error) {
+	if f.down {
+		return nil, nil
+	}
+	return f.Fake.ListPanes()
+}
+
+func (f *downFake) ListLive() ([]*term.Pane, error) {
+	if f.down {
+		return nil, term.BackendErr("the server is not running")
+	}
+	return f.Fake.ListPanes()
+}
+
+// A server that does not answer is unknown, not gone: its tasks are never marked lost (review F10).
+func TestReconcileKeepsTasksWhileTheServerDoesNotAnswer(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	f := &downFake{Fake: r.b, down: true}
+	ts := r.as(r.owner)
+	ts.Backend = f
+	ts.Factory = func(string, map[string]string) (term.Backend, error) { return f, nil }
+	if err := ts.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if g := mustGet(t, r, x.ID); g.Status != "running" {
+		t.Fatalf("a task of an unreachable server became %s", g.Status)
+	}
+}

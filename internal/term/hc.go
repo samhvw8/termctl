@@ -354,6 +354,12 @@ func (b *HcBackend) ListPanes() ([]*Pane, error) {
 	if !b.running() {
 		return nil, nil
 	}
+	return b.ListLive()
+}
+
+// ListLive is ListPanes that fails when no core answers: during `hc server restart` the terminals keep
+// running, so a recorded pane is unknown then, not gone. It starts nothing either.
+func (b *HcBackend) ListLive() ([]*Pane, error) {
 	entries, err := b.list()
 	if err != nil {
 		return nil, err

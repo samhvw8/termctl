@@ -98,6 +98,21 @@ type ProgramStatus struct {
 // Blocked says the program reported that it waits on a person. It is a hint, never proof of a dialog.
 func (s ProgramStatus) Blocked() bool { return s.State == "blocked" }
 
+// LiveLister is an optional backend interface for a terminal server that may not be running (hc's core).
+// Its ListPanes returns no panes and no error then, so ls reports nothing and starts nothing; ListLive
+// fails instead, so a caller that recorded a pane can tell "gone" from "cannot tell".
+type LiveLister interface {
+	ListLive() ([]*Pane, error)
+}
+
+// ListLive lists a backend's panes, and fails when its server does not answer (see LiveLister).
+func ListLive(b Backend) ([]*Pane, error) {
+	if l, ok := b.(LiveLister); ok {
+		return l.ListLive()
+	}
+	return b.ListPanes()
+}
+
 // StatusReader is an optional backend interface: the program status of many panes in one cheap read
 // (no subprocess per pane). Panes the terminal knows no status for are left out of the map, which is
 // keyed by Pane.ID. tmux and Ghostty have none: tmux does not answer OSC 7501, so agents do not send it there.
