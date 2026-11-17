@@ -45,10 +45,17 @@ func iterm2KeyBytes(key string) (string, error) {
 	return string(rune(k[len(k)-1] - 'a' + 1)), nil
 }
 
-// ITerm2Backend keeps one websocket for the process lifetime.
+// itermConn is the open API connection; tests stand in for it.
+type itermConn interface {
+	Call(ctx context.Context, req *api.ClientOriginatedMessage) (*api.ServerOriginatedMessage, error)
+	Close() error
+}
+
+// ITerm2Backend keeps one websocket open and opens a new one after a call broke it.
 type ITerm2Backend struct {
-	mu     sync.Mutex
-	client *api.Client
+	mu      sync.Mutex
+	client  itermConn
+	connect func(ctx context.Context) (itermConn, error) // tests; nil connects to iTerm2
 }
 
 var (
@@ -78,14 +85,20 @@ func (b *ITerm2Backend) Available() bool {
 
 func (b *ITerm2Backend) ServerRef() map[string]string { return map[string]string{} }
 
-// call runs one API request. Connecting happens on first use.
+// call runs one API request. Connecting happens on first use. Any error other than one iTerm2 answered
+// with has closed the websocket (a timeout too), so the client is dropped and the next call connects
+// again: a long-lived watcher would otherwise fail every call after one broken read.
 func (b *ITerm2Backend) call(req *api.ClientOriginatedMessage) (*api.ServerOriginatedMessage, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), apiTimeout)
 	defer cancel()
 	if b.client == nil {
-		c, err := api.Connect(ctx, filepath.Base(os.Args[0]))
+		connect := b.connect
+		if connect == nil {
+			connect = func(ctx context.Context) (itermConn, error) { return api.Connect(ctx, filepath.Base(os.Args[0])) }
+		}
+		c, err := connect(ctx)
 		if err != nil {
 			return nil, BackendErr("cannot reach the iTerm2 API: %v. Is the Python API enabled (Settings > General > Magic > Enable Python API)?", err)
 		}
@@ -93,6 +106,11 @@ func (b *ITerm2Backend) call(req *api.ClientOriginatedMessage) (*api.ServerOrigi
 	}
 	resp, err := b.client.Call(ctx, req)
 	if err != nil {
+		var answered *api.ServerError
+		if !errors.As(err, &answered) {
+			b.client.Close()
+			b.client = nil
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, BackendErr("iTerm2 API call timed out after %v", apiTimeout)
 		}

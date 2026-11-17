@@ -107,7 +107,13 @@ func Connect(ctx context.Context, name string) (*Client, error) {
 	return dial(ctx, path, cookie, key, name)
 }
 
-// Call sends one request and waits for the response with its ID.
+// ServerError is an error iTerm2 answered with: the request failed, the connection is fine.
+type ServerError struct{ Msg string }
+
+func (e *ServerError) Error() string { return e.Msg }
+
+// Call sends one request and waits for the response with its ID. An error iTerm2 answered with is a
+// *ServerError; any other error closed the connection (coder/websocket closes it on any error).
 func (c *Client) Call(ctx context.Context, req *ClientOriginatedMessage) (*ServerOriginatedMessage, error) {
 	c.next++
 	req.Id = proto.Int64(c.next)
@@ -131,7 +137,7 @@ func (c *Client) Call(ctx context.Context, req *ClientOriginatedMessage) (*Serve
 			continue // a notification, or a late reply
 		}
 		if resp.Error != nil {
-			return nil, errors.New(resp.GetError())
+			return nil, &ServerError{resp.GetError()}
 		}
 		return &resp, nil
 	}
