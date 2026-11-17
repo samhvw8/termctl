@@ -359,6 +359,7 @@ func claudeScreen(body []string, question []string, opts []string, extra []strin
 type swapper struct {
 	*termtest.Fake
 	pane      string
+	screen    []string // when set, the pane shows this
 	captures  int
 	onCapture func(n int)
 	onEnter   func()
@@ -372,6 +373,9 @@ func (s *swapper) Capture(p *term.Pane, n int) ([]string, error) {
 				s.onCapture(n)
 			}
 		}(s.captures)
+		if s.screen != nil {
+			return append([]string{}, s.screen...), nil
+		}
 	}
 	return s.Fake.Capture(p, n)
 }
@@ -560,11 +564,40 @@ func TestFingerprintCoversTheWholeRequest(t *testing.T) {
 
 	r := newRig(t)
 	x, _ := dialogTask(t, r)
-	r.b.State[x.Pane].Dialog = nil
-	r.b.State[x.Pane].Log = cut
-	s := &swapper{Fake: r.b, pane: x.Pane}
+	s := &swapper{Fake: r.b, pane: x.Pane, screen: cut}
 	_, _, err := swapTasks(r, s).Answer(x.ID, AnswerOpts{N: 1, Expect: dc.Fingerprint})
 	if !isCode(err, term.CodeGuard) || !strings.Contains(err.Error(), "longer than the screen") {
 		t.Fatalf("answered a truncated request: %v", err)
+	}
+}
+
+// Dialog-shaped output above a visible input box is no dialog: Enter would go into the input line
+// (review F4).
+func TestVisibleInputBoxMeansNoDialog(t *testing.T) {
+	lines := []string{"⏺ The fixture looks like this:", "  Do you want to proceed?", "  ❯ 1. Yes", "    2. No", "  Esc to cancel · Tab to amend", "",
+		vrule, "❯ ", vrule, "  ? for shortcuts"}
+	prof := Profiles["claude"]
+	if prof.ReadInput(lines) == nil {
+		t.Fatal("box not read")
+	}
+	if d := prof.ReadDialog(lines); d != nil {
+		t.Errorf("read a dialog while the input box shows: %q", d.Question)
+	}
+}
+
+// A hint under the options is not part of the last option (review F5).
+func TestHintLineNotPartOfLastOption(t *testing.T) {
+	for name, extra := range map[string][]string{"after a blank": {"", " Press Tab to always allow this"}, "not indented": {" Press Tab to always allow this"}} {
+		d := claudeReadDialog(claudeScreen([]string{"rm x"}, []string{"Do you want to proceed?"}, []string{"Yes", "No"}, extra))
+		if d == nil {
+			t.Fatal(name, "not read")
+		}
+		if o := d.Option(2); o.Text != "No" || o.Persist {
+			t.Errorf("%s: last option polluted: %+v", name, *o)
+		}
+	}
+	d := claudeReadDialog(claudeScreen([]string{"rm x"}, []string{"Do you want to proceed?"}, []string{"Yes", "Yes, and always allow\nrm in this folder", "No"}, nil))
+	if d == nil || d.Option(2).Text != "Yes, and always allow rm in this folder" {
+		t.Errorf("a wrapped option: %+v", d)
 	}
 }

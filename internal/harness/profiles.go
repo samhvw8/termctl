@@ -208,6 +208,18 @@ func simple(name string) *Profile {
 		ReadInput: genericInput, StableView: same, InterruptKeys: []string{"escape"}}
 }
 
+// unlessInput reads no dialog while the input line shows: a harness hides its input box while it asks,
+// so dialog-shaped text above a visible box is output (a fixture, a quoted screen), and Enter there would
+// go into the input line.
+func unlessInput(read func([]string) *Dialog, input func([]string) *string) func([]string) *Dialog {
+	return func(lines []string) *Dialog {
+		if input(lines) != nil {
+			return nil
+		}
+		return read(lines)
+	}
+}
+
 // Profiles by name. "generic" covers any other program.
 var Profiles = func() map[string]*Profile {
 	claude := simple("claude")
@@ -219,7 +231,7 @@ var Profiles = func() map[string]*Profile {
 	claude.ReadOnlyFlags = `--setting-sources project --permission-mode dontAsk --disallowedTools Edit Write MultiEdit NotebookEdit ` +
 		`--allowedTools Read Grep Glob 'Bash(git status *)' 'Bash(git diff *)' 'Bash(git log *)' 'Bash(git show *)' 'Bash(harness-ops task done *)'`
 	claude.BusyPatterns = []*regexp.Regexp{regexp.MustCompile(`(?i)esc to interrupt`), claudeWorking}
-	claude.ReadDialog = claudeReadDialog // Claude Code 2.1.326: "Do you want to proceed?", "❯ 1. Yes"
+	claude.ReadDialog = unlessInput(claudeReadDialog, claudeInput) // Claude Code 2.1.326: "Do you want to proceed?", "❯ 1. Yes"
 
 	omp := simple("omp")
 	omp.Calibrated, omp.PromptRequired, omp.InterruptVerified = true, true, true
@@ -239,7 +251,7 @@ var Profiles = func() map[string]*Profile {
 		regexp.MustCompile(`(?m)^\s*[\x{2800}-\x{28ff}]\s`)}
 	// Antigravity CLI 1.5.10: "Run this command?", "> 1. Yes, run command". The dialog hides the input box and
 	// keeps "esc to cancel" on the status line, so agy looks busy while it waits for an answer.
-	agy.ReadDialog = agyReadDialog
+	agy.ReadDialog = unlessInput(agyReadDialog, agyInput)
 
 	aider := simple("aider")
 	aider.InterruptKeys = []string{"ctrl-c"}

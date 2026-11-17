@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/samhvw8/termctl/internal/term"
 )
@@ -63,6 +64,8 @@ type dialogSpec struct {
 	// wrapped: the question may wrap onto lines above its "?" line, up to a blank line or a rule (Claude
 	// Code always draws one of these between the request and the question).
 	wrapped bool
+	// indented: an option's wrapped text is indented under its first line's text. agy wraps to column 0.
+	indented bool
 }
 
 var (
@@ -74,7 +77,7 @@ var (
 	// harness adds later ("Yes, and auto-accept edits") needs --persist until it is listed here.
 	oneShotRe = regexp.MustCompile(`(?i)^(yes|yes, (run (this |the )?command|proceed|allow( access)?( once)?|allow (this )?once)|allow( once)?|(no|cancel|deny|reject|exit)\b.*)$`)
 
-	claudeDialog = dialogSpec{footer: regexp.MustCompile(`(?i)^esc to cancel`), skip: regexp.MustCompile(`^Tip: `), wrapped: true}
+	claudeDialog = dialogSpec{footer: regexp.MustCompile(`(?i)^esc to cancel`), skip: regexp.MustCompile(`^Tip: `), wrapped: true, indented: true}
 	// agy's "↑/↓ Navigate" footer is under every numbered picker (a model choice too), so only a question
 	// that asks for permission counts: "Run this command?", "Allow access to this file?".
 	agyDialog = dialogSpec{footer: regexp.MustCompile(`^↑/↓ Navigate`),
@@ -118,18 +121,26 @@ func readDialog(lines []string, spec dialogSpec) *Dialog {
 	}
 	d := &Dialog{}
 	marks := 0
+	col, joined := 0, true // where the last option's text starts; no blank line since it
 	for _, ln := range lines[first:footer] {
 		t := strings.TrimSpace(ln)
 		if t == "" {
+			joined = false
 			continue
 		}
-		if m := optionRe.FindStringSubmatch(ln); m != nil && m[2] == fmt.Sprint(len(d.Options)+1) {
-			o := Option{N: len(d.Options) + 1, Text: strings.TrimSpace(m[3])}
-			if m[1] != "" {
+		if m := optionRe.FindStringSubmatchIndex(ln); m != nil && ln[m[4]:m[5]] == fmt.Sprint(len(d.Options)+1) {
+			o := Option{N: len(d.Options) + 1, Text: strings.TrimSpace(ln[m[6]:m[7]])}
+			if m[2] >= 0 {
 				d.Selected = o.N
 				marks++
 			}
 			d.Options = append(d.Options, o)
+			col, joined = utf8.RuneCountInString(ln[:m[6]]), true
+			continue
+		}
+		// A wrapped option continues right under it; a hint after a blank line, or one not indented under
+		// the option's text where the harness indents, is not part of it.
+		if !joined || (spec.indented && utf8.RuneCountInString(ln)-utf8.RuneCountInString(strings.TrimLeft(ln, " ")) < col) {
 			continue
 		}
 		last := &d.Options[len(d.Options)-1]
