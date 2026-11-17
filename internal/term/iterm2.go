@@ -514,15 +514,36 @@ func itermProgramStatus(s itermStatus) (ProgramStatus, bool) {
 // StatusIsFree: the status is a call on the websocket the backend already holds.
 func (b *ITerm2Backend) StatusIsFree() bool { return true }
 
+// A pane whose read failed because its session ended since the list is left out; the first other failure
+// (an iTerm2 older than 3.7.6, a broken connection) is returned with what was read.
 func (b *ITerm2Backend) ProgramStatuses(panes []*Pane) (map[string]ProgramStatus, error) {
 	out := map[string]ProgramStatus{}
+	var failed []*Pane
+	var errs []error
 	for _, p := range panes {
 		s, err := b.sessionStatus(p.Native)
 		if err != nil {
-			continue // a session that ended since the list; others still count
+			failed, errs = append(failed, p), append(errs, err)
+			continue
 		}
 		if st, ok := itermProgramStatus(s); ok {
 			out[p.ID] = st
+		}
+	}
+	if len(failed) == 0 {
+		return out, nil
+	}
+	live, err := b.sessions()
+	if err != nil {
+		return out, err
+	}
+	alive := map[string]bool{}
+	for _, s := range live {
+		alive[s.id] = true
+	}
+	for i, p := range failed {
+		if alive[p.Native] {
+			return out, errs[i]
 		}
 	}
 	return out, nil

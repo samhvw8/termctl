@@ -35,11 +35,11 @@ sources:
 
 `Mover`, `Breaker`, `Swapper` and `Arranger` are optional too: see [moving and arranging](#moving-and-arranging).
 
-`StatusReader` is optional: `ProgramStatuses(panes)` gives many panes' program status in one cheap read. See [program status](#program-status).
+`StatusReader` is optional: `ProgramStatuses(panes)` gives many panes' program status in one call; its cost per backend is in the table below, and `FreeStatus` marks the backends whose read starts no process. See [program status](#program-status).
 
 # Program status
 
-Agents report what they do with OSC 7501 (`ESC ] 7501 ; state=blocked:kind=permission:msg=<base64> BEL`; pairs split by `:`), but only where the terminal answers the `OSC 7501 ; ?` check.[^osc7501] `term.ProgramStatus{State, Kind, Msg}` is the common form; `State` is lower case, and iTerm2's `waiting` is given as `blocked`. `Blocked()` is a hint that a person is needed, never proof of a dialog: the watcher still reads the screen.
+Agents report what they do with OSC 7501 (`ESC ] 7501 ; state=blocked:kind=permission:msg=<base64> BEL`; pairs split by `:`), but only where the terminal answers the `OSC 7501 ; ?` check.[^osc7501] `term.ProgramStatus{State, Kind, Msg}` is the common form; `State` is lower case, and iTerm2's `waiting` is given as `blocked`. `Blocked()` is a hint that a person is needed, never proof of a dialog: the watcher still reads the screen. A pane that ended since the list is left out of the result; any other failed read is returned as an error with what was read, and the watcher logs it once (`status: ...`) until it changes. On iTerm2 a failed call for a session that is still listed is such an error, so an iTerm2 older than 3.7.6 shows its hint in the watcher's log. Until 2026-11-17 iTerm2 dropped every failed read silently.
 
 | Backend | Source | Cost | Kind, Msg |
 |---|---|---|---|

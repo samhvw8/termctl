@@ -55,7 +55,7 @@ type screenSource struct{ t *Tasks }
 
 func (s screenSource) Signals(tasks []*Task) []Signal {
 	ws := s.t.workers(tasks)
-	return s.t.read(ws, programStatuses(ws))
+	return s.t.read(ws, programStatuses(ws, nil))
 }
 
 // workers resolves the panes of launched tasks whose harness has a dialog reader. Panes are listed once
@@ -85,8 +85,9 @@ func (t *Tasks) workers(tasks []*Task) []worker {
 }
 
 // programStatuses asks each backend once for the status of its workers' panes. A backend without a
-// StatusReader falls back to NativeStatus, whose first word is the state (free on tmux and Ghostty).
-func programStatuses(ws []worker) map[string]term.ProgramStatus {
+// StatusReader falls back to NativeStatus, whose first word is the state (free on tmux and Ghostty). A
+// failed read keeps what was read, and its error goes to warn when given.
+func programStatuses(ws []worker, warn func(error)) map[string]term.ProgramStatus {
 	out := map[string]term.ProgramStatus{}
 	groups := map[term.Backend][]*term.Pane{}
 	var order []term.Backend
@@ -98,10 +99,12 @@ func programStatuses(ws []worker) map[string]term.ProgramStatus {
 	}
 	for _, b := range order {
 		if r, ok := b.(term.StatusReader); ok {
-			if st, err := r.ProgramStatuses(groups[b]); err == nil {
-				for id, s := range st {
-					out[id] = s
-				}
+			st, err := r.ProgramStatuses(groups[b])
+			if err != nil && warn != nil {
+				warn(err)
+			}
+			for id, s := range st {
+				out[id] = s
 			}
 			continue
 		}
@@ -442,7 +445,7 @@ func (t *Tasks) Watch(o WatchOpts) error {
 			return nil
 		}
 		w.ws = t.workers(running)
-		status := programStatuses(w.ws)
+		status := programStatuses(w.ws, w.statusErr)
 		w.remember(status)
 		w.handle(d, t.read(w.ws, status))
 		t.stopMemo()
@@ -457,10 +460,19 @@ func (t *Tasks) Watch(o WatchOpts) error {
 // watchState is what a watcher keeps between rounds: the workers of the last round and the status each
 // had, so that a status poll can tell which worker turned blocked.
 type watchState struct {
-	t    *Tasks
-	say  func(string)
-	ws   []worker
-	seen map[string]term.ProgramStatus
+	t       *Tasks
+	say     func(string)
+	ws      []worker
+	seen    map[string]term.ProgramStatus
+	lastErr string
+}
+
+// statusErr logs a failed status read once, until a different one comes: the read repeats every second.
+func (w *watchState) statusErr(err error) {
+	if msg := err.Error(); msg != w.lastErr {
+		w.lastErr = msg
+		w.say("status: " + msg)
+	}
 }
 
 func (w *watchState) remember(status map[string]term.ProgramStatus) {
@@ -508,7 +520,7 @@ func (w *watchState) between(interval, statusEvery float64) {
 		if left <= 0 {
 			return
 		}
-		status := programStatuses(polled)
+		status := programStatuses(polled, w.statusErr)
 		var turned []worker
 		for _, x := range polled {
 			now, before := status[x.p.ID], w.seen[x.p.ID]

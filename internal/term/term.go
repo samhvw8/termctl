@@ -113,9 +113,12 @@ func ListLive(b Backend) ([]*Pane, error) {
 	return b.ListPanes()
 }
 
-// StatusReader is an optional backend interface: the program status of many panes in one cheap read
-// (no subprocess per pane). Panes the terminal knows no status for are left out of the map, which is
-// keyed by Pane.ID. tmux and Ghostty have none: tmux does not answer OSC 7501, so agents do not send it there.
+// StatusReader is an optional backend interface: the program status of many panes in one call. The cost
+// differs (FreeStatus marks the backends whose read starts no process): iTerm2 makes one websocket call
+// per pane, hc runs one `hc ls` plus one `hc get` per blocked pane, Rex one `rex do`. Panes the terminal
+// knows no status for, or that ended since the list, are left out of the map, which is keyed by Pane.ID.
+// On another failure the map holds what was read and the error says what failed. tmux and Ghostty have
+// none: tmux does not answer OSC 7501, so agents do not send it there.
 type StatusReader interface {
 	ProgramStatuses(panes []*Pane) (map[string]ProgramStatus, error)
 }
