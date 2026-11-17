@@ -52,7 +52,7 @@ func (d *Dialog) lines() []string {
 	} else {
 		d.shown = d.Selected
 	}
-	out := []string{strings.Repeat("─", 40), " Bash command", " " + d.Body, " Do you want to proceed?"}
+	out := []string{strings.Repeat("─", 40), " Bash command", " " + d.Body, "", " Do you want to proceed?"}
 	for i, o := range d.Options {
 		mark := "  "
 		if i+1 == d.shown {

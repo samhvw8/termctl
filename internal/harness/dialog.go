@@ -21,12 +21,15 @@ type Option struct {
 
 // Dialog is a permission or approval prompt on a harness's screen. Fingerprint is a short hash of the
 // question, body and option texts; it stays the same while the same dialog is on screen, whatever is selected.
+// Truncated: the rule above the request is not on screen, so the request's start is unread and the
+// fingerprint does not cover it.
 type Dialog struct {
 	Question    string   `json:"question"`
 	Body        string   `json:"body"`
 	Options     []Option `json:"options"`
 	Selected    int      `json:"selected"`
 	Fingerprint string   `json:"fingerprint"`
+	Truncated   bool     `json:"truncated,omitempty"`
 }
 
 // Option returns choice n, or nil.
@@ -57,6 +60,9 @@ type dialogSpec struct {
 	skip     *regexp.Regexp // body lines that are not part of the request, such as tips
 	question *regexp.Regexp // when set, only a question that matches is a permission dialog
 	asks     *regexp.Regexp // when set, a body that matches also makes it a permission dialog
+	// wrapped: the question may wrap onto lines above its "?" line, up to a blank line or a rule (Claude
+	// Code always draws one of these between the request and the question).
+	wrapped bool
 }
 
 var (
@@ -68,7 +74,7 @@ var (
 	// harness adds later ("Yes, and auto-accept edits") needs --persist until it is listed here.
 	oneShotRe = regexp.MustCompile(`(?i)^(yes|yes, (run (this |the )?command|proceed|allow( access)?( once)?|allow (this )?once)|allow( once)?|(no|cancel|deny|reject|exit)\b.*)$`)
 
-	claudeDialog = dialogSpec{footer: regexp.MustCompile(`(?i)^esc to cancel`), skip: regexp.MustCompile(`^Tip: `)}
+	claudeDialog = dialogSpec{footer: regexp.MustCompile(`(?i)^esc to cancel`), skip: regexp.MustCompile(`^Tip: `), wrapped: true}
 	// agy's "↑/↓ Navigate" footer is under every numbered picker (a model choice too), so only a question
 	// that asks for permission counts: "Run this command?", "Allow access to this file?".
 	agyDialog = dialogSpec{footer: regexp.MustCompile(`^↑/↓ Navigate`),
@@ -79,13 +85,11 @@ var (
 func claudeReadDialog(lines []string) *Dialog { return readDialog(lines, claudeDialog) }
 func agyReadDialog(lines []string) *Dialog    { return readDialog(lines, agyDialog) }
 
-const (
-	footerReach = 6  // the footer is among the last lines of the screen
-	bodyReach   = 20 // the request is at most this many lines above the question
-)
+const footerReach = 6 // the footer is among the last lines of the screen
 
 // readDialog finds the footer near the bottom, the numbered options above it with exactly one
-// selected, the question ending in "?" right above option 1, and the request above that up to a rule.
+// selected, the question ending in "?" right above option 1, and the request above that up to a rule. A
+// request whose rule is not on screen is read as far as the screen goes, and marked Truncated.
 func readDialog(lines []string, spec dialogSpec) *Dialog {
 	footer, seen := -1, 0
 	for i := len(lines) - 1; i >= 0 && seen < footerReach; i-- {
@@ -141,11 +145,25 @@ func readDialog(lines []string, spec dialogSpec) *Dialog {
 	if q < 0 || !strings.HasSuffix(strings.TrimSpace(lines[q]), "?") {
 		return nil
 	}
-	d.Question = strings.TrimSpace(lines[q])
+	top := q
+	for spec.wrapped && top > 0 {
+		t := strings.TrimSpace(lines[top-1])
+		if t == "" || ruleRe.MatchString(t) || dashRuleRe.MatchString(t) {
+			break
+		}
+		top--
+	}
+	var question []string
+	for _, ln := range lines[top : q+1] {
+		question = append(question, strings.TrimSpace(ln))
+	}
+	d.Question = strings.Join(question, " ")
 	var body []string
-	for i := q - 1; i >= 0 && i >= q-bodyReach; i-- {
+	d.Truncated = true
+	for i := top - 1; i >= 0; i-- {
 		t := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(lines[i]), "│")) // Claude Code marks a long command with │
 		if ruleRe.MatchString(t) {
+			d.Truncated = false
 			break
 		}
 		if t == "" || dashRuleRe.MatchString(t) || (spec.skip != nil && spec.skip.MatchString(t)) {
@@ -166,11 +184,16 @@ func readDialog(lines []string, spec dialogSpec) *Dialog {
 
 func squash(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-// fingerprint ignores spacing, so a redraw that wraps lines differently keeps the same print.
+// unspaced drops all whitespace: a terminal wraps a line anywhere, inside a word too, and the capture
+// cannot tell a wrap from a space.
+func unspaced(s string) string { return strings.Join(strings.Fields(s), "") }
+
+// fingerprint ignores whitespace, so a redraw that wraps lines differently (a re-tiled pane) keeps the same
+// print. Two requests that differ only in where their spaces are share it.
 func fingerprint(d *Dialog) string {
-	parts := []string{squash(d.Question), squash(d.Body)}
+	parts := []string{unspaced(d.Question), unspaced(d.Body)}
 	for _, o := range d.Options {
-		parts = append(parts, squash(o.Text))
+		parts = append(parts, unspaced(o.Text))
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(sum[:4])
@@ -198,6 +221,9 @@ func DialogLine(target string, d *Dialog) string {
 		cmd += " (add --persist for a [persist] choice)"
 	}
 	cmd += fmt.Sprintf("; deny: harness-ops task deny %s --expect %s", target, d.Fingerprint)
+	if d.Truncated {
+		cmd += "; the request is longer than the screen and its start is not read: task answer refuses it"
+	}
 	return fmt.Sprintf("DIALOG %s: %s | %s | %s | %s", d.Fingerprint, squash(d.Question), term.Cut(squash(d.Body), 300), strings.Join(opts, " "), cmd)
 }
 
@@ -224,6 +250,9 @@ func DialogText(target string, d *Dialog) string {
 		fmt.Fprintf(&b, "  %s %d. %s%s\n", mark, o.N, squash(o.Text), persist)
 	}
 	fmt.Fprintf(&b, "fingerprint: %s\n", d.Fingerprint)
+	if d.Truncated {
+		b.WriteString("truncated:   the request is longer than the screen and its start is not read: task answer refuses it, task deny works\n")
+	}
 	fmt.Fprintf(&b, "answer:      %s   (a [persist] choice also needs --persist)\n", AnswerCommand(target, d))
 	fmt.Fprintf(&b, "deny:        harness-ops task deny %s --expect %s\n", target, d.Fingerprint)
 	return b.String()
