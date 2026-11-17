@@ -50,10 +50,19 @@ Talk to coding-agent panes. Put options before the target: everything after the 
   task review ID --blind --harness H [--model M] [--brief-file F]   a new session that never sees the worker's report
   task close [--force] ID                     refused until the task is accepted, unless --force
   watch [--interval S]                        tell you of each new dialog on the panes you started; task new starts one
+  log [--project DIR] [--task ID] [--pane ID] [--since 2h|3d|DATE] [-n N] [--json]   the journal, oldest first (default: last 50)
+  resume (TASK-ID | DIR)                      what a new session needs: a task's brief, report and every message in full;
+                                              or a project's open tasks, notes and last entries (DIR: . for your pane's project)
+  note WHAT (TEXT... | --file F | stdin)      file a text (a job brief, a plan) in your project's journal folder; prints its path
   state clean                                 remove the throwaway directory in TERMCTL_STATE_DIR; refuses the live one
 
 --where auto (the default for spawn and task new): a new agent splits the largest pane in your tab, whatever
 its folder, up to 12 panes, and evens out the sizes; then a tab of an agent you started; then a new tab beside yours.
+
+Journal: every msg, spawn, slash, interrupt, close, note and task event is one line of
+<state>/journal.jsonl; long messages, prompts, briefs and notes are files in <state>/projects/<project>/,
+each starting with "<project path> · <unix time> · <local time> (<zone>)". <state> is TERMCTL_STATE_DIR,
+else ~/.local/state/termctl.
 
 task wait prints a DIALOG block (JSON: "event": "dialog") instead of the task table (JSON: "event": "finished")
 when a worker waits on a dialog; both exit 0. A [persist] choice widens permission and needs --persist.
@@ -118,7 +127,7 @@ func fillStatus(ops *harness.Ops, panes []*term.Pane) {
 }
 
 func (a *App) newOps(b term.Backend, sender *term.Pane) *harness.Ops {
-	return harness.NewOps(b, sender, a.Clock, a.Inbox)
+	return harness.NewOps(b, sender, a.Clock, "")
 }
 
 func (a *App) openTasks(o *Options, b term.Backend) (*harness.Tasks, error) {
@@ -139,7 +148,7 @@ func (a *App) tasksFor(o *Options, b term.Backend, sender *term.Pane) *harness.T
 			ref = other.ServerRef()
 		}
 	}
-	return &harness.Tasks{Reg: harness.NewRegistry(""), Backend: b, Sender: sender, SenderRef: ref, Clock: a.Clock, Inbox: a.Inbox, Factory: a.Factory}
+	return &harness.Tasks{Reg: harness.NewRegistry(""), Backend: b, Sender: sender, SenderRef: ref, Clock: a.Clock, Factory: a.Factory}
 }
 
 // gaveWork is called when a msg or a spawn's prompt reached pane. A pane the caller started (a pair partner,
@@ -257,7 +266,7 @@ func (a *App) deliverPending() {
 	if len(d.Pending) == 0 {
 		return
 	}
-	t := &harness.Tasks{Reg: reg, Clock: a.Clock, Inbox: a.Inbox}
+	t := &harness.Tasks{Reg: reg, Clock: a.Clock}
 	if _, err := t.FlushPending(); err != nil {
 		fmt.Fprintf(a.Err, "harness-ops: warning: could not deliver pending task results: %v\n", err)
 	}
@@ -305,6 +314,12 @@ func (a *App) harness(argv []string) error {
 		return a.watch(rest, o)
 	case "answer", "deny":
 		return a.answer(cmd, rest, o)
+	case "log":
+		return a.logCmd(rest, o)
+	case "resume":
+		return a.resumeCmd(rest, o)
+	case "note":
+		return a.noteCmd(rest, tail, dashed, o)
 	case "move", "pull", "swap", "arrange":
 		return a.harnessLayout(cmd, rest, o)
 	case "which", "read", "capture":

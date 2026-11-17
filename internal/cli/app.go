@@ -19,7 +19,6 @@ type Options struct{ Backend, Socket string }
 type App struct {
 	Out, Err    io.Writer
 	Clock       harness.Clock
-	Inbox       string
 	OpenBackend func(o *Options, target string) (term.Backend, error)
 	OpenSender  func(o *Options, b term.Backend) (*term.Pane, error)
 	// Factory reopens the backend of a recorded pane; nil uses the real backends (tests set it).

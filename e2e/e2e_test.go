@@ -302,6 +302,30 @@ func TestTaskNewDoneNotifyClose(t *testing.T) {
 	if _, out, _ := r.ops(r.harness, "task", "ls"); strings.Contains(out, id) {
 		t.Fatal(out)
 	}
+
+	// The journal holds the whole task, so a new session can resume it.
+	code, out, stderr := r.ops(r.harness, "log", "--task", id)
+	if code != 0 {
+		t.Fatal(stderr)
+	}
+	var events []string
+	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
+		events = append(events, strings.Fields(l)[2])
+	}
+	want := "spawn task.new task.done msg msg task.done msg task.accept task.close"
+	if strings.Join(events, " ") != want {
+		t.Fatalf("log --task %s: events %v, want %s\n%s", id, events, want, out)
+	}
+	code, out, stderr = r.ops(r.harness, "resume", id)
+	if code != 0 {
+		t.Fatal(stderr)
+	}
+	t.Log(out)
+	for _, s := range []string{"## Brief", "write the report", "report written", "please fix the typo", "typo fixed", "task.close"} {
+		if !strings.Contains(out, s) {
+			t.Fatalf("resume lacks %q", s)
+		}
+	}
 }
 
 func paneAlive(t *testing.T, pane string) bool {

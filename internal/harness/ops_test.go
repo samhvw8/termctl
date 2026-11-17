@@ -78,9 +78,18 @@ func TestLongAndMultilineGoToFile(t *testing.T) {
 		if !strings.HasPrefix(line, tag+" Long message; read the file ") || strings.Contains(line, "\n") {
 			t.Fatal(line)
 		}
-		data, err := os.ReadFile(strings.SplitN(line, "read the file ", 2)[1])
-		if err != nil || !strings.HasPrefix(string(data), tag+"\n\n") || !strings.Contains(string(data), body) {
+		path := strings.SplitN(line, "read the file ", 2)[1]
+		data, err := os.ReadFile(path)
+		head, rest, _ := strings.Cut(string(data), "\n\n")
+		if err != nil || !strings.HasPrefix(head, ProjectOf(r.m)+" · ") || !strings.HasPrefix(rest, tag+"\n\n") || !strings.Contains(rest, body) {
 			t.Fatal(err, string(data))
+		}
+		if filepath.Base(filepath.Dir(path)) != "w-me" || filepath.Base(filepath.Dir(filepath.Dir(path))) != "projects" {
+			t.Fatalf("the long message is not in the sender's project folder: %s", path)
+		}
+		entries, bad, err := r.ops.Journal.Read(Filter{})
+		if err != nil || bad != 0 || len(entries) != 1 || entries[0].Event != "msg" || entries[0].File != path || entries[0].To != r.t.Address() {
+			t.Fatalf("journal: %+v %d %v", entries, bad, err)
 		}
 	}
 }

@@ -68,7 +68,6 @@ type Tasks struct {
 	SenderRef map[string]string
 	Factory   func(paneID string, ref map[string]string) (term.Backend, error)
 	Clock     Clock
-	Inbox     string
 
 	memo      *paneMemo // one pane list per backend server while a watch round runs
 	downMu    sync.Mutex
@@ -94,7 +93,34 @@ func (t *Tasks) sleep(s float64) {
 }
 
 func (t *Tasks) ops(b term.Backend, sender *term.Pane) *Ops {
-	return NewOps(b, sender, t.clock(), t.Inbox)
+	return NewOps(b, sender, t.clock(), t.Reg.Root)
+}
+
+// taskOps is ops whose journal entries belong to task x.
+func (t *Tasks) taskOps(b term.Backend, sender *term.Pane, x *Task) *Ops {
+	ops := t.ops(b, sender)
+	ops.Task, ops.Project = x.ID, x.Project
+	return ops
+}
+
+func (t *Tasks) journal() *Journal { return &Journal{Root: t.Reg.Root, Clock: t.clock()} }
+
+// logTask logs a task event from this sender, in the task's project.
+func (t *Tasks) logTask(event string, x *Task, status, text string) {
+	if x == nil {
+		return
+	}
+	project := x.Project
+	if project == "" {
+		project = ProjectOf(t.Sender)
+	}
+	e := Entry{Event: event, Project: project, From: address(t.Sender), FromName: entryName(t.Sender), Task: x.ID,
+		Harness: x.Harness, Status: status, Text: text}
+	e.To = x.Pane
+	if t.Sender != nil && t.Sender.ID == x.Pane {
+		e.To = x.Owner // the worker reports to its owner
+	}
+	t.journal().Record(e)
 }
 
 func (t *Tasks) backendFor(paneID string, ref map[string]string) (term.Backend, error) {
@@ -333,6 +359,9 @@ func (t *Tasks) Exited(id string, code int) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	if d, err := t.Reg.Read(); err == nil {
+		t.logTask("task.exited", d.Tasks[tid], d.Tasks[tid].Status, fmt.Sprintf("the harness exited with status %d", code))
+	}
 	if _, err := t.FlushPending(); err != nil {
 		return nil, err
 	}
@@ -408,7 +437,7 @@ func (t *Tasks) reserve(owner *term.Pane, o NewOpts, pane *term.Pane) (*Task, er
 		task = &Task{
 			ID: newID(), Title: o.Title, Harness: o.Harness, Ref: t.Backend.ServerRef(), Owner: owner.ID, OwnerRef: t.SenderRef,
 			Cwd: o.Cwd, Status: "running", Started: t.clock().Now(), Depth: depth, Notify: "none", Owned: pane == nil,
-			Round: 1, ReviewOf: o.ReviewOf, Blind: o.Blind,
+			Round: 1, ReviewOf: o.ReviewOf, Blind: o.Blind, Project: ProjectOf(owner),
 		}
 		if pane != nil {
 			task.Pane = pane.ID
@@ -419,17 +448,9 @@ func (t *Tasks) reserve(owner *term.Pane, o NewOpts, pane *term.Pane) (*Task, er
 	return task, err
 }
 
-func (t *Tasks) writeBrief(id, text string) (string, error) {
-	dir := filepath.Join(t.Reg.Root, "briefs")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", term.BackendErr("brief: %v", err)
-	}
-	path := filepath.Join(dir, id+".md")
-	body := strings.TrimRight(text, " \n\t") + "\n\n" + footer(id) + "\n"
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		return "", term.BackendErr("brief: %v", err)
-	}
-	return path, nil
+// writeBrief files the brief in the task's project folder of the journal.
+func (t *Tasks) writeBrief(x *Task, text string) (string, error) {
+	return t.journal().WriteFile(x.Project, "brief", x.ID, strings.TrimRight(text, " \n\t")+"\n\n"+footer(x.ID))
 }
 
 func prompt(id string, owner *term.Pane, text, brief string) string {
@@ -542,8 +563,10 @@ func (t *Tasks) New(o NewOpts) (*Task, error) {
 		return nil, err
 	}
 	id := task.ID
-	if err := t.start(ops, owner, o, id, brief, pane); err != nil {
+	ops.Task, ops.Project = id, task.Project
+	if err := t.start(ops, owner, o, task, brief, pane); err != nil {
 		t.fail(id, err)
+		t.logTask("task.new", task, "failed", err.Error())
 		return nil, err
 	}
 	t.WarnUncalibratedLead()
@@ -551,11 +574,20 @@ func (t *Tasks) New(o NewOpts) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	return d.Tasks[id], nil
+	x := d.Tasks[id]
+	text := x.Title
+	if x.ReviewOf != "" {
+		text += " (reviews " + x.ReviewOf + ")"
+	}
+	e := Entry{Event: "task.new", Project: x.Project, From: address(owner), FromName: entryName(owner), To: x.Pane, ToName: id,
+		Task: id, Harness: x.Harness, Status: x.Status, Text: text, File: x.Brief}
+	t.journal().Record(e)
+	return x, nil
 }
 
-func (t *Tasks) start(ops *Ops, owner *term.Pane, o NewOpts, id, brief string, pane *term.Pane) error {
-	path, err := t.writeBrief(id, brief)
+func (t *Tasks) start(ops *Ops, owner *term.Pane, o NewOpts, task *Task, brief string, pane *term.Pane) error {
+	id := task.ID
+	path, err := t.writeBrief(task, brief)
 	if err != nil {
 		return err
 	}
@@ -788,6 +820,18 @@ func (t *Tasks) ClosePane(target string, force bool) (*term.Pane, error) {
 	if err := t.Backend.Close(p); err != nil {
 		return nil, err
 	}
+	e := Entry{Event: "close", Project: ProjectOf(t.Sender), From: address(t.Sender), FromName: entryName(t.Sender),
+		To: p.Address(), ToName: entryName(p), Harness: HarnessName(p)}
+	if task != nil {
+		e.Task, e.Project = task.ID, task.Project
+		if e.Project == "" {
+			e.Project = ProjectOf(t.Sender)
+		}
+	}
+	if force {
+		e.Status = "forced"
+	}
+	t.journal().Record(e)
 	return p, t.Reg.Update(func(d *Data) error {
 		delete(d.Panes, p.ID)
 		for _, x := range d.Tasks {
@@ -882,7 +926,7 @@ func (t *Tasks) Send(id, text string, force bool) error {
 	if p == nil {
 		return term.UsageErr("task %s: its pane is gone", x.ID)
 	}
-	if _, err := t.ops(b, t.Sender).Msg(p, fmt.Sprintf("task %s: %s (%s)", x.ID, text, footer(x.ID)), MsgOpts{Force: force}); err != nil {
+	if _, err := t.taskOps(b, t.Sender, x).Msg(p, fmt.Sprintf("task %s: %s (%s)", x.ID, text, footer(x.ID)), MsgOpts{Force: force}); err != nil {
 		return err
 	}
 	t.WarnUncalibratedLead()
@@ -1087,6 +1131,7 @@ func (t *Tasks) Done(id, status, summary, summaryFile string) (*Task, error) {
 		return nil, term.UsageErr("task done needs --summary or --summary-file")
 	}
 	var tid string
+	var done Task
 	err := t.Reg.Update(func(d *Data) error {
 		x, err := t.find(d.Tasks, id)
 		if err != nil {
@@ -1101,6 +1146,7 @@ func (t *Tasks) Done(id, status, summary, summaryFile string) (*Task, error) {
 		x.Status, x.Ended, x.Summary, x.Notify = stored, t.clock().Now(), summary, "pending"
 		x.Dialog = nil // the worker is reporting, so nothing waits on screen
 		tid = x.ID
+		done = *x
 		tag, err := t.doneTag(x, t.Backend)
 		if err != nil {
 			return err
@@ -1112,6 +1158,7 @@ func (t *Tasks) Done(id, status, summary, summaryFile string) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	t.logTask("task.done", &done, done.Status, summary)
 	deadline := t.clock().Now() + notifyRetry
 	for {
 		if _, err := t.FlushPending(); err != nil {
@@ -1278,7 +1325,12 @@ func (t *Tasks) deliver(p Pending) string {
 	if p.Kind == "dialog" && !ForProcess(pane.Process).Calibrated {
 		return "held" // typed blind, its letters could land in the lead's own menus: task wait returns it
 	}
-	if _, err := t.ops(b, nil).Msg(pane, p.Text, MsgOpts{Tag: p.Tag}); err != nil {
+	ops := t.ops(b, nil)
+	ops.Task = p.Task
+	if d, err := t.Reg.Read(); err == nil && d.Tasks[p.Task] != nil {
+		ops.Project, ops.From = d.Tasks[p.Task].Project, d.Tasks[p.Task].Pane // the worker's report
+	}
+	if _, err := ops.Msg(pane, p.Text, MsgOpts{Tag: p.Tag, Retry: true}); err != nil {
 		var te *term.Error
 		if !errors.As(err, &te) || te.Code != term.CodeDraft {
 			Warn(fmt.Sprintf("could not notify the owner of %s: %v", p.about(), err))
@@ -1324,6 +1376,9 @@ func (t *Tasks) Close(id string, force bool) (*Task, error) {
 		result = c
 		return nil
 	})
+	if err == nil {
+		t.logTask("task.close", result, result.Status, "")
+	}
 	return result, err
 }
 
@@ -1345,6 +1400,7 @@ func (t *Tasks) Accept(id string, closeIt bool) (*Task, error) {
 	}); err != nil {
 		return nil, err
 	}
+	t.logTask("task.accept", x, "done", "")
 	if closeIt {
 		return t.Close(x.ID, false)
 	}

@@ -39,11 +39,6 @@ func (RealClock) Sleep(s float64) { time.Sleep(time.Duration(s * float64(time.Se
 // Warn prints a non-fatal problem.
 var Warn = func(msg string) { fmt.Fprintf(os.Stderr, "harness-ops: warning: %s\n", msg) }
 
-func DefaultInbox() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".cache", "agent-ops")
-}
-
 // HarnessName is the profile name, or the program's name when no profile fits.
 func HarnessName(p *term.Pane) string {
 	if prof := ForProcess(p.Process); prof.Name != "generic" {
@@ -55,22 +50,50 @@ func HarnessName(p *term.Pane) string {
 	return "-"
 }
 
-// Ops talks to harness panes through one backend.
+// Ops talks to harness panes through one backend, and records what it does in the journal.
 type Ops struct {
 	Backend term.Backend
 	Sender  *term.Pane
 	Clock   Clock
-	Inbox   string
+	Journal *Journal
+	Task    string // the task these actions belong to, for the journal; "" for none
+	Project string // the project these actions belong to; "" for the sender's folder
+	From    string // who the journal names as sender when Sender is nil (a report delivered for a worker)
 }
 
-func NewOps(b term.Backend, sender *term.Pane, clock Clock, inbox string) *Ops {
+// NewOps keeps its journal and files under root: the state directory when root is "".
+func NewOps(b term.Backend, sender *term.Pane, clock Clock, root string) *Ops {
 	if clock == nil {
 		clock = RealClock{}
 	}
-	if inbox == "" {
-		inbox = DefaultInbox()
+	if root == "" {
+		root = DefaultRoot()
 	}
-	return &Ops{b, sender, clock, inbox}
+	return &Ops{Backend: b, Sender: sender, Clock: clock, Journal: &Journal{Root: root, Clock: clock}}
+}
+
+// entry starts a journal entry for an action of this sender on p.
+func (o *Ops) entry(event string, p *term.Pane) Entry {
+	project := o.Project
+	if project == "" {
+		project = ProjectOf(o.Sender)
+	}
+	e := Entry{Event: event, Project: project, From: address(o.Sender), FromName: entryName(o.Sender),
+		To: address(p), ToName: entryName(p), Task: o.Task}
+	if o.Sender == nil {
+		e.From = o.From
+	}
+	if p != nil {
+		e.Harness = HarnessName(p)
+	}
+	return e
+}
+
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // Pick resolves a target this caller may act on. Your own pane is refused.
@@ -225,6 +248,9 @@ func (o *Ops) Interrupt(p *term.Pane, key string) ([]string, bool, error) {
 			return nil, false, err
 		}
 	}
+	e := o.entry("interrupt", p)
+	e.Text = strings.Join(keys, "+")
+	o.Journal.Record(e)
 	var after *string
 	for waited := 0.0; waited < interruptLook; waited += poll {
 		o.Clock.Sleep(poll)
@@ -316,7 +342,11 @@ func (o *Ops) Slash(p *term.Pane, command string, force, wait bool, timeout floa
 	if err := o.assertAlone(p, prof, force); err != nil {
 		return err
 	}
-	if err := o.Submit(p, command, prof); err != nil {
+	err := o.Submit(p, command, prof)
+	e := o.entry("slash", p)
+	e.Text, e.Error = command, errText(err)
+	o.Journal.Record(e)
+	if err != nil {
 		return err
 	}
 	if wait {
@@ -349,32 +379,13 @@ func (o *Ops) Tag() (string, error) {
 
 var unsafeName = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 
-func (o *Ops) writeInbox(body string, to *term.Pane) (string, error) {
-	if err := os.MkdirAll(o.Inbox, 0o755); err != nil {
-		return "", term.BackendErr("inbox: %v", err)
-	}
+// writeFile puts a long text for pane to read into the sender's project folder of the journal.
+func (o *Ops) writeFile(kind, body string, to *term.Pane) (string, error) {
 	me := "spawn"
 	if o.Sender != nil {
-		me = unsafeName.ReplaceAllString(term.Cut(o.Sender.Address(), 8), "_")
+		me = term.Cut(o.Sender.Address(), 8)
 	}
-	toID := unsafeName.ReplaceAllString(term.Cut(to.Address(), 8), "_")
-	// A random part, created exclusively: two notices to one owner in the same second (two workers'
-	// dialogs) shared one name, and the second overwrote the first (agy review A6).
-	f, err := os.CreateTemp(o.Inbox, fmt.Sprintf("%s-%s-to-%s-*.md", time.Now().Format("20060102-150405"), me, toID))
-	if err != nil {
-		return "", term.BackendErr("inbox: %v", err)
-	}
-	_, err = f.WriteString(body)
-	if err == nil {
-		err = f.Chmod(0o644)
-	}
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return "", term.BackendErr("inbox: %v", err)
-	}
-	return f.Name(), nil
+	return o.Journal.WriteFile(o.entry("", nil).Project, kind, me+"-to-"+term.Cut(to.Address(), 8), body)
 }
 
 // AssertCleared: leftover text means /clear never ran; typing now would rebuild the joined line.
@@ -394,6 +405,7 @@ type MsgOpts struct {
 	Force, ClearFirst bool
 	Timeout           float64
 	Tag               string
+	Retry             bool // a failure will be tried again: the journal records only the delivery
 }
 
 // Sent is what Msg typed. Busy: the harness was working, so it may hold the message until its turn ends.
@@ -430,18 +442,29 @@ func (o *Ops) Msg(p *term.Pane, text string, opts MsgOpts) (Sent, error) {
 	if err != nil {
 		return Sent{}, err
 	}
-	var line string
+	var line, file string
 	if strings.Contains(text, "\n") || len([]rune(text)) > MaxInline {
-		f, err := o.writeInbox(tag+"\n\n"+text+"\n", p)
-		if err != nil {
+		if file, err = o.writeFile("msg", tag+"\n\n"+text+"\n", p); err != nil {
 			return Sent{}, err
 		}
-		line = tag + " Long message; read the file " + f
+		line = tag + " Long message; read the file " + file
 	} else {
 		line = tag + " " + text
 	}
 	line = Flat(line)
-	return Sent{line, busy}, o.submit(p, line, prof, o.caller())
+	err = o.submit(p, line, prof, o.caller())
+	e := o.entry("msg", p)
+	e.Text, e.File, e.Error = text, file, errText(err)
+	if file != "" {
+		e.Text = preview(text)
+	}
+	if busy {
+		e.Status = "queued"
+	}
+	if err == nil || !opts.Retry {
+		o.Journal.Record(e)
+	}
+	return Sent{line, busy}, err
 }
 
 // busy is one look: the terminal reports the harness working or blocked, or a busy pattern is on screen.
@@ -551,35 +574,46 @@ func (o *Ops) Spawn(harness, where, cwd string, opts SpawnOpts) (*term.Pane, err
 			return p, err
 		}
 	}
+	e := o.entry("spawn", p)
+	e.Harness = harness
+	defer func() { o.Journal.Record(e) }()
 	if err := o.WaitIdle(p, opts.Timeout, prof); err != nil {
+		e.Error = err.Error()
 		return p, err
 	}
 	if strings.TrimSpace(prompt) != "" {
-		line, err := o.firstLine(prompt, opts.PromptFile, p)
+		line, file, err := o.firstLine(prompt, opts.PromptFile, p)
+		e.Text, e.File = preview(prompt), file
+		if file == "" {
+			e.Text = strings.TrimSpace(prompt)
+		}
 		if err != nil {
+			e.Error = err.Error()
 			return p, err
 		}
 		if err := o.Submit(p, line, prof); err != nil {
+			e.Error = err.Error()
 			return p, err
 		}
 	}
 	return p, nil
 }
 
-func (o *Ops) firstLine(prompt, promptFile string, p *term.Pane) (string, error) {
+// firstLine is the line that starts a spawned harness, and the file holding the prompt, if any.
+func (o *Ops) firstLine(prompt, promptFile string, p *term.Pane) (string, string, error) {
 	text := strings.TrimSpace(prompt)
 	if !strings.Contains(text, "\n") && len([]rune(text)) <= MaxInline {
-		return Flat(text), nil
+		return Flat(text), promptFile, nil
 	}
 	path := promptFile
 	if path == "" {
-		f, err := o.writeInbox(text+"\n", p)
+		f, err := o.writeFile("prompt", text+"\n", p)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		path = f
 	}
-	return "Read the file " + path + " and follow its instructions.", nil
+	return "Read the file " + path + " and follow its instructions.", path, nil
 }
 
 // Status is one-shot status for `ls`: the terminal's own report, else a single screen sample.

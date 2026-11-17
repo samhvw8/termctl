@@ -32,8 +32,7 @@ func newRig(t *testing.T) *rig {
 }
 
 func (r *rig) as(p *term.Pane) *Tasks {
-	return &Tasks{Reg: r.reg, Backend: r.b, Sender: p, Clock: r.clock, Inbox: filepath.Join(r.dir, "inbox"),
-		Factory: func(string, map[string]string) (term.Backend, error) { return r.b, nil }}
+	return &Tasks{Reg: r.reg, Backend: r.b, Sender: p, Clock: r.clock, Factory: func(string, map[string]string) (term.Backend, error) { return r.b, nil }}
 }
 
 func (r *rig) new(t *testing.T, ts *Tasks, o NewOpts) (*Task, error) {
@@ -1446,20 +1445,19 @@ func TestFindTellsSeveralFromNone(t *testing.T) {
 }
 
 // Two notices to one owner in the same second went to one inbox file, and the second overwrote the first:
-// worker A's dialog was gone (agy review A6).
-func TestInboxFilesNeverCollide(t *testing.T) {
+// worker A's dialog was gone (agy review A6). The journal's files are created exclusively.
+func TestLongTextFilesNeverCollide(t *testing.T) {
 	r := newRig(t)
 	o := r.tasks.ops(r.b, nil)
-	o.Inbox = t.TempDir()
-	f1, err1 := o.writeInbox("worker A dialog", r.owner)
-	f2, err2 := o.writeInbox("worker B dialog", r.owner)
+	f1, err1 := o.writeFile("msg", "worker A dialog", r.owner)
+	f2, err2 := o.writeFile("msg", "worker B dialog", r.owner)
 	if err1 != nil || err2 != nil || f1 == f2 {
 		t.Fatal(f1, f2, err1, err2)
 	}
 	for f, want := range map[string]string{f1: "worker A dialog", f2: "worker B dialog"} {
 		b, err := os.ReadFile(f)
 		st, _ := os.Stat(f)
-		if err != nil || string(b) != want || st.Mode().Perm() != 0o644 || !strings.HasSuffix(f, ".md") {
+		if err != nil || !strings.HasSuffix(string(b), "\n\n"+want+"\n") || st.Mode().Perm() != 0o644 || !strings.HasSuffix(f, ".md") {
 			t.Fatal(f, string(b), err, st.Mode())
 		}
 	}

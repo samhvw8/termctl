@@ -49,6 +49,7 @@ type Task struct {
 	// Unreachable is when the task's server first failed to answer, 0 while it answers. A server that
 	// stays unreachable past unreachableTTL is gone, and the task is lost.
 	Unreachable float64 `json:"unreachable,omitempty"`
+	Project     string  `json:"project,omitempty"` // the owner's folder at task new: where the journal files it
 	Unknown     Unknown `json:"-"`
 }
 
@@ -405,7 +406,8 @@ func realPath(path string) string {
 }
 
 func isStateFile(name string) bool {
-	return name == "registry.json" || name == "registry.lock" || name == "briefs" || name == "watch" || strings.HasPrefix(name, ".registry-")
+	return name == "registry.json" || name == "registry.lock" || name == "briefs" || name == "watch" || strings.HasPrefix(name, ".registry-") ||
+		name == journalFile || name == journalLock || name == projectsDir
 }
 
 // CleanState removes a throwaway state directory. It refuses the live directory, anything

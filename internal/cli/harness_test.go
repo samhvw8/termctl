@@ -32,7 +32,6 @@ func newEnv(t *testing.T) *env {
 	app := &App{Out: out, Err: errb, Clock: &termtest.Clock{},
 		OpenBackend: func(*Options, string) (term.Backend, error) { return b, nil },
 		OpenSender:  func(*Options, term.Backend) (*term.Pane, error) { return me, nil },
-		Inbox:       t.TempDir(),
 	}
 	return &env{b, app, out, errb}
 }
