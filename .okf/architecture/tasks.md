@@ -3,7 +3,7 @@ type: Architecture
 title: Tasks and pane safety
 description: How harness-ops tracks a job given to another harness session, tells its owner of a permission dialog, and what stops it closing or spawning the wrong thing.
 tags: [architecture, harness, tasks, safety]
-generated: { by: claude-code/opus-5.5, at: '2026-11-17T17:10:34Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-17T17:10:49Z' }
 ---
 
 # Overview
@@ -93,7 +93,7 @@ Each round also delivers held-back results. The watcher stops when the owner pan
 | Option N grants more than this request and `--persist` is not given, or the dialog is `truncated` or `ambiguous` ([harness profiles](/architecture/harness-profiles.md#dialogs)); `task deny` still works on both | 6 |
 | The dialog changed before a key (re-read before the first arrow key and right before Enter or Esc), the selection did not reach N, or the dialog is still there 3 s after Enter (the harness did not take the key, or asked the same request again: the mark is dropped, so a re-ask is announced) | 1 |
 
-`task deny` presses Esc, which Claude Code and agy both document as cancel, and never Enter, then waits up to 3 s for the dialog to go (exit 1 if it stays). Enter takes the option that is really selected, whatever the parser read: until 2026-11-18 deny moved to the first option starting with "No" and pressed Enter, and a review (A2) showed a worker's own text wrapped onto lines of its own as `> 1. No, cancel` made the parser take a selected "Yes" for that "No", so a deny approved the request. Test: `TestDenyPressesEscNeverEnter`.
+Both need an open task: running, ready or blocked. A `failed` task is refused by its ID (exit 2), although its worker's session can still be open (`failed` also means closed by its owner before it finished); answer a live one through its pane address. `task deny` presses Esc, which Claude Code and agy both document as cancel, and never Enter, then waits up to 3 s for the dialog to go (exit 1 if it stays). Enter takes the option that is really selected, whatever the parser read: until 2026-11-18 deny moved to the first option starting with "No" and pressed Enter, and a review (A2) showed a worker's own text wrapped onto lines of its own as `> 1. No, cancel` made the parser take a selected "Yes" for that "No", so a deny approved the request. Test: `TestDenyPressesEscNeverEnter`.
 
 # Safety rules
 

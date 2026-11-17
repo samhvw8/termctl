@@ -107,7 +107,7 @@ No match, several matches, or your own pane exits 2 and lists candidates. It nev
 ## Rules of harness-ops
 
 - `msg` and `slash` refuse (exit 4) when the target's input line holds a draft, unless `--force`.
-- A calibrated harness (claude, omp) whose input line cannot be read also refuses. Others warn and proceed.
+- A calibrated harness (claude, omp, agy) whose input line cannot be read also refuses. Others warn and proceed.
 - `slash --force` wipes the draft with ctrl-u: a slash command must be the whole line.
 - `msg --clear-first` sends `/clear` alone, waits for idle, re-checks the input line, then sends.
 - A message over 800 characters or with line breaks goes to a file in `~/.cache/agent-ops/`.
@@ -120,7 +120,7 @@ Exit codes: 0 ok, 1 backend error, 2 refused target or usage, 4 draft on input l
 
 | Backend | State |
 |---|---|
-| iterm2 | Tested. Python API, native `it2` status helper. |
+| iterm2 | Tested. termctl's own Go client for the iTerm2 API over one websocket; program status through iTerm2's built-in `get_session_status`, no `it2` process. |
 | tmux | Tested on a private socket. |
 | hc | Tested on a real private herdr-core with the fake harness (`mise run test:hc`). `termctl send-text` is refused: `hc send` always submits; use `harness-ops msg` or `slash`. `--where` is ignored: a spawned agent opens as a tab in the Herdr app. A blocked program cannot be messaged, and there is no `--force` for it. |
 | rex | Tested on a real private Rex server, 0.1.0-preview.19 (`mise run test:rex`). The CLI is found through `REX_BIN_DIR`, then `PATH`, then the Rex app bundle. The server is `REX_SERVER` when set, else the local socket whose server holds `REX_SESSION`; termctl never starts a server. A Rex window is a tab; `--where window` opens a new session. Blocks move and swap only within their session. |
