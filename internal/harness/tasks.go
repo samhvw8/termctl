@@ -1005,6 +1005,7 @@ func (t *Tasks) FlushPending() (int, error) {
 				if x := d.Tasks[p.Task]; x != nil && p.Kind == "" {
 					x.Notify = "expired"
 				}
+				untold(d, p)
 				continue
 			}
 			if p.Kind == "dialog" && !dialogOnScreen(d.Tasks[p.Task], p.Dialog) {
@@ -1036,6 +1037,9 @@ func (t *Tasks) FlushPending() (int, error) {
 						if x := d.Tasks[p.Task]; x != nil && p.Kind == "" {
 							x.Notify = outcome
 						}
+						if outcome != "delivered" {
+							untold(d, q)
+						}
 						d.Pending = append(d.Pending[:i], d.Pending[i+1:]...)
 					}
 					break
@@ -1047,6 +1051,14 @@ func (t *Tasks) FlushPending() (int, error) {
 		}
 	}
 	return delivered, nil
+}
+
+// untold clears the mark's notified flag when a dialog notice is dropped before it reached the owner,
+// so the watcher announces the dialog again while it stays on screen. One task wait returned stays told.
+func untold(d *Data, p *Pending) {
+	if x := d.Tasks[p.Task]; p.Kind == "dialog" && dialogOnScreen(x, p.Dialog) && !x.Dialog.Returned {
+		x.Dialog.Notified = false
+	}
 }
 
 func (t *Tasks) deliver(p Pending) string {

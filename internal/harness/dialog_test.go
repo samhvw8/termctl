@@ -266,6 +266,35 @@ func TestWatchHoldsANoticeForADraftAndDropsItWhenStale(t *testing.T) {
 	}
 }
 
+// A dialog notice dropped before it reached the owner leaves the dialog untold, so it is announced again.
+func TestDialogNoticeDroppedUndeliveredIsAnnouncedAgain(t *testing.T) {
+	r := newRig(t)
+	x, _ := dialogTask(t, r)
+	r.b.State[r.owner.ID].Input = "owner typing"
+	r.tasks.Watch(WatchOpts{Rounds: 1})
+	r.clock.T += PendingTTL + 1 // the owner kept a draft for an hour
+	r.tasks.Watch(WatchOpts{Rounds: 1})
+	if g, _ := r.tasks.Get(x.ID); g.Dialog == nil || g.Dialog.Notified {
+		t.Fatal("the notice expired undelivered, but the dialog is still marked as told")
+	}
+	r.b.State[r.owner.ID].Input = ""
+	r.tasks.Watch(WatchOpts{Rounds: 1})
+	if len(ownerNotes(r)) != 1 {
+		t.Fatalf("want the dialog announced once the owner is free, got %q", ownerNotes(r))
+	}
+
+	// The owner's pane gone before delivery: not told either.
+	r = newRig(t)
+	x, _ = dialogTask(t, r)
+	r.b.State[r.owner.ID].Input = "owner typing"
+	r.tasks.Watch(WatchOpts{Rounds: 1})
+	r.b.Close(r.owner)
+	r.tasks.FlushPending()
+	if g, _ := r.tasks.Get(x.ID); g.Dialog == nil || g.Dialog.Notified || len(r.data().Pending) != 0 {
+		t.Fatal("dropped as owner-gone, but the dialog is still marked as told", g.Dialog, r.data().Pending)
+	}
+}
+
 func TestWatchStopsWithNoOpenTasksAndRunsOncePerOwner(t *testing.T) {
 	r := newRig(t)
 	x, _ := dialogTask(t, r)
