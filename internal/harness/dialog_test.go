@@ -153,12 +153,18 @@ func TestAnswerNeverPressesEnterOffTheChoice(t *testing.T) {
 	}
 }
 
-func TestDenyPicksNoElseEsc(t *testing.T) {
+// task deny presses Esc and nothing else, also when the dialog has a "No" choice: Enter would take the
+// real selection, and a parser fooled by the worker's own text could read a "Yes" as the "No" (agy review A2).
+func TestDenyPressesEscNeverEnter(t *testing.T) {
 	r := newRig(t)
 	x, dlg := dialogTask(t, r)
+	before := len(keys(r, x))
 	res, _, err := r.tasks.Answer(x.ID, AnswerOpts{Deny: true})
-	if err != nil || res.Escaped || res.Chosen.N != 3 || dlg.Answer != 3 {
+	if err != nil || !res.Escaped || res.Chosen != nil || dlg.Answer != -1 {
 		t.Fatal(err, res, dlg.Answer)
+	}
+	if got := strings.Join(keys(r, x)[before:], " "); got != "key:escape" {
+		t.Fatal("deny pressed", got)
 	}
 	dlg2 := &termtest.Dialog{Body: "trust?", Options: []string{"Yes, proceed", "Exit"}, Selected: 1}
 	r.b.State[x.Pane].Dialog = dlg2
@@ -745,7 +751,7 @@ func TestDenyChecksExpect(t *testing.T) {
 	if _, _, err := r.tasks.Answer(x.ID, AnswerOpts{Deny: true, Expect: "deadbeef"}); !isCode(err, term.CodeDialog) || dlg.Answer != 0 {
 		t.Fatal(err, dlg.Answer)
 	}
-	if res, _, err := r.tasks.Answer(x.ID, AnswerOpts{Deny: true, Expect: fp}); err != nil || res.Chosen.N != 3 || dlg.Answer != 3 {
+	if res, _, err := r.tasks.Answer(x.ID, AnswerOpts{Deny: true, Expect: fp}); err != nil || !res.Escaped || dlg.Answer != -1 {
 		t.Fatal(err, res, dlg.Answer)
 	}
 }

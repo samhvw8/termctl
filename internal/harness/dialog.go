@@ -48,7 +48,8 @@ func (d *Dialog) Option(n int) *Option {
 
 var denyRe = regexp.MustCompile(`(?i)^no\b`)
 
-// DenyOption is the first choice that starts with "No", or 0 when there is none.
+// DenyOption is the first choice that starts with "No", or 0 when there is none. task deny does not choose
+// it: it presses Esc, so a misread option can never turn a deny into an approval.
 func (d *Dialog) DenyOption() int {
 	for _, o := range d.Options {
 		if denyRe.MatchString(o.Text) {

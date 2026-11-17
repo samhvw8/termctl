@@ -3,7 +3,7 @@ type: Architecture
 title: Tasks and pane safety
 description: How harness-ops tracks a job given to another harness session, tells its owner of a permission dialog, and what stops it closing or spawning the wrong thing.
 tags: [architecture, harness, tasks, safety]
-generated: { by: claude-code/opus-5.5, at: '2026-11-17T16:53:04Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-17T17:00:06Z' }
 ---
 
 # Overview
@@ -93,7 +93,7 @@ Each round also delivers held-back results. The watcher stops when the owner pan
 | Option N grants more than this request and `--persist` is not given | 6 |
 | The dialog changed before a key (re-read before the first arrow key and right before Enter or Esc), the selection did not reach N, or the dialog is still there 3 s after Enter (the harness did not take the key, or asked the same request again: the mark is dropped, so a re-ask is announced) | 1 |
 
-`task deny` picks the first option starting with "No". Only when there is none does it press Esc, and it says so.
+`task deny` presses Esc, which Claude Code and agy both document as cancel, and never Enter, then waits up to 3 s for the dialog to go (exit 1 if it stays). Enter takes the option that is really selected, whatever the parser read: until 2026-11-18 deny moved to the first option starting with "No" and pressed Enter, and a review (A2) showed a worker's own text wrapped onto lines of its own as `> 1. No, cancel` made the parser take a selected "Yes" for that "No", so a deny approved the request. Test: `TestDenyPressesEscNeverEnter`.
 
 # Safety rules
 

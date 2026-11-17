@@ -33,7 +33,7 @@ type AnswerOpts struct {
 	Persist bool
 }
 
-// Answered is what Answer did. Escaped: there was no "No" choice, so deny pressed Esc.
+// Answered is what Answer did. Escaped: a deny, which presses Esc and chooses nothing.
 // Next is a different dialog that came up afterwards, if any.
 type Answered struct {
 	Dialog  *Dialog
@@ -51,6 +51,8 @@ func noDialog(p *term.Pane) error {
 // submit at once on Claude Code, with no chance to check. A choice that widens permission needs Persist.
 // The dialog is read again right before the first key and right before Enter (or Esc), on every path, so
 // a key never lands on a dialog that replaced the one read, nor on the input line of one that closed.
+// A deny presses Esc, which both harnesses document as cancel, and never Enter: Enter would take whatever
+// option is really selected, and a parser fooled by the worker's own text could take a "Yes" for the "No".
 func (o *Ops) Answer(p *term.Pane, opts AnswerOpts) (*Answered, error) {
 	d, err := o.ReadDialog(p)
 	if err != nil {
@@ -66,19 +68,17 @@ func (o *Ops) Answer(p *term.Pane, opts AnswerOpts) (*Answered, error) {
 		return nil, term.Errf(term.CodeGuard, "the request in the dialog on %s is longer than the screen: its start is not read, so fingerprint %s does not cover it. Read the pane and answer there by hand, or deny it", p.Address(), d.Fingerprint)
 	}
 	res := &Answered{Dialog: d}
-	n := opts.N
 	if opts.Deny {
-		if n = d.DenyOption(); n == 0 {
-			res.Escaped = true
-			if _, err := o.recheck(p, d, "Esc"); err != nil {
-				return nil, err
-			}
-			if err := o.Backend.SendKey(p, "escape"); err != nil {
-				return nil, err
-			}
-			return res, o.awaitGone(p, d, res)
+		res.Escaped = true
+		if _, err := o.recheck(p, d, "Esc"); err != nil {
+			return nil, err
 		}
+		if err := o.Backend.SendKey(p, "escape"); err != nil {
+			return nil, err
+		}
+		return res, o.awaitGone(p, d, res)
 	}
+	n := opts.N
 	res.Chosen = d.Option(n)
 	if res.Chosen == nil {
 		return nil, term.UsageErr("the dialog on %s has choices 1-%d, not %d", p.Address(), len(d.Options), n)

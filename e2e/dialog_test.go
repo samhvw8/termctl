@@ -70,17 +70,17 @@ func TestDialogWatchAndAnswer(t *testing.T) {
 		t.Fatal("no dialog left: ", code)
 	}
 
-	// task wait returns a dialog too; deny picks "No".
+	// task wait returns a dialog too; deny presses Esc, never Enter.
 	tmux(t, "send-keys", "-t", worker, "/dialog", "Enter")
 	code, out, stderr = r.ops(r.harness, "task", "wait", id, "--timeout", "20")
 	if code != 0 || !strings.Contains(out, "DIALOG task "+id) || !strings.Contains(out, "[persist]") {
 		t.Fatal(code, out, stderr)
 	}
 	fp = regexp.MustCompile(`fingerprint: +([0-9a-f]{8})`).FindStringSubmatch(out)[1]
-	if code, out, stderr := r.ops(r.harness, "task", "deny", id, "--expect", fp); code != 0 || !strings.Contains(out, "3. No, cancel") {
+	if code, out, stderr := r.ops(r.harness, "task", "deny", id, "--expect", fp); code != 0 || !strings.Contains(out, "pressed Esc") {
 		t.Fatal(code, out, stderr)
 	}
-	waitFor(t, "deny logged", func() bool { return strings.Count(strings.Join(readLog(workerLog), "\n"), "<<ANSWER 3>>") == 2 })
+	waitFor(t, "deny logged", func() bool { return strings.Contains(strings.Join(readLog(workerLog), "\n"), "<<CANCELLED>>") })
 
 	// With no open task left, the watcher stops.
 	if code, _, stderr := r.ops(r.harness, "task", "close", "--force", id); code != 0 {

@@ -1,5 +1,8 @@
 # Update Log
 
+## 2026-11-18
+* **Fix**: `task deny` presses Esc and never Enter. It chose the first "No" option with the arrow keys and pressed Enter, so a parser fooled by worker text wrapped into fake option lines turned a deny into an approval of the selected "Yes" (review A2). Test: `TestDenyPressesEscNeverEnter`; the fake harness takes a lone Esc as cancel. See [tasks](architecture/tasks.md#task-answer-and-task-deny). Runs: nothing new.
+
 ## 2026-11-17
 * **Fix**: `task answer` and `task deny` drop a task's dialog mark only when it is the dialog they answered. A newer dialog the watcher marked and announced meanwhile was unmarked by the answer and announced a second time. Test: `TestAnswerKeepsTheMarkOfANewerDialog`. See [tasks](architecture/tasks.md#watcher). Runs: nothing new.
 * **Fix**: an agy screen drawn like a dialog whose question is not a known permission question (a picker such as a model choice, or new wording) is no longer ignored silently: it is an `unrecognized` dialog, announced and returned by `task wait` like any other, with every choice but `No` or `cancel` marked `[persist]`, so `task deny` still works and no picker choice is a one-shot answer. Tests: `TestAgyPickerIsAnUnrecognizedDialog`, `TestUnrecognizedAgyDialogIsLoud`. See [harness profiles](architecture/harness-profiles.md#dialogs). Runs: nothing new.

@@ -172,7 +172,7 @@ func (a *App) printWaited(w *harness.Waited, asJSON bool) {
 func (a *App) printAnswered(target string, res *harness.Answered) {
 	switch {
 	case res.Escaped:
-		fmt.Fprintf(a.Out, "dialog %s on %s has no \"No\" choice: pressed Esc to cancel it\n", res.Dialog.Fingerprint, target)
+		fmt.Fprintf(a.Out, "denied dialog %s on %s: pressed Esc to cancel it\n", res.Dialog.Fingerprint, target)
 	case res.Chosen != nil:
 		fmt.Fprintf(a.Out, "answered dialog %s on %s: %d. %s\n", res.Dialog.Fingerprint, target, res.Chosen.N, res.Chosen.Text)
 	}

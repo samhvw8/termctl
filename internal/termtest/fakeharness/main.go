@@ -8,7 +8,8 @@
 // it echoes each line whole ("got: <line>"), not cut to 40 characters, and takes lines of any length.
 //
 // "/dialog" draws an Antigravity CLI permission dialog (as captured from agy 1.5.10) and reads keys
-// unbuffered: up and down move the selection, Enter answers and logs "<<ANSWER n>>". Run under the
+// unbuffered: up and down move the selection, Enter answers and logs "<<ANSWER n>>", a lone Esc cancels
+// and logs "<<CANCELLED>>". Run under the
 // name "agy", the pane reads as agy and harness-ops reads the dialog with agy's parser.
 package main
 
@@ -90,6 +91,12 @@ func main() {
 			reportBlocked("Run touch fake-file?")
 			n := dialog(in)
 			lineMode()
+			if n < 0 {
+				fmt.Fprintln(f, "<<CANCELLED>>")
+				f.Sync()
+				fmt.Println("cancelled")
+				break
+			}
 			fmt.Fprintf(f, "<<ANSWER %d>>\n", n)
 			f.Sync()
 			fmt.Printf("answered %d\n", n)
@@ -139,7 +146,8 @@ func stty(args ...string) {
 	cmd.Run()
 }
 
-// dialog shows the dialog until Enter and returns the choice.
+// dialog shows the dialog until Enter and returns the choice, or -1 for a lone Esc. An arrow key comes as
+// one write ("\x1b[A"), so an Esc with nothing buffered after it is the Esc key.
 func dialog(in *bufio.Reader) int {
 	stty("-icanon", "-echo", "min", "1")
 	defer stty("icanon", "echo")
@@ -156,6 +164,9 @@ func dialog(in *bufio.Reader) int {
 		case '\r', '\n':
 			return selected
 		case 0x1b:
+			if in.Buffered() == 0 {
+				return -1
+			}
 			if next, _ := in.ReadByte(); next == '[' || next == 'O' {
 				switch k, _ := in.ReadByte(); k {
 				case 'A':

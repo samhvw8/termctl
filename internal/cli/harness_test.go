@@ -374,7 +374,7 @@ func TestTaskDialogCommands(t *testing.T) {
 	if code, out, _ := e.run("task", "ls"); code != 0 || !strings.Contains(out, "[dialog ") {
 		t.Fatal(code, out)
 	}
-	if code, out, stderr := e.run("task", "deny", id, "--expect", fp2); code != 0 || !strings.Contains(out, "2. No") {
+	if code, out, stderr := e.run("task", "deny", id, "--expect", fp2); code != 0 || !strings.Contains(out, "pressed Esc") {
 		t.Fatal(code, out, stderr)
 	}
 	if code, out, _ := e.run("--help"); code != 0 || !strings.Contains(out, "task answer") || !strings.Contains(out, "7 no dialog") || !strings.Contains(out, "watch") {
