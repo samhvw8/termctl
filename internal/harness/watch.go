@@ -245,11 +245,7 @@ func dialogTag(x *Task) string {
 
 // dialogNotice is the owner's notice of a dialog, with the harness's own reason when its terminal kept one.
 func dialogNotice(x *Task, s Signal) string {
-	text := fmt.Sprintf("task %s (%s) %s", x.ID, x.Title, DialogLine(x.ID, s.Dialog))
-	if r := squash(s.Status); r != "" {
-		text += " | the harness reports: " + term.Cut(r, 200)
-	}
-	return text
+	return fmt.Sprintf("task %s (%s) %s", x.ID, x.Title, dialogLine(x.ID, s.Dialog, s.Status))
 }
 
 // apply records signals under the lock: a new dialog replaces the mark, "clear" drops it. With notify,
