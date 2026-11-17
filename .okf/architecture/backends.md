@@ -3,7 +3,7 @@ type: Architecture
 title: Backends
 description: The Backend interface and the state of each terminal backend.
 tags: [architecture, backends]
-generated: { by: claude-code/opus-5.5, at: '2026-11-17T12:30:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-17T16:12:00Z' }
 sources:
   - id: iterm2-status
     resource: https://github.com/gnachman/iTerm2/blob/master/sources/Language/BuiltInFunctions/SetStatusBuiltInFunction.swift
