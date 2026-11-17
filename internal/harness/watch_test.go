@@ -21,6 +21,7 @@ type probe struct {
 	delay          time.Duration
 	polls          int
 	onPoll         func(n int)
+	onList         func(n int)
 	clock          *termtest.Clock
 	sentAt         map[string][]float64
 }
@@ -28,7 +29,11 @@ type probe struct {
 func (p *probe) ListPanes() ([]*term.Pane, error) {
 	p.mu.Lock()
 	p.lists++
+	n := p.lists
 	p.mu.Unlock()
+	if p.onList != nil {
+		p.onList(n)
+	}
 	return p.Fake.ListPanes()
 }
 
@@ -284,5 +289,47 @@ func TestWatcherLockIsPerServer(t *testing.T) {
 	lb.Close()
 	if a.Watching(r.owner.ID) == 0 || b.Watching(r.owner.ID) != 0 {
 		t.Fatal("Watching does not tell the servers apart")
+	}
+}
+
+// A task created after the watcher read the registry, but before it let go of its lock, sees a watcher
+// running and starts none (review O6). The stopping watcher looks again once the lock is free and goes on.
+func TestStoppingWatcherServesATaskCreatedMeanwhile(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	r.done(t, x, "ok", "done")
+	if _, err := r.tasks.Accept(x.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	p := &probe{Fake: r.b, clock: r.clock}
+	ts := probeTasks(r, p)
+	var heldInRound2 bool
+	p.onList = func(n int) {
+		switch n {
+		case 1: // the owner check, after the read that found nothing running
+			r.reg.Update(func(d *Data) error {
+				y := *d.Tasks[x.ID]
+				y.ID, y.Status = "tnew", "running"
+				d.Tasks[y.ID] = &y
+				return nil
+			})
+			if r.as(r.owner).Watching(r.owner.ID) == 0 {
+				t.Error("the lock should still be held here")
+			}
+		case 2:
+			heldInRound2 = r.as(r.owner).Watching(r.owner.ID) != 0
+		}
+	}
+	var logs []string
+	if err := ts.Watch(WatchOpts{Rounds: 2, Log: func(s string) { logs = append(logs, s) }}); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range logs {
+		if strings.HasSuffix(l, "; stopping") {
+			t.Fatalf("stopped with a running task left unwatched: %q", logs)
+		}
+	}
+	if p.lists < 2 || !heldInRound2 {
+		t.Fatalf("no second round under the lock: lists=%d held=%v logs=%q", p.lists, heldInRound2, logs)
 	}
 }

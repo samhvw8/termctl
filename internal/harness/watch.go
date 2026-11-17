@@ -397,7 +397,7 @@ func (t *Tasks) Watch(o WatchOpts) error {
 	if err != nil {
 		return err
 	}
-	defer lock.Close()
+	defer func() { lock.Close() }() // the lock in hand when Watch returns: it is taken again below
 	lock.Truncate(0)
 	lock.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0)
 	say(fmt.Sprintf("watching the tasks of %s (pid %d)", owner.Address(), os.Getpid()))
@@ -429,8 +429,27 @@ func (t *Tasks) Watch(o WatchOpts) error {
 		running := runningTasks(d, owner.ID, t.SenderRef)
 		if len(running) == 0 && !holdsNotice(d, owner.ID, t.SenderRef) {
 			t.stopMemo()
-			say("no running task and no held notice left; stopping")
-			return nil
+			// A task created after the read above found this lock held, so it started no watcher. Look
+			// again once the lock is free, and serve what came, unless a new watcher took the lock first.
+			lock.Close()
+			if d, err = t.Reg.Read(); err != nil {
+				return err
+			}
+			if len(runningTasks(d, owner.ID, t.SenderRef)) == 0 && !holdsNotice(d, owner.ID, t.SenderRef) {
+				say("no running task and no held notice left; stopping")
+				return nil
+			}
+			if lock, err = t.lockWatcher(owner.ID); err != nil {
+				if errors.Is(err, ErrWatching) {
+					say("a task came while stopping, and another watcher serves it; stopping")
+					return nil
+				}
+				return err
+			}
+			lock.Truncate(0)
+			lock.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0)
+			say("a task came while stopping; watching again")
+			continue
 		}
 		w.ws = t.workers(running)
 		status := programStatuses(w.ws, w.statusErr)

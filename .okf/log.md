@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-11-17
+* **Fix**: a task created while the watcher was stopping went unwatched: `task new` saw the lock still held and started none. The watcher now lets go of its lock, reads the registry again, and goes on if a running task or held notice appeared. See [tasks](architecture/tasks.md#watcher). Runs: nothing new.
 * **Fix**: a dialog notice dropped before it reached the owner (past its hour, or the owner pane gone) no longer leaves the dialog marked as told: the watcher announces it again while it stays on screen. A dialog that `task wait` returned stays told. See [tasks](architecture/tasks.md#watcher). Runs: nothing new.
 * **Fix**: a delivery claim lasts 10 minutes, was 30 s. One hc send may take 60 s, so a second flusher took over a notice still being delivered and sent it twice. 10 minutes is above the longest delivery while every call keeps its deadline (543 s); a notice whose deliverer died waits that long. See [tasks](architecture/tasks.md#notifications). Runs: nothing new.
 * **Fix**: every tmux, hc, Rex, `ps` and `lsof` run now ends after 30 s (`term.CallTimeout`, the iTerm2 API's bound) with exit 1, `no answer after 30s`; a hung CLI used to hang the watcher round and `task wait` forever. `hc send` keeps its 60 s. See [backends](architecture/backends.md#deadlines). Runs: nothing new.
