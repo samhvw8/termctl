@@ -387,3 +387,27 @@ func TestTaskDialogCommands(t *testing.T) {
 		t.Fatal(code, out, stderr)
 	}
 }
+
+// A blind reviewer is a running task and can stop on a dialog: task review starts a watcher as task new
+// does (review F21).
+func TestTaskReviewStartsAWatcher(t *testing.T) {
+	e := newEnv(t)
+	var started []string
+	e.app.StartWatcher = func(_ *Options, log string) error { started = append(started, log); return nil }
+	e.app.Factory = func(string, map[string]string) (term.Backend, error) { return e.b, nil }
+	code, out, stderr := e.run("task", "new", "generic", "--title", "t", "--brief", "b", "--cwd", "/w", "--command", "fake", "--timeout", "30")
+	if code != 0 {
+		t.Fatal(code, out, stderr)
+	}
+	id := strings.TrimSpace(out)
+	if code, out, stderr := e.run("task", "done", id, "--status", "ok", "--summary", "s"); code != 0 {
+		t.Fatal(code, out, stderr)
+	}
+	started = nil
+	if code, out, stderr := e.run("task", "review", id, "--blind", "--harness", "claude", "--command", "fake", "--timeout", "30"); code != 0 {
+		t.Fatal(code, out, stderr)
+	}
+	if len(started) != 1 {
+		t.Fatalf("task review started %d watchers, want 1", len(started))
+	}
+}

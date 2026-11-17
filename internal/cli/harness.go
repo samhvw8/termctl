@@ -852,6 +852,7 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 			return err
 		}
 		fmt.Fprintln(a.Out, t.ID)
+		a.ensureWatcher(o, tasks) // the reviewer is a running task, and can stop on a dialog too
 	case "exited":
 		id, err := arg()
 		if err != nil {
