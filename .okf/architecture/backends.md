@@ -3,7 +3,7 @@ type: Architecture
 title: Backends
 description: The Backend interface and the state of each terminal backend.
 tags: [architecture, backends]
-generated: { by: claude-code/opus-5.5, at: '2026-11-17T16:12:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-17T16:29:49Z' }
 sources:
   - id: iterm2-status
     resource: https://github.com/gnachman/iTerm2/blob/master/sources/Language/BuiltInFunctions/SetStatusBuiltInFunction.swift
@@ -120,6 +120,10 @@ Checked on real iTerm2 3.7.6 (2026-11-16) by `TestMaximizedPaneOnITerm2` in `mis
 | rex | CLI, checked on Rex 0.1.0-preview.19 on a private server (`mise run test:rex`) and listed on the live app. A Rex window is a tab; its ID is the window's last 6 hex digits, as Rex shows it. Details: [the Rex section below](#rex). |
 | hc | Herdr (herdr-core `hc` 0.1.19). Tested on a real private core with the fake harness and a no-prompt Claude Code (`mise run test:hc`); real Claude Code and omp messages passed on the live core. `SendText` always refuses: `hc send` always submits, so lines go through `SubmitText`. Pane ID `hc:t7`; label is the `termctl_label` label. `Process` is `foreground.name`, or a known agent found in `foreground.argv`. `where` is validated and ignored: a new terminal opens as a tab in the Herdr app. Details: [the hc section below](#hc). |
 | ghostty | Unsupported: every call raises "not supported". Blocker: Ghostty 1.4 (not installed here) has an AppleScript dictionary with input, split, focus and close, but no screen read and no notification, bell or status event; OSC 7501 is parsed by libghostty and ignored by the app, and OSC 9/777 go to Notification Center only. Without a screen read termctl cannot see an input line or a dialog, so no harness-ops command could be safe there. See the research report.[^alerts-report] |
+
+## Deadlines
+
+Every backend call ends, so a terminal that hangs fails one call (exit 1) instead of hanging a watcher round or `task wait` past its `--timeout`. A run of the tmux, hc or Rex CLI is killed after `term.CallTimeout`, 30 s, and fails with `<cli> <command>: no answer after 30s`; an iTerm2 API call has the same 30 s. These calls answer in milliseconds (a Rex CLI call about 180 ms), so 30 s fits a machine under heavy load. A killed CLI whose child still holds its output gets 1 s more before the pipes are closed. `hc send` (through `hc connect`) keeps its own `term.SendTimeout`, 60 s, because it waits until nobody has typed in the pane for about 3 s. Code: `cliCommand` in `internal/term/proc.go`; test: `TestHungCLIFailsAfterItsDeadline`. Before 2026-11-17 tmux, Rex and every hc command but `send` had no deadline. `ps` and `lsof` (process lookup) still have none.
 
 
 # Rex

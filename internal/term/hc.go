@@ -46,7 +46,7 @@ const (
 	hcExitBlocked  = 9
 	hcExitFinished = 11
 	hcDialTimeout  = 500 * time.Millisecond
-	hcSendTimeout  = 60 * time.Second // a send waits until nobody has typed for ~3 s
+	hcSendTimeout  = SendTimeout // a send waits until nobody has typed for ~3 s; other hc runs get CallTimeout
 )
 
 var hcKeys = map[string]string{"escape": "esc"}
@@ -55,11 +55,12 @@ var hcKeys = map[string]string{"escape": "esc"}
 func NewHc(socketPath string) *HcBackend {
 	b := &HcBackend{SocketPath: socketPath}
 	b.run = func(args ...string) (string, int, string, error) {
-		cmd := exec.Command("hc", args...)
+		cmd, finish := cliCommand("hc", args...)
 		cmd.Env = hcEnv(os.Environ(), socketPath)
 		var stderr strings.Builder
 		cmd.Stderr = &stderr
 		out, err := cmd.Output()
+		err = finish(err)
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
 			return string(out), exit.ExitCode(), stderr.String(), nil

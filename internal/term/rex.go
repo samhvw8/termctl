@@ -45,7 +45,7 @@ func NewRex() *RexBackend {
 		if bin == "" {
 			return "", 0, "", errors.New("rex not found")
 		}
-		cmd := exec.Command(bin, args...)
+		cmd, finish := cliCommand(bin, args...)
 		// Every call names its blocks, windows and sessions by ID. With REX_SESSION set, the CLI can
 		// look IDs up in that session only, and miss a block of another (a new session's, for one).
 		for _, kv := range os.Environ() {
@@ -56,6 +56,7 @@ func NewRex() *RexBackend {
 		var stderr strings.Builder
 		cmd.Stderr = &stderr
 		out, err := cmd.Output()
+		err = finish(err)
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
 			return string(out), exit.ExitCode(), stderr.String(), nil
@@ -181,6 +182,9 @@ func (b *RexBackend) call(args ...string) (string, error) {
 		return "", BackendErr("no Rex server is running (looked in %s); open Rex, or set REX_SERVER", strings.Join(rexSockets(b.env), ", "))
 	}
 	out, code, stderr, err := b.run(append([]string{"-S", addr, "--autostart=false"}, args...)...)
+	if errors.Is(err, errNoAnswer) {
+		return "", BackendErr("rex %s: %v", args[0], err)
+	}
 	if err != nil {
 		return "", BackendErr("rex CLI not found: install Rex, or set REX_BIN_DIR to the folder that holds it")
 	}

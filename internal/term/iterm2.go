@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	api "github.com/samhvw8/termctl/internal/iterm2api"
 	"google.golang.org/protobuf/proto"
@@ -19,7 +18,7 @@ import (
 const (
 	itermApp   = "/Applications/iTerm.app"
 	labelVar   = "user.agent"
-	apiTimeout = 30 * time.Second // a stalled API call must fail, not hang every caller
+	apiTimeout = CallTimeout // a stalled API call must fail, not hang every caller
 )
 
 var itermKeys = map[string]string{

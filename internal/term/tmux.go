@@ -41,13 +41,16 @@ func (b *TmuxBackend) argv(args ...string) []string {
 }
 
 func (b *TmuxBackend) run(args ...string) (string, error) {
-	cmd := exec.Command("tmux", b.argv(args...)...)
+	cmd, finish := cliCommand("tmux", b.argv(args...)...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
-	if err != nil {
+	if err = finish(err); err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
 			return "", BackendErr("tmux is not installed")
+		}
+		if errors.Is(err, errNoAnswer) {
+			return "", BackendErr("tmux %s: %v", args[0], err)
 		}
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {

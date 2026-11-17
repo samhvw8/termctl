@@ -1,11 +1,50 @@
 package term
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
+
+const (
+	// CallTimeout bounds one backend call that reads or types: a run of a terminal's CLI (tmux, hc,
+	// Rex) or an iTerm2 API call. Such a call answers in milliseconds (a Rex CLI call about 180 ms, a
+	// rex do script that walks every block well under a second), so 30 s fits a machine under heavy
+	// load and still ends a call that hangs, so a watcher round or task wait goes on.
+	CallTimeout = 30 * time.Second
+	// SendTimeout bounds hc send, which waits until nobody has typed in the pane for about 3 s.
+	SendTimeout = 60 * time.Second
+	// cliWaitDelay is how long a killed CLI's output pipes may stay open, held by a child it forked,
+	// before they are closed: the deadline must end the call even then.
+	cliWaitDelay = time.Second
+)
+
+// cliTimeout is CallTimeout for a CLI run; tests shorten it.
+var cliTimeout = CallTimeout
+
+// errNoAnswer is a CLI run that hit its deadline.
+var errNoAnswer = errors.New("no answer")
+
+// cliCommand is exec.Command under cliTimeout. A CLI that has not answered by then is killed, and finish
+// turns the error of its run into errNoAnswer, so a hung terminal fails the call instead of hanging its
+// caller. Call finish once the run is over.
+func cliCommand(name string, args ...string) (cmd *exec.Cmd, finish func(error) error) {
+	ctx, cancel := context.WithTimeout(context.Background(), cliTimeout)
+	cmd = exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = cliWaitDelay
+	return cmd, func(err error) error {
+		defer cancel()
+		if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("%w after %v", errNoAnswer, cliTimeout)
+		}
+		return err
+	}
+}
 
 // MainProcesses are programs that own a pane: a pane running one of these is that program,
 // even when it has child shells. Layer 2 profiles must cover every name here.
