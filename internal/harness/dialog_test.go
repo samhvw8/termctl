@@ -810,3 +810,40 @@ func TestUnrecognizedAgyDialogIsLoud(t *testing.T) {
 		t.Fatal("deny must press Esc on a picker with no No:", res, err)
 	}
 }
+
+// A newer dialog the watcher marked and announced while an answer to the one before was on its way keeps
+// its mark: the answer clears only the mark of the dialog it answered, so B is not announced twice
+// (round-3 review N5).
+func TestAnswerKeepsTheMarkOfANewerDialog(t *testing.T) {
+	r := newRig(t)
+	x, _ := dialogTask(t, r)
+	fp := readFP(t, r, x)
+	s := &swapper{Fake: r.b, pane: x.Pane}
+	ts, watcher := swapTasks(r, s), swapTasks(r, s)
+	if err := watcher.Watch(WatchOpts{Rounds: 1}); err != nil {
+		t.Fatal(err)
+	}
+	b := &termtest.Dialog{Body: "rm -rf build", Options: []string{"Yes", "No"}, Selected: 1}
+	s.onEnter = func() { // A is answered; B comes up, and the watcher announces it before Answer records
+		s.onEnter = nil
+		r.b.State[x.Pane].Dialog = b
+		if err := watcher.Watch(WatchOpts{Rounds: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, _, err := ts.Answer(x.ID, AnswerOpts{N: 1, Expect: fp})
+	if err != nil || res.Next == nil || res.Next.Fingerprint == fp {
+		t.Fatal("A answered, B next:", res, err)
+	}
+	if n := len(ownerNotes(r)); n != 2 {
+		t.Fatalf("notices=%d, want A and B", n)
+	}
+	if g := r.data().Tasks[x.ID]; g.Dialog == nil || g.Dialog.Fingerprint != res.Next.Fingerprint || !g.Dialog.Notified {
+		t.Fatalf("the answer to A dropped B's mark: %+v", g.Dialog)
+	}
+	r.clock.T += 1 // a later round, after the answer
+	watcher.Watch(WatchOpts{Rounds: 2})
+	if n := len(ownerNotes(r)); n != 2 {
+		t.Errorf("B announced twice: %d notices", n)
+	}
+}

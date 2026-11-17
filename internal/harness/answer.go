@@ -231,11 +231,16 @@ func (t *Tasks) Answer(target string, opts AnswerOpts) (*Answered, *term.Pane, e
 	}
 	res, err := t.ops(b, t.Sender).Answer(p, opts)
 	if x != nil && res != nil {
-		// A key was pressed. The mark goes, even when the dialog is still on screen: the harness may have
-		// asked the same request again, and that one must be announced. Reads taken until now are stale.
+		// A key was pressed. The answered dialog's mark goes, even when the dialog is still on screen: the
+		// harness may have asked the same request again, and that one must be announced. A mark of another
+		// dialog stays: the watcher marked and announced it after this answer read its dialog. Reads taken
+		// until now are stale.
 		if uerr := t.Reg.Update(func(d *Data) error {
 			if c := d.Tasks[x.ID]; c != nil {
-				c.Dialog, c.AnsweredAt = nil, t.clock().Now()
+				if dialogOnScreen(c, res.Dialog.Fingerprint) {
+					c.Dialog = nil
+				}
+				c.AnsweredAt = t.clock().Now()
 			}
 			return nil
 		}); uerr != nil {
