@@ -1327,6 +1327,57 @@ func TestReconcileKeepsTasksWhileTheServerDoesNotAnswer(t *testing.T) {
 	}
 }
 
+// Only the task's owner records that its server does not answer. Every process reconciles every task, so
+// one that cannot reach the server (another context) set unreachable on, and after unreachableTTL lost, a
+// live task it does not own, and two processes flipped the field (round-5 review D4). Any other process,
+// the same pane ID on another server too, leaves the task unchanged and warns once.
+func TestOnlyTheOwnerRecordsAnUnreachableServer(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	f := &downFake{Fake: r.b, down: true}
+	as := func(p *term.Pane) *Tasks {
+		ts := r.as(p)
+		ts.Backend = f
+		ts.Factory = func(string, map[string]string) (term.Backend, error) { return f, nil }
+		return ts
+	}
+	var warned []string
+	old := Warn
+	Warn = func(m string) { warned = append(warned, m) }
+	defer func() { Warn = old }()
+	unchanged := func(ts *Tasks, who string) {
+		t.Helper()
+		for i := 0; i < 3; i++ {
+			r.clock.T += unreachableTTL
+			if err := ts.Reconcile(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if g := r.data().Tasks[x.ID]; g.Status != "running" || g.Unreachable != 0 {
+			t.Fatalf("%s changed the task: %s, unreachable since %v", who, g.Status, g.Unreachable)
+		}
+	}
+	unchanged(as(r.other), "another pane")
+	if len(warned) != 1 || !strings.Contains(warned[0], "cannot check task "+x.ID) {
+		t.Fatalf("warned %q", warned)
+	}
+	r.reg.Update(func(d *Data) error { d.Tasks[x.ID].OwnerRef = map[string]string{"pid": "222"}; return nil })
+	unchanged(as(r.owner), "the same pane ID on another server")
+	r.reg.Update(func(d *Data) error { d.Tasks[x.ID].OwnerRef = nil; return nil })
+
+	owner := as(r.owner)
+	if err := owner.Reconcile(); err != nil || r.data().Tasks[x.ID].Unreachable == 0 {
+		t.Fatal("the owner did not record it", err)
+	}
+	f.down = false // another process reaches the server: the owner's record is the owner's to clear
+	if err := as(r.other).Reconcile(); err != nil || r.data().Tasks[x.ID].Unreachable == 0 {
+		t.Fatal("another pane cleared the owner's record", err)
+	}
+	if err := owner.Reconcile(); err != nil || r.data().Tasks[x.ID].Unreachable != 0 {
+		t.Fatal("the owner did not clear it", err)
+	}
+}
+
 // A server that stays unreachable for good is gone: after unreachableTTL its task is lost. Until then
 // it stays running, a server that answers again resets the clock, and "cannot check" is warned once per
 // change, not on every reconcile (round-3 review N1).

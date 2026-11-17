@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/samhvw8/termctl/internal/term"
 )
@@ -68,7 +69,9 @@ type Tasks struct {
 	Clock     Clock
 	Inbox     string
 
-	memo      *paneMemo        // one pane list per backend server while a watch round runs
+	memo      *paneMemo // one pane list per backend server while a watch round runs
+	downMu    sync.Mutex
+	downSeen  map[string]bool  // tasks of other owners whose server this process could not reach, warned once
 	spawnHook func(*term.Pane) // tests
 	sleepHook func(int)        // tests
 	sleeps    int
@@ -188,9 +191,30 @@ func (t *Tasks) owner() (*term.Pane, error) {
 	return t.Sender, nil
 }
 
+// owns: the caller is the task's owner pane, on the owner's server.
+func (t *Tasks) owns(x *Task) bool {
+	return t.Sender != nil && x.Owner == t.Sender.ID && sameServer(x.OwnerRef, t.callerRef())
+}
+
+// warnDownOnce warns once per process that another owner's task cannot be checked. Only the owner
+// records an unreachable server: a process in another context may not reach a server the owner does, and
+// must not lose a live task it does not own (round-5 review D4).
+func (t *Tasks) warnDownOnce(x *Task, cause error) {
+	t.downMu.Lock()
+	defer t.downMu.Unlock()
+	if t.downSeen[x.ID] {
+		return
+	}
+	if t.downSeen == nil {
+		t.downSeen = map[string]bool{}
+	}
+	t.downSeen[x.ID] = true
+	Warn(fmt.Sprintf("cannot check task %s: %v; only its owner records that its server does not answer", x.ID, cause))
+}
+
 // Reconcile marks active tasks whose pane is gone as lost. Unknown is not gone: a server that does not
 // answer changes nothing until it has not answered for unreachableTTL; then it is gone for good, and its
-// tasks are lost. "cannot check" is warned once when a task's server stops answering, not on every call.
+// tasks are lost. Only a task's owner records that: other processes leave the task alone and warn once. "cannot check" is warned once when a task's server stops answering, not on every call.
 func (t *Tasks) Reconcile() error {
 	d, err := t.Reg.Read()
 	if err != nil {
@@ -210,13 +234,17 @@ func (t *Tasks) Reconcile() error {
 			continue
 		}
 		_, p, err := t.paneByID(x.Pane, x.Ref)
+		if err != nil && !t.owns(x) {
+			t.warnDownOnce(x, err)
+			continue
+		}
 		if err != nil {
 			if x.Unreachable == 0 || now-x.Unreachable > unreachableTTL {
 				down[x.ID] = err
 			}
 			continue
 		}
-		if x.Unreachable != 0 {
+		if x.Unreachable != 0 && t.owns(x) {
 			back = append(back, x.ID)
 		}
 		switch {
