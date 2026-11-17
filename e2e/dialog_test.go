@@ -70,7 +70,10 @@ func TestDialogWatchAndAnswer(t *testing.T) {
 		t.Fatal("no dialog left: ", code)
 	}
 
-	// task wait returns a dialog too; deny presses Esc, never Enter.
+	// task wait returns a dialog too; deny presses Esc, never Enter. A draft on the lead holds the watcher's
+	// notice: a dialog whose notice reached the lead is not returned by task wait again.
+	tmux(t, "send-keys", "-t", r.harness, "-l", "draft")
+	waitFor(t, "draft on the lead", func() bool { return strings.Contains(tmux(t, "capture-pane", "-p", "-t", r.harness), "> draft") })
 	tmux(t, "send-keys", "-t", worker, "/dialog", "Enter")
 	code, out, stderr = r.ops(r.harness, "task", "wait", id, "--timeout", "20")
 	if code != 0 || !strings.Contains(out, "DIALOG task "+id) || !strings.Contains(out, "[persist]") {

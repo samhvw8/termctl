@@ -892,7 +892,7 @@ func (t *Tasks) waitDialog(d *Data, owner, id string) (*Waited, error) {
 	if t.Sender != nil && t.Watching(t.Sender.ID) != 0 {
 		var marked []*Task
 		for _, x := range watch {
-			if x.Dialog != nil && !x.Dialog.Returned {
+			if x.Dialog != nil && !x.Dialog.Returned && !noticeDelivered(d, x) {
 				marked = append(marked, x)
 			}
 		}
@@ -909,7 +909,7 @@ func (t *Tasks) waitDialog(d *Data, owner, id string) (*Waited, error) {
 		var result *Task
 		if err := t.Reg.Update(func(d *Data) error {
 			x := d.Tasks[s.Task]
-			if x != nil && dialogOnScreen(x, s.Dialog.Fingerprint) && !x.Dialog.Returned {
+			if x != nil && dialogOnScreen(x, s.Dialog.Fingerprint) && !x.Dialog.Returned && !noticeDelivered(d, x) {
 				// The lead has it from task wait: the watcher must not tell it again, and a notice
 				// already queued would arrive stale.
 				x.Dialog.Returned, x.Dialog.Notified = true, true
@@ -931,6 +931,20 @@ func (t *Tasks) waitDialog(d *Data, owner, id string) (*Waited, error) {
 		}
 	}
 	return nil, nil
+}
+
+// noticeDelivered: the owner was told of the task's marked dialog, and no notice of it is still queued. The
+// lead has it from the watcher, so task wait does not return it again.
+func noticeDelivered(d *Data, x *Task) bool {
+	if x.Dialog == nil || !x.Dialog.Notified {
+		return false
+	}
+	for _, p := range d.Pending {
+		if p.Kind == "dialog" && p.Task == x.ID && p.Dialog == x.Dialog.Fingerprint {
+			return false
+		}
+	}
+	return true
 }
 
 func roundNote(round int) string {

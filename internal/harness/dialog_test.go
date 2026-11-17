@@ -992,6 +992,22 @@ func TestNoDialogNoticeAfterTheTaskEnds(t *testing.T) {
 	}
 }
 
+// The watcher told the lead of a dialog, then task wait returned the same dialog as new (agy review A8.1).
+func TestWatchThenWaitDoesNotReportTwice(t *testing.T) {
+	r := newRig(t)
+	x, _ := dialogTask(t, r)
+	r.tasks.Watch(WatchOpts{Rounds: 1})
+	if len(ownerNotes(r)) != 1 {
+		t.Fatal("no notice", ownerNotes(r))
+	}
+	if w, err := r.tasks.Wait(x.ID, false, 4); !isCode(err, term.CodeTimeout) {
+		t.Fatal("task wait returned a dialog the watcher already told:", w, err)
+	}
+	if w, err := r.tasks.Wait("", true, 4); !isCode(err, term.CodeTimeout) {
+		t.Fatal("task wait --any returned a dialog the watcher already told:", w, err)
+	}
+}
+
 // Any pane could task wait another owner's task: the dialog it returned was marked returned, so the
 // watcher never told the owner, and the owner's own wait timed out (agy review A8.2).
 func TestOnlyTheOwnerWaitsForATask(t *testing.T) {

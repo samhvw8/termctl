@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-11-18
+* **Fix**: `task wait` no longer returns a dialog whose watcher notice already reached the owner; it returned it as new, so the lead heard of it twice (review A8.1). Test: `TestWatchThenWaitDoesNotReportTwice`. See [tasks](architecture/tasks.md#dialogs). Runs: nothing new.
 * **Fix**: `task wait ID` refuses a caller that does not own the task (exit 2), checked as `task answer` checks it. Any pane could wait on another owner's task, take its dialog as returned, and the owner was never told (review A8.2). Test: `TestOnlyTheOwnerWaitsForATask`. See [tasks](architecture/tasks.md#dialogs). Runs: nothing new.
 * **Fix**: a task that is lost, exited or closed drops its dialog mark, and only a running, not closed task counts as showing its dialog. A notice held for the owner's draft was delivered after the worker's pane was gone or the task was closed with `--force` (review A5.1). Test: `TestNoDialogNoticeAfterTheTaskEnds`. See [tasks](architecture/tasks.md#watcher). Runs: nothing new.
 * **Fix**: a message too long for one line goes to an inbox file with a random part, created exclusively (`os.CreateTemp`). Two notices to one owner in the same second shared one name, and the second overwrote the first (review A6). Test: `TestInboxFilesNeverCollide`. Runs: nothing new.
