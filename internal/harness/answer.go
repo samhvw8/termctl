@@ -1,8 +1,8 @@
 package harness
 
 import (
+	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/samhvw8/termctl/internal/term"
 )
@@ -181,7 +181,7 @@ func (t *Tasks) answerTarget(target string) (term.Backend, *term.Pane, *Task, er
 		return nil, nil, nil, err
 	}
 	x, err := t.find(d.Tasks, target)
-	if err != nil && strings.HasPrefix(err.Error(), "several") {
+	if errors.Is(err, errSeveral) {
 		return nil, nil, nil, err
 	}
 	if err == nil {

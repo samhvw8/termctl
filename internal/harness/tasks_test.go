@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1272,5 +1273,17 @@ func TestReconcileKeepsTasksWhileTheServerDoesNotAnswer(t *testing.T) {
 	}
 	if g := mustGet(t, r, x.ID); g.Status != "running" {
 		t.Fatalf("a task of an unreachable server became %s", g.Status)
+	}
+}
+
+// find tells "several tasks" from "no task" by a sentinel, not by its message, and both stay exit 2
+// (review F25).
+func TestFindTellsSeveralFromNone(t *testing.T) {
+	r := newRig(t)
+	tasks := map[string]*Task{"tabc111": {ID: "tabc111"}, "tabc222": {ID: "tabc222"}}
+	_, several := r.tasks.find(tasks, "tabc")
+	_, none := r.tasks.find(tasks, "tzzz")
+	if !errors.Is(several, errSeveral) || errors.Is(none, errSeveral) || !isCode(several, term.CodeUsage) || !isCode(none, term.CodeUsage) {
+		t.Fatalf("several=%v none=%v", several, none)
 	}
 }

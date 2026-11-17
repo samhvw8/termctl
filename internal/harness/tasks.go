@@ -99,6 +99,23 @@ func (t *Tasks) backendFor(paneID string, ref map[string]string) (term.Backend, 
 	return term.Make(strings.SplitN(paneID, ":", 2)[0], "", ref["socket_path"])
 }
 
+// errSeveral marks a task ID prefix that matches more than one task, as against none.
+var errSeveral = errors.New("several tasks match")
+
+// findError is find's refusal: a *term.Error (exit 2) that also says whether several tasks matched.
+type findError struct {
+	err     *term.Error
+	several bool
+}
+
+func (e *findError) Error() string { return e.err.Error() }
+func (e *findError) Unwrap() []error {
+	if e.several {
+		return []error{e.err, errSeveral}
+	}
+	return []error{e.err}
+}
+
 func (t *Tasks) find(tasks map[string]*Task, id string) (*Task, error) {
 	if x, ok := tasks[id]; ok {
 		return x, nil
@@ -116,7 +133,7 @@ func (t *Tasks) find(tasks map[string]*Task, id string) (*Task, error) {
 	if len(hits) > 1 {
 		word = "several tasks"
 	}
-	return nil, term.TargetErr("%s match '%s'", word, id)
+	return nil, &findError{term.TargetErr("%s match '%s'", word, id), len(hits) > 1}
 }
 
 // sameServer: a pane ID only means something on the server it was recorded on. Backends with a core_id
