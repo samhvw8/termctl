@@ -56,6 +56,18 @@ func TestHungCLIFailsAfterItsDeadline(t *testing.T) {
 			return err
 		},
 	}
+	cases["ps"] = func(t *testing.T) error {
+		hungCLI(t, "ps")
+		_, err := processesByTTY()
+		return err
+	}
+	cases["lsof"] = func(t *testing.T) error {
+		hungCLI(t, "lsof")
+		if got := cwdOf([]int{1}); len(got) != 0 {
+			t.Fatal(got)
+		}
+		return BackendErr("no answer after: cwdOf drops a failed lsof, as before") // only the time is checked
+	}
 	for name, call := range cases {
 		t.Run(name, func(t *testing.T) {
 			start := time.Now()

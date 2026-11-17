@@ -56,8 +56,9 @@ type proc struct {
 }
 
 func processesByTTY() (map[string][]proc, error) {
-	out, err := exec.Command("ps", "-axo", "pid=,tty=,comm=").Output()
-	if err != nil {
+	cmd, finish := cliCommand("ps", "-axo", "pid=,tty=,comm=")
+	out, err := cmd.Output()
+	if err = finish(err); err != nil {
 		return nil, BackendErr("ps: %v", err)
 	}
 	by := map[string][]proc{}
@@ -101,7 +102,9 @@ func cwdOf(pids []int) map[int]string {
 	for i, p := range pids {
 		list[i] = strconv.Itoa(p)
 	}
-	out, _ := exec.Command("lsof", "-a", "-d", "cwd", "-Fpn", "-p", strings.Join(list, ",")).Output()
+	cmd, finish := cliCommand("lsof", "-a", "-d", "cwd", "-Fpn", "-p", strings.Join(list, ","))
+	out, err := cmd.Output()
+	finish(err) // lsof fails when one pid is gone, and still prints the others: parse what came
 	pid := 0
 	for _, line := range strings.Split(string(out), "\n") {
 		if strings.HasPrefix(line, "p") {
