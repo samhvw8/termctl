@@ -1025,3 +1025,33 @@ func TestOnlyTheOwnerWaitsForATask(t *testing.T) {
 		t.Fatal("the owner's wait:", w, err)
 	}
 }
+
+// Notices are claimed together and sent one at a time, each taking a second or more. A dialog answered
+// while an earlier notice was being sent was still announced (agy review A5.3).
+func TestDialogAnsweredDuringAnEarlierNoticeIsNotAnnounced(t *testing.T) {
+	r := newRig(t)
+	a, _ := dialogTask(t, r)
+	b, _ := dialogTask(t, r)
+	r.b.State[r.owner.ID].Input = "owner typing"
+	r.tasks.Watch(WatchOpts{Rounds: 1})
+	if d := r.data(); len(d.Pending) != 2 {
+		t.Fatal("two held notices expected:", d.Pending)
+	}
+	r.b.State[r.owner.ID].Input = ""
+	slow := &slowSend{Fake: r.b, clock: r.clock}
+	ts := r.as(r.owner)
+	ts.Backend = slow
+	ts.Factory = func(string, map[string]string) (term.Backend, error) { return slow, nil }
+	slow.during = func() { // the first notice is on its way; both dialogs are answered meanwhile
+		r.reg.Update(func(d *Data) error { d.Tasks[a.ID].Dialog, d.Tasks[b.ID].Dialog = nil, nil; return nil })
+	}
+	if n, err := ts.FlushPending(); err != nil || n != 1 {
+		t.Fatal(n, err)
+	}
+	if n := ownerNotes(r); len(n) != 1 {
+		t.Fatalf("a dialog answered before its notice went out was announced: %q", n)
+	}
+	if d := r.data(); len(d.Pending) != 0 {
+		t.Fatal("the stale notice stays queued:", d.Pending)
+	}
+}

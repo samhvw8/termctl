@@ -1071,6 +1071,15 @@ func (t *Tasks) FlushPending() (int, error) {
 	}
 	delivered := 0
 	for _, p := range claimed {
+		// Each delivery takes a second or more, so a dialog claimed above can be answered or gone by now.
+		if p.Kind == "dialog" {
+			if stale, err := t.dropStaleDialogNotice(p); err != nil || stale {
+				if err != nil {
+					return delivered, err
+				}
+				continue
+			}
+		}
 		outcome := t.deliver(p)
 		if outcome == "delivered" {
 			delivered++
@@ -1098,6 +1107,27 @@ func (t *Tasks) FlushPending() (int, error) {
 		}
 	}
 	return delivered, nil
+}
+
+// dropStaleDialogNotice reads the task's dialog mark right before its notice is sent, and drops the notice
+// when the dialog is no longer on screen: answered, gone, or the task ended since it was claimed.
+func (t *Tasks) dropStaleDialogNotice(p Pending) (bool, error) {
+	d, err := t.Reg.Read()
+	if err != nil {
+		return false, err
+	}
+	if dialogOnScreen(d.Tasks[p.Task], p.Dialog) {
+		return false, nil
+	}
+	return true, t.Reg.Update(func(d *Data) error {
+		for i, q := range d.Pending {
+			if q.Task == p.Task && q.Created == p.Created {
+				d.Pending = append(d.Pending[:i], d.Pending[i+1:]...)
+				break
+			}
+		}
+		return nil
+	})
 }
 
 // untold clears the mark's notified flag when a dialog notice is dropped before it reached the owner,

@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-11-18
+* **Fix**: a dialog notice is checked against the task's mark right before it is sent, not only when the batch is claimed; a dialog answered while an earlier notice was on its way was still announced (review A5.3). Cost: one registry read per dialog notice. Test: `TestDialogAnsweredDuringAnEarlierNoticeIsNotAnnounced`. See [tasks](architecture/tasks.md#watcher). Runs: nothing new.
 * **Fix**: `task wait` no longer returns a dialog whose watcher notice already reached the owner; it returned it as new, so the lead heard of it twice (review A8.1). Test: `TestWatchThenWaitDoesNotReportTwice`. See [tasks](architecture/tasks.md#dialogs). Runs: nothing new.
 * **Fix**: `task wait ID` refuses a caller that does not own the task (exit 2), checked as `task answer` checks it. Any pane could wait on another owner's task, take its dialog as returned, and the owner was never told (review A8.2). Test: `TestOnlyTheOwnerWaitsForATask`. See [tasks](architecture/tasks.md#dialogs). Runs: nothing new.
 * **Fix**: a task that is lost, exited or closed drops its dialog mark, and only a running, not closed task counts as showing its dialog. A notice held for the owner's draft was delivered after the worker's pane was gone or the task was closed with `--force` (review A5.1). Test: `TestNoDialogNoticeAfterTheTaskEnds`. See [tasks](architecture/tasks.md#watcher). Runs: nothing new.
