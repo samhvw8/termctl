@@ -991,3 +991,21 @@ func TestNoDialogNoticeAfterTheTaskEnds(t *testing.T) {
 		}
 	}
 }
+
+// Any pane could task wait another owner's task: the dialog it returned was marked returned, so the
+// watcher never told the owner, and the owner's own wait timed out (agy review A8.2).
+func TestOnlyTheOwnerWaitsForATask(t *testing.T) {
+	r := newRig(t)
+	x, _ := dialogTask(t, r)
+	if w, err := r.as(r.other).Wait(x.ID, false, 4); !isCode(err, term.CodeUsage) {
+		t.Fatal("a non-owner's task wait:", w, err)
+	}
+	r.reg.Update(func(d *Data) error { d.Tasks[x.ID].OwnerRef = map[string]string{"pid": "222"}; return nil })
+	if w, err := r.tasks.Wait(x.ID, false, 4); !isCode(err, term.CodeUsage) {
+		t.Fatal("the same pane ID on another server waited:", w, err)
+	}
+	r.reg.Update(func(d *Data) error { d.Tasks[x.ID].OwnerRef = nil; return nil })
+	if w, err := r.tasks.Wait(x.ID, false, 4); err != nil || w.Dialog == nil {
+		t.Fatal("the owner's wait:", w, err)
+	}
+}

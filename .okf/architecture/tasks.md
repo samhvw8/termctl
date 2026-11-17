@@ -3,7 +3,7 @@ type: Architecture
 title: Tasks and pane safety
 description: How harness-ops tracks a job given to another harness session, tells its owner of a permission dialog, and what stops it closing or spawning the wrong thing.
 tags: [architecture, harness, tasks, safety]
-generated: { by: claude-code/opus-5.5, at: '2026-11-17T17:06:17Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-17T17:07:21Z' }
 ---
 
 # Overview
@@ -78,7 +78,7 @@ Each round also delivers held-back results. The watcher stops when the owner pan
 
 ## task wait
 
-`task wait ID` and `task wait --any` also return when a waited running task shows a dialog it has not returned before. The caller tells the two apart by the output: a `DIALOG task <id>` block (question, body, numbered options with `[persist]`, fingerprint, the answer and deny commands) instead of the task table. With `--json` the object has `"event": "dialog"` and a `dialog` field, or `"event": "finished"`. Both exit 0. A dialog is an event to act on, like a `blocked` report, not a failure, and the existing exit codes mean refusals and errors. A finished task comes first. A dialog is returned once while it stays on screen; a lead that waits again without answering times out (exit 5). A dialog `task wait` returned counts as told: the watcher sends no notice of it, and a notice of it still queued is dropped. While a watcher serves the caller, `task wait` does not read every worker's screen each 3 s itself: it reads only a worker whose mark (kept by the watcher) shows a dialog not returned yet, to print that dialog in full.
+`task wait ID` waits only for a task the caller owns (the same pane ID on the same server, as `task answer` checks), exit 2 otherwise: a wait marks a result seen and a dialog returned, so until 2026-11-18 any pane could take a dialog from its owner, whose watcher then never announced it (review A8.2; test: `TestOnlyTheOwnerWaitsForATask`). `task wait ID` and `task wait --any` also return when a waited running task shows a dialog it has not returned before. The caller tells the two apart by the output: a `DIALOG task <id>` block (question, body, numbered options with `[persist]`, fingerprint, the answer and deny commands) instead of the task table. With `--json` the object has `"event": "dialog"` and a `dialog` field, or `"event": "finished"`. Both exit 0. A dialog is an event to act on, like a `blocked` report, not a failure, and the existing exit codes mean refusals and errors. A finished task comes first. A dialog is returned once while it stays on screen; a lead that waits again without answering times out (exit 5). A dialog `task wait` returned counts as told: the watcher sends no notice of it, and a notice of it still queued is dropped. While a watcher serves the caller, `task wait` does not read every worker's screen each 3 s itself: it reads only a worker whose mark (kept by the watcher) shows a dialog not returned yet, to print that dialog in full.
 
 ## task answer and task deny
 

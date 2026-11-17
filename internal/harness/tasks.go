@@ -822,6 +822,10 @@ func (t *Tasks) Wait(id string, any bool, timeout float64) (*Waited, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Waiting marks a result seen and a dialog returned, which the owner then never hears of.
+		if t.Sender == nil || x.Owner != t.Sender.ID || !sameServer(x.OwnerRef, t.callerRef()) {
+			return nil, term.TargetErr("only the owner of task %s can wait for it", x.ID)
+		}
 		id = x.ID
 	}
 	deadline := t.clock().Now() + timeout
