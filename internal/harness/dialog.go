@@ -34,8 +34,8 @@ type Dialog struct {
 	// Unrecognized: drawn like a dialog, but not a known permission question (an agy picker, or wording
 	// not seen before). Every choice but a clear "No" or cancel is marked Persist.
 	Unrecognized bool `json:"unrecognized,omitempty"`
-	// Ambiguous: lines shaped like options are out of sequence, or more than one is selected, so the
-	// worker's own text may pose as choices. It has no Question or Options: Body is the whole dialog as
+	// Ambiguous: lines shaped like options are out of sequence, the selection mark is not on an option or
+	// shows more than once, or two full-width rules show, so the worker's own text may pose as choices. It has no Question or Options: Body is the whole dialog as
 	// shown, from the rule to the footer. task answer refuses it; task deny (Esc) works.
 	Ambiguous bool `json:"ambiguous,omitempty"`
 }
@@ -102,12 +102,13 @@ func agyReadDialog(lines []string) *Dialog    { return readDialog(lines, agyDial
 const footerReach = 6 // the footer is among the last lines of the screen
 
 // readDialog finds the footer near the bottom, the rule above the request, the numbered options read
-// top-down from the first "1." under that rule with exactly one selected, the question ending in "?" right
-// above option 1, and the request between the rule and the question. A request whose rule is not on screen
-// is read as far as the screen goes, and marked Truncated. Option-shaped lines out of sequence, or more
-// than one selection mark anywhere between the rule and the footer, make the dialog Ambiguous: the
-// worker's text (a command, a path in an option) can wrap onto lines of its own shaped like options, and
-// agy wraps them to column 0, so which lines are the real options cannot be told.
+// top-down from the lowest "1." under that rule with a question ending in "?" right above it, and the
+// request between the rule and the question. A request whose rule is not on screen is read as far as the
+// screen goes, and marked Truncated. The dialog is Ambiguous when option-shaped lines come out of
+// sequence, when the only selection mark between the rule and the footer is not on an option, when there
+// is more than one, or when more than one full-width rule shows: the worker's text (a command, a path in
+// an option) can wrap onto lines of its own shaped like options or rules, and agy wraps them to column 0,
+// so which lines are the real ones cannot be told.
 func readDialog(lines []string, spec dialogSpec) *Dialog {
 	footer, seen := -1, 0
 	for i := len(lines) - 1; i >= 0 && seen < footerReach; i-- {
@@ -135,18 +136,31 @@ func readDialog(lines []string, spec dialogSpec) *Dialog {
 	if len(rules) > 0 {
 		start, truncated = rules[0]+1, false
 	}
-	first, marks := -1, 0
-	for i := start; i < footer; i++ {
-		if m := optionRe.FindStringSubmatch(lines[i]); m != nil {
-			if m[1] != "" {
-				marks++
-			}
-			if first < 0 && m[2] == "1" {
-				first = i
-			}
+	// Option 1 is the lowest "1." line under the rule with a question right above it; the options run from
+	// there down to the footer. A numbered list in the request, above the question, is body text.
+	first, q := -1, -1
+	for i := footer - 1; i >= start && first < 0; i-- {
+		if m := optionRe.FindStringSubmatch(lines[i]); m == nil || m[2] != "1" {
+			continue
+		}
+		j := i - 1
+		for j >= start && strings.TrimSpace(lines[j]) == "" {
+			j--
+		}
+		if j >= start && strings.HasSuffix(strings.TrimSpace(lines[j]), "?") {
+			first, q = i, j
 		}
 	}
 	if first < 0 {
+		return nil
+	}
+	marks := 0 // selection marks anywhere between the rule and the footer
+	for i := start; i < footer; i++ {
+		if m := optionRe.FindStringSubmatch(lines[i]); m != nil && m[1] != "" {
+			marks++
+		}
+	}
+	if marks == 0 {
 		return nil
 	}
 	d := &Dialog{}
@@ -179,23 +193,14 @@ func readDialog(lines []string, spec dialogSpec) *Dialog {
 		last := &d.Options[len(d.Options)-1]
 		last.Text += " " + t
 	}
-	if !inSequence || marks > 1 {
+	// The one selection mark must be on an option (the worker's text may pose as options below the real
+	// ones, with or without a mark: review A2, round-5 D2). A dialog draws one full-width rule; agy wraps a
+	// command to column 0, so a command can draw another, and which is the dialog's cannot be told (round-5 D1).
+	if !inSequence || marks > 1 || d.Selected == 0 || len(rules) > 1 {
 		return ambiguousDialog(lines[start:footer], truncated)
 	}
-	if len(d.Options) < 2 || d.Selected == 0 {
+	if len(d.Options) < 2 {
 		return nil
-	}
-	q := first - 1
-	for q >= 0 && strings.TrimSpace(lines[q]) == "" {
-		q--
-	}
-	if q < 0 || !strings.HasSuffix(strings.TrimSpace(lines[q]), "?") {
-		return nil
-	}
-	// A dialog draws one such rule. agy wraps a command to column 0, so a command can draw another, and
-	// which one is the dialog's cannot be told (round-5 review D1).
-	if len(rules) > 1 {
-		return ambiguousDialog(lines[start:footer], truncated)
 	}
 	top := q
 	for spec.wrapped && top > 0 {
@@ -291,7 +296,7 @@ func AnswerCommand(target string, d *Dialog) string {
 }
 
 // ambiguousNote says what an Ambiguous dialog is. It suggests no answer command.
-const ambiguousNote = "This dialog is ambiguous: lines shaped like its choices are out of sequence or more than one is selected, so the worker's own text may pose as choices. task answer refuses it: read the pane and answer there by hand, or deny it"
+const ambiguousNote = "This dialog is ambiguous: lines shaped like its choices or its rule cannot be told from the worker's own text (choices out of sequence, a selection mark off the choices or more than one, or a second full-width rule). task answer refuses it: read the pane and answer there by hand, or deny it"
 
 // unrecognizedNote says what an Unrecognized dialog is. It suggests no --persist command.
 const unrecognizedNote = "This is not a known permission dialog (a picker, or a question not seen before): every choice but No or cancel is marked [persist]; read the pane before choosing, or deny it"
