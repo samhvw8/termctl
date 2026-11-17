@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-11-18
+* **Fix**: a dialog with more than one unindented `─` rule as wide as the widest above its footer is `ambiguous`. agy wraps a command to column 0, so a command whose wrapped piece was exactly a full-width `─` run read as the rule: the `curl | sh` above it was left out of the body and the fingerprint, or forged choices under it hid the real ones (round-5 review D1). `task answer` refuses it (exit 6), `task deny` presses Esc. The real captures read as before, with the same fingerprints. Test: `TestFullWidthRuleInTheRequestMakesAnAmbiguousDialog`. See [harness profiles](architecture/harness-profiles.md#dialogs). Runs: nothing new.
 * **Verified**: deny by Esc on real harnesses: `TestDialogsRealMatrix` on tmux passed both cells (Claude Code on haiku, agy on `gemini-4-hydrogen-medium`); the denied file stayed absent. See [tasks](architecture/tasks.md#verified-on-real-harnesses). Runs: nothing new.
 * **Docs**: `task answer` and `task deny` need an open task (running, ready or blocked); a `failed` task is refused by its ID (review A12.4). README: agy is a calibrated harness, and iTerm2 uses termctl's own Go client with no `it2` helper (review A12.5). Runs: nothing new.
 * **Fix**: the wait between watcher rounds runs to a deadline: a worker read and announced after a status poll pushed the next round back by the time that took (review A12.1). Test: `TestRoundsKeepTheirCadenceWhenAStatusPollAnnounces`. See [tasks](architecture/tasks.md#watcher). Runs: nothing new.

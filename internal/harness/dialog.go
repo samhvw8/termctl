@@ -124,13 +124,16 @@ func readDialog(lines []string, spec dialogSpec) *Dialog {
 	if footer < 0 {
 		return nil
 	}
-	start, truncated := 0, true // the first line under the rule above the request
 	width := ruleWidth(lines)
-	for i := footer - 1; i >= 0; i-- {
+	var rules []int // unindented rules as wide as the widest on screen, above the footer
+	for i := 0; i < footer; i++ {
 		if isBoundary(lines[i], width) {
-			start, truncated = i+1, false
-			break
+			rules = append(rules, i)
 		}
+	}
+	start, truncated := 0, true // the first line under the rule above the request
+	if len(rules) > 0 {
+		start, truncated = rules[0]+1, false
 	}
 	first, marks := -1, 0
 	for i := start; i < footer; i++ {
@@ -188,6 +191,11 @@ func readDialog(lines []string, spec dialogSpec) *Dialog {
 	}
 	if q < 0 || !strings.HasSuffix(strings.TrimSpace(lines[q]), "?") {
 		return nil
+	}
+	// A dialog draws one such rule. agy wraps a command to column 0, so a command can draw another, and
+	// which one is the dialog's cannot be told (round-5 review D1).
+	if len(rules) > 1 {
+		return ambiguousDialog(lines[start:footer], truncated)
 	}
 	top := q
 	for spec.wrapped && top > 0 {
