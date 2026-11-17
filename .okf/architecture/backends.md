@@ -3,8 +3,17 @@ type: Architecture
 title: Backends
 description: The Backend interface and the state of each terminal backend.
 tags: [architecture, backends]
-generated: { by: claude-code/opus-5.5, at: '2026-11-16T16:05:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-17T12:30:00Z' }
 sources:
+  - id: iterm2-status
+    resource: https://github.com/gnachman/iTerm2/blob/master/sources/Language/BuiltInFunctions/SetStatusBuiltInFunction.swift
+    title: iTerm2 built-in function get_session_status (app context, session_id argument)
+  - id: osc7501
+    resource: https://www.superlogical.com/rex/docs/build/program-status
+    title: Program Status Protocol (OSC 7501)
+  - id: alerts-report
+    resource: /research/261117-terminal-alerts/REPORT.md
+    title: Capturing terminal alerts per pane, research report (2026-11-17)
   - id: rex-cli
     resource: https://www.superlogical.com/rex/docs/reference/cli
     title: Rex CLI reference
@@ -25,6 +34,24 @@ sources:
 `Pane.Tab` names the tab (tmux: window) that holds a pane, for backends that report it (iTerm2, tmux). `ls` shows it in the TAB column and as `tab` in `--json`.
 
 `Mover`, `Breaker`, `Swapper` and `Arranger` are optional too: see [moving and arranging](#moving-and-arranging).
+
+`StatusReader` is optional: `ProgramStatuses(panes)` gives many panes' program status in one cheap read. See [program status](#program-status).
+
+# Program status
+
+Agents report what they do with OSC 7501 (`ESC ] 7501 ; state=blocked:kind=permission:msg=<base64> BEL`; pairs split by `:`), but only where the terminal answers the `OSC 7501 ; ?` check.[^osc7501] `term.ProgramStatus{State, Kind, Msg}` is the common form; `State` is lower case, and iTerm2's `waiting` is given as `blocked`. `Blocked()` is a hint that a person is needed, never proof of a dialog: the watcher still reads the screen.
+
+| Backend | Source | Cost | Kind, Msg |
+|---|---|---|---|
+| iTerm2 | built-in `iterm2.get_session_status(session_id:)` in the app context, over the open websocket (`InvokeFunctionRequest`)[^iterm2-status] | one function call per pane, no subprocess | Msg is the `detail` (the decoded msg); no kind |
+| Rex | block method `program_status` for every wanted block in one `rex do` Lua script; each session attached once | one CLI call per read | Kind and Msg from the most urgent record (blocked, error, working, done, idle) |
+| hc | `hc ls --json` (the word for every terminal), then `hc get` for a blocked one | one CLI call, plus one per blocked terminal | from `get`'s `status` |
+| tmux | none | | tmux does not answer the check, so agents send nothing there; screen only |
+| Ghostty | none | | unsupported, see the table below |
+
+`NativeStatus` on iTerm2 now calls the same function over the websocket and returns what `it2 session get-status` printed (`status` or `status: detail`), compared on live panes on 2026-11-17. It used to start the `it2` Python CLI per call (0.44 s, about 21 MB). Its callers (`ls` status column, `WaitIdle`, `busy`) are unchanged; iTerm2's `waiting` is still not counted as busy there, as before.
+
+Captured on 2026-11-17: Rex 0.1.0-preview.19 `program_status` answers `{records: [{state, kind, msg, owner, updated_at}]}` per block, and hc 0.1.19 `get` answers `status: {state, kind, msg}` (fixtures in `internal/term/testdata`). Seen live in `mise run test:dialogs`: agy on iTerm2 reported `Approve Bash: touch …`, which reached the lead's notice (6 of 9 agy notices in the 6-worker run). Claude Code 2.1.326 on iTerm2 reported no blocked status during its permission dialog (0 of 9), so its dialogs are found by the 3 s screen round.[^alerts-report]
 
 Pane IDs are `backend:id`. A target with a backend prefix selects that backend, which is how `RE:` replies route across terminals.
 
@@ -92,7 +119,7 @@ Checked on real iTerm2 3.7.6 (2026-11-16) by `TestMaximizedPaneOnITerm2` in `mis
 | tmux | CLI. Labels are the pane option `@termctl_label`. Escapes a final `;`, which tmux reads as a command separator. A new window opens right after the caller's (`new-window -a -t <window_id>`; a pane ID there fails with "can't specify pane here"). `TMUX_PANE` is trusted only when `$TMUX` names the same server. |
 | rex | CLI, checked on Rex 0.1.0-preview.19 on a private server (`mise run test:rex`) and listed on the live app. A Rex window is a tab; its ID is the window's last 6 hex digits, as Rex shows it. Details: [the Rex section below](#rex). |
 | hc | Herdr (herdr-core `hc` 0.1.19). Tested on a real private core with the fake harness and a no-prompt Claude Code (`mise run test:hc`); real Claude Code and omp messages passed on the live core. `SendText` always refuses: `hc send` always submits, so lines go through `SubmitText`. Pane ID `hc:t7`; label is the `termctl_label` label. `Process` is `foreground.name`, or a known agent found in `foreground.argv`. `where` is validated and ignored: a new terminal opens as a tab in the Herdr app. Details: [the hc section below](#hc). |
-| ghostty | Stub that raises. |
+| ghostty | Unsupported: every call raises "not supported". Blocker: Ghostty 1.4 (not installed here) has an AppleScript dictionary with input, split, focus and close, but no screen read and no notification, bell or status event; OSC 7501 is parsed by libghostty and ignored by the app, and OSC 9/777 go to Notification Center only. Without a screen read termctl cannot see an input line or a dialog, so no harness-ops command could be safe there. See the research report.[^alerts-report] |
 
 
 # Rex
@@ -105,7 +132,7 @@ Measured on Rex 0.1.0-preview.19,[^rex-cli] and the reason the code is the way i
 - **CLI quirks.** `rex send` and `block rename` read text that starts with `-` as a flag, so the backend passes `--`. With `REX_SESSION` set, a block ID resolves only inside that session, so the backend drops `REX_SESSION`, `REX_BLOCK` and `REX_CLIENT` from the environment of the `rex` processes it runs. Exit 3 is an unknown target (exit 2 for us), exit 4 no server.
 - **Spawn.** `split` splits the anchor on its long side, then evens the window; `tab` is `window new` in the caller's session, moved right after the caller's window; `window` is `rex new`, a new session. Commands run as `$SHELL -lic`.
 - **Sessions are walls.** Moves and swaps work only inside one session ("blocks are in different sessions"); a cross-session move is refused before anything changes.
-- **Not checked:** real pane sizes (a headless server reports 80x24 for every block), choosing between several live servers (unit test only), and status: Rex's OSC 7501 reports could give `NativeStatus`, which returns nothing yet.
+- **Not checked:** real pane sizes (a headless server reports 80x24 for every block) and choosing between several live servers (unit test only). Program status is read through `ProgramStatuses` (one Lua call); `NativeStatus` still returns nothing on Rex, so `WaitIdle` does not use it there.
 
 # hc
 
@@ -124,3 +151,6 @@ Measured on hc 0.1.19 and the reason the code is the way it is:
 [^rex-cli]: Rex CLI reference
 [^iterm2-move]: iTerm2 built-in functions move_session, move_session_to_new_tab, apply_layout
 [^iterm2-proto]: iTerm2 API messages (ListSessionsResponse.Tab.minimized_sessions, MenuItemRequest)
+[^iterm2-status]: iTerm2 built-in function get_session_status
+[^osc7501]: Program Status Protocol (OSC 7501)
+[^alerts-report]: Capturing terminal alerts per pane, research report (2026-11-17)

@@ -1,9 +1,9 @@
 ---
 type: Architecture
 title: Tasks and pane safety
-description: How harness-ops tracks a job given to another harness session, and what stops it closing or spawning the wrong thing.
+description: How harness-ops tracks a job given to another harness session, tells its owner of a permission dialog, and what stops it closing or spawning the wrong thing.
 tags: [architecture, harness, tasks, safety]
-generated: { by: claude-code/opus-5.5, at: '2026-11-15T15:00:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-17T12:30:00Z' }
 ---
 
 # Overview
@@ -51,6 +51,45 @@ The read-only flags per harness are in [harness profiles](/architecture/harness-
 
 `task done` stores a pending entry, then tries for 10 seconds. A draft on the owner's input line means retry, never join. Any later harness-ops call retries, for one hour. Claims under the lock stop two processes from delivering the same result; a claim older than 30 seconds belongs to a process that died.
 
+# Dialogs
+
+A worker can stop on a permission dialog. Its owner learns of it in two ways, and answers with `task answer` or `task deny`. How a dialog is read: [harness profiles](/architecture/harness-profiles.md#dialogs).
+
+## Watcher
+
+`harness-ops watch [--interval S]` (code: `internal/harness/watch.go`, `internal/cli/watch.go`) reads the screens of the caller's running tasks every 3 s (a round), and in between asks iTerm2 for their program status every second. A new dialog becomes a pending entry of kind `dialog`, delivered through the same path as task results: draft-safe, claimed under the lock, retried by any later call. The line reads:
+
+`[agent-ops from <task> (<harness>) id=<pane> folder=<cwd>] task <id> (<title>) DIALOG <fp>: <question> | <body> | 1. ... 2. ... [persist] | answer: harness-ops task answer <id> <n> --expect <fp> (add --persist for a [persist] choice); deny: ...`
+
+Each round also delivers held-back results. The watcher stops when the owner has no open task, or when the registry file is gone.
+
+- **Dedup.** The task's `dialog` mark holds the fingerprint on screen and whether the owner was told (`notified`) and whether `task wait` returned it (`returned`). The mark is dropped when the worker's input line is seen again with no dialog, when the lead answers, and on `task done`. So the same request asked again later is new again; remembering every fingerprint forever would hide it. A notice whose dialog is gone before delivery is dropped, not delivered late. Dialog notices never change the task's `notify` field.
+- **One per owner.** A non-blocking `flock` on `watch/<owner>.lock` in the state directory, holding the pid. A second `watch` prints that one runs and exits 0.
+- **Started for you.** `task new` and `task send` start a detached watcher (`setsid`, output to `watch/<owner>.log`) when none runs. It finds the owner pane from the inherited environment. A failed start only warns.
+- **A round.** Rounds start every 3 s, start to start: the time a round takes (lists, reads, notices) is not added on top (at least 0.5 s between rounds). Before 2026-11-17 the 3 s sleep came after the round, and with 6 workers rounds were 5 to 6 s apart. Panes are listed once per backend server for the whole round (reconcile and reads share the list), then every worker's screen is captured in parallel, at most 8 at once. Each backend with a [status source](/architecture/backends.md#program-status) is asked once for all its workers. A worker whose status says blocked but whose screen shows no dialog yet is read again 0.5 s later. Status alone is never a dialog.
+- **Between rounds.** Every `StatusEvery` (1 s) the watcher asks the backends whose status read is free (`term.FreeStatus`: only iTerm2, a websocket call) for its workers' status. Rex (`rex do`, about 180 ms and a process) and hc (`hc ls`) are read once per round only: on 2026-11-17 Sam chose not to start a process every second per watcher for at most 2 s less latency. A worker that turned blocked (or blocked with a new message) has its screen read at once, and a dialog found then is told without waiting for the round. tmux has no status, so its dialogs wait for the round; Rex and hc dialogs wait for it too, unless the screen round catches them first. Per tick on iTerm2: one websocket call per worker, no subprocess (the `it2` CLI is no longer used).
+- **The harness's reason.** When the worker's status is blocked, its message (OSC 7501 `msg`, iTerm2's detail) is added to the notice: `... | the harness reports: <msg>`, cut to 200 characters.
+- **New build, new process.** The watcher checks its executable's inode, size and modification time each round. A new build that has stayed the same for one more round (so a file being written is never run) makes it release its lock and `syscall.Exec` itself with the same arguments and environment: same pid, new parsers and fingerprints. If the exec fails it logs that and goes on with the old code. The log shows `the executable changed; restarting`, then `watching the tasks of ... (pid N)` again.
+- **Signals.** The watcher reads a list of `Source`s that return `Signal{Task, Kind, Text, Dialog, Status}`. Today the only source is the screen source, fed by the status reads above. Push events (iTerm2 variable monitors, `rex events`, `hc events`, Rex's OSC 9/777 `desktop_notification`) are not used; other kinds reach the owner as `<KIND>: <text>`.
+
+## task wait
+
+`task wait ID` and `task wait --any` also return when a waited running task shows a dialog it has not returned before. The caller tells the two apart by the output: a `DIALOG task <id>` block (question, body, numbered options with `[persist]`, fingerprint, the answer and deny commands) instead of the task table. With `--json` the object has `"event": "dialog"` and a `dialog` field, or `"event": "finished"`. Both exit 0. A dialog is an event to act on, like a `blocked` report, not a failure, and the existing exit codes mean refusals and errors. A finished task comes first. A dialog is returned once while it stays on screen; a lead that waits again without answering times out (exit 5).
+
+## task answer and task deny
+
+`task answer ID N [--expect FP] [--persist]` re-reads the worker's screen first.
+
+| Case | Exit |
+|---|---|
+| The caller is not the task's owner, or the target is a pane the caller did not start (`PaneRecord` owner), or its own pane | 2 |
+| The harness has no calibrated dialog reader, or N is not an option | 2 |
+| No dialog on screen, or `--expect` names another fingerprint | 7 |
+| Option N grants more than this request and `--persist` is not given | 6 |
+| The selection did not reach N, or the dialog is still there 3 s after Enter | 1 |
+
+`task deny` picks the first option starting with "No". Only when there is none does it press Esc, and it says so.
+
 # Safety rules
 
 | Rule | Exit |
@@ -63,6 +102,23 @@ The read-only flags per harness are in [harness profiles](/architecture/harness-
 | A record from before a terminal server restart does not count: tmux pane IDs are reused, so `ServerRef` holds the server pid. | 6 or lost |
 
 # Verified on real harnesses
+
+On 2026-11-17, `mise run test:dialogs` (`e2e/dialogs_real_test.go`): a lead running the fake harness gives a task to a real worker, Claude Code 2.1.326 on haiku (`--permission-mode default --setting-sources project --strict-mcp-config`) or agy 1.5.10 (`--mode accept-edits`, its terminal sandbox off for the session), told to run `touch <cell>-yes`. The notice must show on the lead's screen; `task answer 1 --expect <fp>` must make the file appear; a second `touch <cell>-no` denied with `task deny` must leave it absent for 10 s. Other dialogs (haiku asks to run `harness-ops task done`) are denied and counted.
+
+| Cell | Result | Notice ms (yes / no) |
+|---|---|---|
+| iterm2-claude | pass | 301 / 612 |
+| iterm2-agy | pass | 1373 / 815 |
+| tmux-claude | pass | 1711 / 1856 |
+| tmux-agy | pass | 2634 / 2958 |
+| rex-claude | pass | 535 / 996 |
+| rex-agy | pass | 1095 / 865 |
+| hc-claude | pass | 849 / 82 |
+| hc-agy | pass | 579 / 210 |
+
+That is the full run of 12:15 UTC. Earlier runs failed agy cells for causes outside termctl, each fixed in the test or recorded: agy's sandbox refused the approved `touch` ("Operation not permitted"); agy hung for 3 to 5 minutes reading the agent-ops skill (`Reading file...`) or `Working...`. With 6 workers under one lead (3 claude, 3 agy, two dialogs each), p95 notice latency was 4.4 s on iTerm2 and 4.2 s on tmux (target 3.5 s), and `ps` every 0.5 s saw no `it2` process under the watcher. The latency counts from the driver's first look that showed the dialog; the look before it gives an upper bound, printed too (4.6 s and 4.4 s).
+
+On 2026-11-17 a scratch lead (the fake harness in an iTerm2 tab) ran `task new claude` for a real `claude --model haiku --permission-mode default` in a scratch tab. The watcher that `task new` started told the lead of four dialogs within 5 s each. `task answer` refused option 2 without `--persist` (6) and a wrong `--expect` (7), then answered with the fingerprint from the notice. `task deny` moved down three options to "No" and pressed Enter. `task wait` returned a dialog, and `task done` reached the lead after its dialog was answered. The watcher stopped when the task was closed.
 
 On 2026-11-09 a real `claude --model haiku` in a scratch iTerm2 tab read a one-line brief, ran it, and reported through `task done` by itself. The owner received the tagged result.
 

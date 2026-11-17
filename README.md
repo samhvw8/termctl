@@ -112,8 +112,9 @@ No match, several matches, or your own pane exits 2 and lists candidates. It nev
 - `msg --clear-first` sends `/clear` alone, waits for idle, re-checks the input line, then sends.
 - A message over 800 characters or with line breaks goes to a file in `~/.cache/agent-ops/`.
 - Put options before the target; everything after the target is message text. Use `--` to send text starting with a flag.
+- `task wait` also returns when a worker waits on a permission dialog; `task answer ID N --expect FP` or `task deny ID` answers it. A choice that widens permission ("always allow", "don't ask again") needs `--persist`. `task new` starts a `watch` that sends each new dialog to you, with the harness's own reason when the terminal keeps one (OSC 7501 status on iTerm2, Rex and hc). The watcher reads every worker's screen each 3 s in parallel, asks iTerm2 for program status every second in between (a free websocket call; Rex and hc are asked once per round, since each read starts a process), and restarts itself when its executable is replaced. `mise run test:dialogs` checks this against real Claude Code and agy on all four backends.
 
-Exit codes: 0 ok, 1 backend error, 2 refused target or usage, 4 draft on input line, 5 wait timed out, 6 refused by a safety limit.
+Exit codes: 0 ok, 1 backend error, 2 refused target or usage, 4 draft on input line, 5 wait timed out, 6 refused by a safety limit, 7 no dialog on screen or not the one expected.
 
 ## Backends
 
@@ -123,7 +124,7 @@ Exit codes: 0 ok, 1 backend error, 2 refused target or usage, 4 draft on input l
 | tmux | Tested on a private socket. |
 | hc | Tested on a real private herdr-core with the fake harness (`mise run test:hc`). `termctl send-text` is refused: `hc send` always submits; use `harness-ops msg` or `slash`. `--where` is ignored: a spawned agent opens as a tab in the Herdr app. A blocked program cannot be messaged, and there is no `--force` for it. |
 | rex | Tested on a real private Rex server, 0.1.0-preview.19 (`mise run test:rex`). The CLI is found through `REX_BIN_DIR`, then `PATH`, then the Rex app bundle. The server is `REX_SERVER` when set, else the local socket whose server holds `REX_SESSION`; termctl never starts a server. A Rex window is a tab; `--where window` opens a new session. Blocks move and swap only within their session. |
-| ghostty | Stub: raises "not supported: Ghostty has no control API yet". |
+| ghostty | Unsupported: raises "not supported". Ghostty 1.4's AppleScript can type and split but has no screen read and no status or notification event, so termctl could not see a prompt or a dialog there. |
 
 ## Install
 

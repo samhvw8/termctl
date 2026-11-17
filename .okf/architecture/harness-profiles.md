@@ -1,14 +1,14 @@
 ---
 type: Architecture
 title: Harness profiles
-description: How harness-ops recognises a harness, reads its input line and decides it is idle.
+description: How harness-ops recognises a harness, reads its input line and its permission dialogs, and decides it is idle.
 tags: [architecture, harness]
-generated: { by: claude-code/opus-5.5, at: '2026-11-14T08:30:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-17T12:30:00Z' }
 ---
 
 # Profile fields
 
-`Profile` in `internal/harness/profiles.go`: `Processes`, start `Command`, `Slash`, `Calibrated`, `PromptRequired`, `StableSeconds`, `ReadInput`, `StableView`, `BusyPatterns`, `InterruptKeys`, `InterruptVerified`.
+`Profile` in `internal/harness/profiles.go`: `Processes`, start `Command`, `Slash`, `Calibrated`, `PromptRequired`, `StableSeconds`, `ReadInput`, `StableView`, `BusyPatterns`, `InterruptKeys`, `InterruptVerified`, `ReadOnlyFlags`, `ReadDialog`.
 
 `ReadInput` returns the draft, `""` for an empty line, or nil when the input line is not on screen.
 
@@ -23,6 +23,22 @@ Parsers were checked against screens of real harnesses on 2026-11-09. A scratch 
 | opencode | `┃` box above `╹▀` | Read on a fresh screen only. Placeholder `Ask anything…` is treated as empty. Not marked calibrated. |
 | agy | `>` between the widest `─` rules | Calibrated on Antigravity CLI 1.5.9, 2026-11-14. Past messages sit under shorter 60-column rules that also start with `>`, so only the widest rules count. A task panel can add a third rule below the box. An empty box names the mode, `... (shift+tab to cycle)`: treated as empty. A dialog (trust, file access) hides the box. Detected by the process `agy`; before it was a main process, its MCP children made it look like `node`. |
 | codex, gemini, aider, pi | generic | Not installed or not checked. Uncalibrated: warn and proceed. |
+
+# Dialogs
+
+`ReadDialog` returns the permission or approval dialog on screen, or nil. Code: `internal/harness/dialog.go`. A `Dialog` has the question, the body (the request, such as the command), the numbered options, the selected option, and a fingerprint: 8 hex characters of SHA-256 over the question, body and option texts with spacing squashed. Moving the selection or a different line wrap keeps the fingerprint.
+
+The reader looks for the harness's footer among the last 6 non-blank lines, the numbered options above it (numbered from 1, exactly one with the selection mark `>` or `❯`, other lines continue the option above), the question ending in `?` right above option 1, and the body up to the `─` rule above it. Dashed `╌` rules, `Tip:` lines and Claude's `│` command mark are left out of the body.
+
+`Persist` marks an option that grants more than the one request: text with `always`, `don't ask again` (straight or curly quote), `allow all`, `for this session`, `persist`, `auto mode` or `bypass`. Both agy's "always allow in this conversation" and "(Persist to settings.json)" count, and so does Claude's "switch to auto mode": each widens permission past this request, so `task answer` needs `--persist` for them.
+
+| Harness | Footer | Calibrated on | Notes |
+|---|---|---|---|
+| claude | `Esc to cancel · Tab to amend` | Claude Code 2.1.326, 2026-11-17, real `claude --model haiku` in a scratch iTerm2 tab: a `touch` command and the `task done` report command | The input box is gone while it asks, and no busy pattern shows. Digit keys pick and submit at once ("4" denied on the spot). Arrow keys move the selection, but the first look 0.5 s later still showed the old one, so the answer polls for up to 3 s. Re-checked on iTerm2, tmux, Rex (80x24 blocks: the command wraps into the body) and hc by `mise run test:dialogs` (2026-11-17), with `--permission-mode default --setting-sources project`: the user's settings set `defaultMode: auto`, which asks nothing. After the answer, haiku asks again for `harness-ops task done` (the brief's footer); the test denies that. |
+| agy | `↑/↓ Navigate` | Antigravity CLI 1.5.10, a real screen captured on 2026-11-17 ("Run this command?") | Options wrap onto lines of their own. The dialog hides the input box and keeps `esc to cancel` on the status line, so agy looks busy while it waits. Answered and denied on real agy 1.5.10 on iTerm2, tmux, Rex and hc by `mise run test:dialogs` (2026-11-17), started with `--mode accept-edits`: its default `auto` mode runs `touch` without asking. agy's terminal sandbox (the user's `enableTerminalSandbox`) refused the approved `touch` in the scratch folders with "Operation not permitted" and agy asked again with the same fingerprint, so the test turns it off for its session (`--settings`). |
+| others | none | | `ReadDialog` is nil. `task answer` refuses (exit 2), and the watcher does not read them. |
+
+`Ops.Answer` presses up or down from the selected option to the chosen one, waits until the screen shows that option selected and the same fingerprint, and only then presses Enter. If the dialog changed or the selection did not arrive, it stops without Enter (exit 1). Digit keys are not used: they submit before anything can be checked, and hc cannot type without submitting. After Enter it waits up to 3 s for the dialog to go; still there means exit 1.
 
 # Busy lines from real turns
 
