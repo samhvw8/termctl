@@ -112,6 +112,19 @@ func TestReadFiltersAndCountsBadLines(t *testing.T) {
 	}
 }
 
+func TestDialogAnswerIsJournaled(t *testing.T) {
+	r := newRig(t)
+	x, _ := dialogTask(t, r)
+	if _, _, err := r.tasks.Answer(x.ID, AnswerOpts{Deny: true}); err != nil {
+		t.Fatal(err)
+	}
+	entries, _, _ := (&Journal{Root: r.reg.Root}).Read(Filter{Task: x.ID})
+	last := entries[len(entries)-1]
+	if last.Event != "deny" || !strings.HasSuffix(last.Text, " → Esc") || last.Status == "" || last.Project != ProjectOf(r.owner) {
+		t.Fatalf("%+v", last)
+	}
+}
+
 // A task's whole life is in the journal, filed under the owner's project: resume needs nothing else.
 func TestTaskLifeIsJournaled(t *testing.T) {
 	r := newRig(t)

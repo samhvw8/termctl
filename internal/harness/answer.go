@@ -118,7 +118,9 @@ func (o *Ops) Answer(p *term.Pane, opts AnswerOpts) (*Answered, error) {
 		if err := o.Backend.SendKey(p, "escape"); err != nil {
 			return nil, err
 		}
-		return res, o.awaitGone(p, d, res)
+		err := o.awaitGone(p, d, res)
+		o.recordAnswer(p, opts, res, err)
+		return res, err
 	}
 	n := opts.N
 	res.Chosen = d.Option(n)
@@ -155,7 +157,24 @@ func (o *Ops) Answer(p *term.Pane, opts AnswerOpts) (*Answered, error) {
 	if err := o.Backend.SendKey(p, "enter"); err != nil {
 		return nil, err
 	}
-	return res, o.awaitGone(p, d, res)
+	err = o.awaitGone(p, d, res)
+	o.recordAnswer(p, opts, res, err)
+	return res, err
+}
+
+// recordAnswer journals a dialog answer: the question, and the choice made, once the keys are sent.
+func (o *Ops) recordAnswer(p *term.Pane, opts AnswerOpts, res *Answered, err error) {
+	event := "answer"
+	if opts.Deny {
+		event = "deny"
+	}
+	e := o.entry(event, p)
+	choice := "Esc"
+	if res.Chosen != nil {
+		choice = fmt.Sprintf("%d. %s", res.Chosen.N, res.Chosen.Text)
+	}
+	e.Text, e.Status, e.Error = res.Dialog.Question+" → "+choice, res.Dialog.Fingerprint, errText(err)
+	o.Journal.Record(e)
 }
 
 // recheck reads the dialog once more right before a key and returns it; a different dialog, or none, stops
@@ -295,7 +314,11 @@ func (t *Tasks) Answer(target string, opts AnswerOpts) (*Answered, *term.Pane, e
 	if err != nil {
 		return nil, nil, err
 	}
-	res, err := t.ops(b, t.Sender).Answer(p, opts)
+	ops := t.ops(b, t.Sender)
+	if x != nil {
+		ops = t.taskOps(b, t.Sender, x)
+	}
+	res, err := ops.Answer(p, opts)
 	if res != nil {
 		// A key was pressed. The answered dialog's mark goes, even when the dialog is still on screen: the
 		// harness may have asked the same request again, and that one must be announced. A mark of another

@@ -38,6 +38,7 @@ Before the journal, harness-ops kept its history in three places, and none of th
 | `spawn` | `Ops.Spawn` | the harness and the first prompt (or its file) |
 | `slash`, `interrupt` | `Ops.Slash` (also each `/clear`), `Ops.Interrupt` | the command, the keys |
 | `close` | `Tasks.ClosePane` | `status: forced` with `--force` |
+| `answer`, `deny` | `Ops.Answer` (`answer`, `deny`, and their `task` aliases; on a task's worker or a pane the caller started, which has no `task`) | the dialog's question and the choice made (`1. Yes`; a deny is always `Esc`), the dialog's fingerprint as `status` |
 | `task.new` | `Tasks.New` | the title, the brief's `file`; `status: failed` and the cause when the start failed |
 | `task.done` | `Tasks.Done` | the full summary; `to` is the owner |
 | `task.accept`, `task.close`, `task.exited` | `Tasks` | the status, the exit code |
