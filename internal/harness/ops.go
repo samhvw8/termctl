@@ -358,12 +358,23 @@ func (o *Ops) writeInbox(body string, to *term.Pane) (string, error) {
 		me = unsafeName.ReplaceAllString(term.Cut(o.Sender.Address(), 8), "_")
 	}
 	toID := unsafeName.ReplaceAllString(term.Cut(to.Address(), 8), "_")
-	name := fmt.Sprintf("%s-%s-to-%s.md", time.Now().Format("20060102-150405"), me, toID)
-	f := filepath.Join(o.Inbox, name)
-	if err := os.WriteFile(f, []byte(body), 0o644); err != nil {
+	// A random part, created exclusively: two notices to one owner in the same second (two workers'
+	// dialogs) shared one name, and the second overwrote the first (agy review A6).
+	f, err := os.CreateTemp(o.Inbox, fmt.Sprintf("%s-%s-to-%s-*.md", time.Now().Format("20060102-150405"), me, toID))
+	if err != nil {
 		return "", term.BackendErr("inbox: %v", err)
 	}
-	return f, nil
+	_, err = f.WriteString(body)
+	if err == nil {
+		err = f.Chmod(0o644)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return "", term.BackendErr("inbox: %v", err)
+	}
+	return f.Name(), nil
 }
 
 // AssertCleared: leftover text means /clear never ran; typing now would rebuild the joined line.

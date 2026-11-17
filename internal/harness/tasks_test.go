@@ -1393,3 +1393,23 @@ func TestFindTellsSeveralFromNone(t *testing.T) {
 		t.Fatalf("several=%v none=%v", several, none)
 	}
 }
+
+// Two notices to one owner in the same second went to one inbox file, and the second overwrote the first:
+// worker A's dialog was gone (agy review A6).
+func TestInboxFilesNeverCollide(t *testing.T) {
+	r := newRig(t)
+	o := r.tasks.ops(r.b, nil)
+	o.Inbox = t.TempDir()
+	f1, err1 := o.writeInbox("worker A dialog", r.owner)
+	f2, err2 := o.writeInbox("worker B dialog", r.owner)
+	if err1 != nil || err2 != nil || f1 == f2 {
+		t.Fatal(f1, f2, err1, err2)
+	}
+	for f, want := range map[string]string{f1: "worker A dialog", f2: "worker B dialog"} {
+		b, err := os.ReadFile(f)
+		st, _ := os.Stat(f)
+		if err != nil || string(b) != want || st.Mode().Perm() != 0o644 || !strings.HasSuffix(f, ".md") {
+			t.Fatal(f, string(b), err, st.Mode())
+		}
+	}
+}
