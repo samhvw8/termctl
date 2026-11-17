@@ -302,8 +302,8 @@ func TestAgyRunCommandDialog(t *testing.T) {
 		"cd /Users/samhv/workspace/work/growtrics/growtrics_workflows &&\nuv run pytest -q" {
 		t.Fatalf("body %q", d.Body)
 	}
-	if len(d.Fingerprint) != 8 {
-		t.Fatal(d.Fingerprint)
+	if len(d.Fingerprint) != 8 || d.Unrecognized {
+		t.Fatal(d.Fingerprint, d.Unrecognized)
 	}
 	if p.ReadInput(agyRunCommandDialog) != nil || !p.IsBusy(agyRunCommandDialog) {
 		t.Fatal("the dialog hides the input box, and agy looks busy")
@@ -327,17 +327,26 @@ func TestAgyFileAccessDialog(t *testing.T) {
 	dialog := append(agyScreen(nil, "", false)[:10], agyRule, "Read: /Users/x/SKILL.md", "Allow access to this file?",
 		"> 1. Yes, allow access", "  2. No, deny access", "  ↑/↓ Navigate", "esc to cancel      auto · Gemini 4 Carbon · low")
 	d := Profiles["agy"].ReadDialog(dialog)
-	if d == nil || d.Question != "Allow access to this file?" || d.Body != "Read: /Users/x/SKILL.md" || d.DenyOption() != 2 || d.Options[0].Persist {
+	if d == nil || d.Question != "Allow access to this file?" || d.Body != "Read: /Users/x/SKILL.md" || d.DenyOption() != 2 || d.Options[0].Persist || d.Unrecognized {
 		t.Fatalf("%+v", d)
 	}
 }
 
-// agy draws the same footer under every numbered picker: one that asks for no permission is no dialog
-// (review F3).
-func TestAgyPickerIsNotADialog(t *testing.T) {
-	lines := []string{"Which model do you want to use?", "> 1. Gemini 3 Pro", "  2. Gemini 3 Flash", "", "↑/↓ Navigate · Enter Select · Esc Cancel"}
-	if d := Profiles["agy"].ReadDialog(lines); d != nil {
-		t.Errorf("a non-permission picker is read as a dialog: %+v", d)
+// agy draws the same footer under every numbered picker. One that asks no known permission question is
+// never dropped silently (round-3 review N2): it is an unrecognized dialog, where every choice but a clear
+// No or cancel needs --persist, so no picker choice is ever a one-shot answer, and deny still works.
+func TestAgyPickerIsAnUnrecognizedDialog(t *testing.T) {
+	picker := []string{"Which model do you want to use?", "> 1. Gemini 3 Pro", "  2. Gemini 3 Flash", "", "↑/↓ Navigate · Enter Select · Esc Cancel"}
+	d := Profiles["agy"].ReadDialog(picker)
+	if d == nil || !d.Unrecognized || d.DenyOption() != 0 ||
+		!reflect.DeepEqual(optionTexts(d), []string{"1 Gemini 3 Pro [persist]", "2 Gemini 3 Flash [persist]"}) {
+		t.Fatalf("a picker must be a loud unrecognized dialog with every choice persist: %+v", d)
+	}
+	unknown := []string{"Do you want to continue with this plan?", "> 1. Yes", "  2. Yes, proceed", "  3. Cancel", "  4. No, stop here", "↑/↓ Navigate"}
+	d = Profiles["agy"].ReadDialog(unknown)
+	want := []string{"1 Yes [persist]", "2 Yes, proceed [persist]", "3 Cancel", "4 No, stop here"}
+	if d == nil || !d.Unrecognized || !reflect.DeepEqual(optionTexts(d), want) || d.DenyOption() != 4 {
+		t.Fatalf("%+v\n%q", d, optionTexts(d))
 	}
 }
 
@@ -350,7 +359,7 @@ func TestClaudeBashDialog(t *testing.T) {
 	want := []string{"1 Yes", "2 Yes, and always allow access to /private/tmp/claude-run from this project [persist]",
 		"3 Yes, and switch to auto mode · auto mode handles these prompts for you [persist]", "4 No"}
 	if d.Question != "Do you want to proceed?" || d.Body != "Bash command\nCreate empty file named x\ntouch x" ||
-		d.Selected != 1 || !reflect.DeepEqual(optionTexts(d), want) || d.DenyOption() != 4 {
+		d.Selected != 1 || !reflect.DeepEqual(optionTexts(d), want) || d.DenyOption() != 4 || d.Unrecognized {
 		t.Fatalf("%+v\n%q", d, optionTexts(d))
 	}
 	if p.ReadInput(claudeBashDialog) != nil {

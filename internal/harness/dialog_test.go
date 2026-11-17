@@ -749,3 +749,64 @@ func TestDenyChecksExpect(t *testing.T) {
 		t.Fatal(err, res, dlg.Answer)
 	}
 }
+
+// pickerFake shows an agy model picker on one pane until Esc is pressed there.
+type pickerFake struct {
+	*termtest.Fake
+	pane string
+	gone bool
+}
+
+var agyPicker = []string{"Which model do you want to use?", "> 1. Gemini 3 Pro", "  2. Gemini 3 Flash", "", "↑/↓ Navigate · Enter Select · Esc Cancel"}
+
+func (f *pickerFake) Capture(p *term.Pane, n int) ([]string, error) {
+	if p.ID == f.pane && !f.gone {
+		return agyPicker, nil
+	}
+	return f.Fake.Capture(p, n)
+}
+
+func (f *pickerFake) SendKey(p *term.Pane, key string) error {
+	if p.ID == f.pane && key == "escape" {
+		f.gone = true
+	}
+	return f.Fake.SendKey(p, key)
+}
+
+// An agy screen with dialog structure but no known permission question is not ignored (round-3 review
+// N2): the watcher announces it as unrecognized, task wait returns it, no choice is a one-shot answer,
+// and task deny still works.
+func TestUnrecognizedAgyDialogIsLoud(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	r.pane(x).Process = "agy"
+	f := &pickerFake{Fake: r.b, pane: x.Pane}
+	ts := r.as(r.owner)
+	ts.Backend = f
+	ts.Factory = func(string, map[string]string) (term.Backend, error) { return f, nil }
+	if err := ts.Watch(WatchOpts{Rounds: 1}); err != nil {
+		t.Fatal(err)
+	}
+	notes := ownerNotes(r)
+	if len(notes) != 1 || !strings.Contains(notes[0], "not a known permission dialog") || !strings.Contains(notes[0], "1. Gemini 3 Pro [persist]") {
+		t.Fatalf("no loud notice of an unrecognized dialog: %q", notes)
+	}
+	r.reg.Update(func(d *Data) error { d.Tasks[x.ID].Dialog = nil; return nil }) // as if never told
+	w, err := ts.Wait(x.ID, false, 10)
+	if err != nil || w.Dialog == nil || !w.Dialog.Unrecognized {
+		t.Fatal("task wait did not return the unrecognized dialog:", w, err)
+	}
+	if !strings.Contains(DialogText(x.ID, w.Dialog), "not a known permission dialog") {
+		t.Fatal(DialogText(x.ID, w.Dialog))
+	}
+	before := len(keys(r, x))
+	_, _, err = ts.Answer(x.ID, AnswerOpts{N: 1, Expect: w.Dialog.Fingerprint})
+	wantCode(t, err, term.CodeGuard)
+	if len(keys(r, x)) != before {
+		t.Fatal("a refused answer pressed keys", keys(r, x)[before:])
+	}
+	res, _, err := ts.Answer(x.ID, AnswerOpts{Deny: true, Expect: w.Dialog.Fingerprint})
+	if err != nil || !res.Escaped || !f.gone {
+		t.Fatal("deny must press Esc on a picker with no No:", res, err)
+	}
+}

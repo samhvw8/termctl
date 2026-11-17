@@ -3,7 +3,7 @@ type: Architecture
 title: Harness profiles
 description: How harness-ops recognises a harness, reads its input line and its permission dialogs, and decides it is idle.
 tags: [architecture, harness]
-generated: { by: claude-code/opus-5.5, at: '2026-11-17T16:12:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-17T16:52:03Z' }
 ---
 
 # Profile fields
@@ -32,7 +32,7 @@ The reader looks for the harness's footer among the last 6 non-blank lines, the 
 
 `Persist` marks every option that is not known to grant only this one request. The known one-shot texts are the whole option `Yes`, `Yes, run command`, `Yes, proceed`, `Yes, allow access` (and `allow once` forms), and any option starting with `No`, `cancel`, `deny`, `reject` or `exit`. Everything else needs `--persist` on `task answer`: agy's "always allow in this conversation" and "(Persist to settings.json)", Claude's "don't ask again", "switch to auto mode" and "allow all edits during this session", and any wording a harness adds later, such as the plan dialog's "auto-accept edits". Until 2026-11-17 the guard was a keyword list of widening words, and a review found that "Yes, and auto-accept edits" passed it as one-shot; an unknown text now fails safe.
 
-agy draws its `↑/↓ Navigate` footer under every numbered picker, a model choice too. So an agy screen is a dialog only when the question asks for permission (`Run this command?`, `Allow ...?`, or a question naming permission or access) or the body says `Requesting permission`.
+agy draws its `↑/↓ Navigate` footer under every numbered picker, a model choice too. So an agy screen is a known permission dialog only when the question asks for permission (`Run this command?`, `Allow ...?`, or a question naming permission or access) or the body says `Requesting permission`. Any other agy screen with the dialog's shape is read as an `unrecognized` dialog, not dropped: a worker stalled on it must not go unheard. In it every option but one starting with `No` or `cancel` is `[persist]`, so no picker choice is ever a one-shot answer; `task deny` picks `No`, or presses Esc when there is none. The notice and the `task wait` block say it is not a known permission dialog, and `--json` carries `"unrecognized": true`. From the first agy gate until this change (both 2026-11-17) such a screen was ignored silently: no notice, and `task wait` did not return. Tests: `TestAgyPickerIsAnUnrecognizedDialog`, `TestUnrecognizedAgyDialogIsLoud`. The real agy captures (`Run this command?`, `Allow access to this file?`) read as before, with the same fingerprints.
 
 | Harness | Footer | Calibrated on | Notes |
 |---|---|---|---|
