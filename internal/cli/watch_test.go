@@ -1,10 +1,36 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// The watcher log is cut to its last lines when a watcher starts, so it cannot grow without bound (review O10).
+func TestWatcherLogIsCutAtStart(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "w.log")
+	var b strings.Builder
+	for i := 0; b.Len() <= logMax; i++ {
+		fmt.Fprintf(&b, "12:00:00 line %d\n", i)
+	}
+	os.WriteFile(log, []byte(b.String()), 0o644)
+	trimLog(log)
+	data, _ := os.ReadFile(log)
+	if len(data) > logKeep || len(data) < logKeep-100 {
+		t.Fatalf("kept %d bytes, want just under %d", len(data), logKeep)
+	}
+	if !strings.HasSuffix(b.String(), string(data)) || !strings.HasPrefix(string(data), "12:00:00 line ") {
+		t.Fatalf("not the last whole lines: %q", string(data[:40]))
+	}
+	small := "12:00:00 watching\n"
+	os.WriteFile(log, []byte(small), 0o644)
+	trimLog(log)
+	if data, _ := os.ReadFile(log); string(data) != small {
+		t.Fatal("a small log was changed")
+	}
+}
 
 // A changed executable restarts the watcher only once it has stopped changing, so a binary still being
 // written is never run.
