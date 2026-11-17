@@ -1,8 +1,10 @@
 package harness
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -323,6 +325,47 @@ func (t *Tasks) WatchLog(owner string) string {
 	return log
 }
 
+const (
+	logMax  = 1 << 20   // a watcher log over this is cut when a watcher takes the owner's lock
+	logKeep = 256 << 10 // to its last lines that fit this
+)
+
+// trimLog cuts a watcher log over logMax to its last whole lines within logKeep, in place: it copies the
+// tail, truncates the file and writes the tail back. Watchers write their log with O_APPEND, so one that
+// has it open goes on at the new end; a rename left such a watcher writing into the unlinked old file
+// (round-5 review D3). Only the watcher that holds the owner's lock cuts it. A line written between the
+// read and the truncate is lost.
+func trimLog(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || st.Size() <= logMax {
+		return err
+	}
+	tail := make([]byte, logKeep)
+	n, err := f.ReadAt(tail, st.Size()-logKeep)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	tail = tail[:n]
+	if i := bytes.IndexByte(tail, '\n'); i >= 0 {
+		tail = tail[i+1:]
+	}
+	if err := f.Truncate(0); err != nil {
+		return err
+	}
+	if _, err := f.WriteAt(tail, 0); err != nil {
+		return err
+	}
+	return f.Close()
+}
+
 // lockWatcher takes the owner's watcher lock without waiting. It holds while the returned file is open.
 func (t *Tasks) lockWatcher(owner string) (*os.File, error) {
 	path, _ := t.watchPaths(owner)
@@ -402,6 +445,9 @@ func (t *Tasks) Watch(o WatchOpts) error {
 	defer func() { lock.Close() }() // the lock in hand when Watch returns: it is taken again below
 	lock.Truncate(0)
 	lock.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0)
+	if err := trimLog(t.WatchLog(owner.ID)); err != nil { // under the lock: no other watcher of this owner runs
+		say("could not cut this log: " + err.Error())
+	}
 	say(fmt.Sprintf("watching the tasks of %s (pid %d)", owner.Address(), os.Getpid()))
 	w := &watchState{t: t, say: say, seen: map[string]term.ProgramStatus{}}
 	for round := 1; ; round++ {

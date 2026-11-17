@@ -1,10 +1,8 @@
 package cli
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"syscall"
@@ -93,42 +91,6 @@ func changedBinary(path string) func() bool {
 	}
 }
 
-const (
-	logMax  = 1 << 20   // a watcher log over this is cut when the next watcher starts
-	logKeep = 256 << 10 // to its last lines that fit this
-)
-
-// trimLog cuts a log over logMax to its last whole lines within logKeep. A watcher that still has the old
-// file open writes on into it, out of sight; only one watcher per owner runs.
-func trimLog(path string) error {
-	f, err := os.Open(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil || st.Size() <= logMax {
-		return err
-	}
-	tail := make([]byte, logKeep)
-	n, err := f.ReadAt(tail, st.Size()-logKeep)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return err
-	}
-	tail = tail[:n]
-	if i := bytes.IndexByte(tail, '\n'); i >= 0 {
-		tail = tail[i+1:]
-	}
-	tmp := path + ".cut"
-	if err := os.WriteFile(tmp, tail, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
-
 // startWatcher runs "harness-ops watch" in a session of its own, so it outlives the caller and the
 // caller's terminal; its output goes to log. It finds the owner pane from the inherited environment.
 func startWatcher(o *Options, log string) error {
@@ -143,15 +105,13 @@ func startWatcher(o *Options, log string) error {
 	if o.Socket != "" {
 		args = append(args, "-L", o.Socket)
 	}
-	trimErr := trimLog(log)
+	// The watcher cuts its own log once it holds the owner's lock (harness.trimLog), never here: a
+	// watcher that is stopping can take the lock again and must keep writing into this same file.
 	f, err := os.OpenFile(log, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	if trimErr != nil { // the watcher still starts; the log says why it is long
-		fmt.Fprintf(f, "%s could not cut this log: %v\n", time.Now().Format("15:04:05"), trimErr)
-	}
 	cmd := exec.Command(exe, append(args, "watch")...)
 	cmd.Stdout, cmd.Stderr = f, f
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}

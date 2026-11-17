@@ -2,6 +2,9 @@ package harness
 
 import (
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -97,6 +100,76 @@ func TestWatcherStopsWhenTheServerStaysUnreachable(t *testing.T) {
 	}
 	if len(warned) != 1 {
 		t.Fatalf("warned %d times over %d rounds: %q", len(warned), rounds, warned)
+	}
+}
+
+// The watcher log is cut to its last whole lines when a watcher starts, so it cannot grow without bound (review O10).
+func TestWatcherLogIsCutAtStart(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "w.log")
+	var b strings.Builder
+	for i := 0; b.Len() <= logMax; i++ {
+		fmt.Fprintf(&b, "12:00:00 line %d\n", i)
+	}
+	os.WriteFile(log, []byte(b.String()), 0o644)
+	trimLog(log)
+	data, _ := os.ReadFile(log)
+	if len(data) > logKeep || len(data) < logKeep-100 {
+		t.Fatalf("kept %d bytes, want just under %d", len(data), logKeep)
+	}
+	if !strings.HasSuffix(b.String(), string(data)) || !strings.HasPrefix(string(data), "12:00:00 line ") {
+		t.Fatalf("not the last whole lines: %q", string(data[:40]))
+	}
+	small := "12:00:00 watching\n"
+	os.WriteFile(log, []byte(small), 0o644)
+	trimLog(log)
+	if data, _ := os.ReadFile(log); string(data) != small {
+		t.Fatal("a small log was changed")
+	}
+}
+
+// The watcher log is cut by the watcher that holds the owner's lock, in place: a stopping watcher that
+// takes the lock again, with the log open for append, keeps writing into the file on disk. The starter
+// cut it by rename before any lock was held, so that watcher wrote on into the unlinked old file, out of
+// sight (round-5 review D3). A watcher that does not get the lock leaves the log alone.
+func TestWatcherCutsItsLogInPlaceWhileHoldingTheLock(t *testing.T) {
+	r := newRig(t)
+	r.mustNew(t, nil, NewOpts{})
+	ts := r.as(r.owner)
+	path := ts.WatchLog(r.owner.ID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for i := 0; b.Len() <= 2<<20; i++ {
+		fmt.Fprintf(&b, "12:00:00 line %d\n", i)
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	held, err := ts.lockWatcher(r.owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ts.Watch(WatchOpts{Rounds: 1}); !errors.Is(err, ErrWatching) {
+		t.Fatal(err)
+	}
+	if st, _ := os.Stat(path); st.Size() != int64(b.Len()) {
+		t.Fatalf("a watcher without the lock changed the log to %d bytes", st.Size())
+	}
+	held.Close()
+	out, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0) // the stopping watcher's output
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+	if err := ts.Watch(WatchOpts{Rounds: 1}); err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprint(out, "12:00:01 still here\n")
+	data, _ := os.ReadFile(path)
+	if len(data) > 256<<10+100 || !strings.HasPrefix(string(data), "12:00:00 line ") ||
+		!strings.HasSuffix(string(data), "12:00:01 still here\n") || !strings.Contains(b.String(), strings.TrimSuffix(string(data), "12:00:01 still here\n")) {
+		t.Fatalf("not cut in place to its last whole lines: %d bytes, ends %q", len(data), data[max(0, len(data)-60):])
 	}
 }
 
