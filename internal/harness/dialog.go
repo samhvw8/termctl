@@ -34,6 +34,10 @@ type Dialog struct {
 	// Unrecognized: drawn like a dialog, but not a known permission question (an agy picker, or wording
 	// not seen before). Every choice but a clear "No" or cancel is marked Persist.
 	Unrecognized bool `json:"unrecognized,omitempty"`
+	// Ambiguous: lines shaped like options are out of sequence, or more than one is selected, so the
+	// worker's own text may pose as choices. It has no Question or Options: Body is the whole dialog as
+	// shown, from the rule to the footer. task answer refuses it; task deny (Esc) works.
+	Ambiguous bool `json:"ambiguous,omitempty"`
 }
 
 // Option returns choice n, or nil.
@@ -97,9 +101,13 @@ func agyReadDialog(lines []string) *Dialog    { return readDialog(lines, agyDial
 
 const footerReach = 6 // the footer is among the last lines of the screen
 
-// readDialog finds the footer near the bottom, the numbered options above it with exactly one
-// selected, the question ending in "?" right above option 1, and the request above that up to a rule. A
-// request whose rule is not on screen is read as far as the screen goes, and marked Truncated.
+// readDialog finds the footer near the bottom, the rule above the request, the numbered options read
+// top-down from the first "1." under that rule with exactly one selected, the question ending in "?" right
+// above option 1, and the request between the rule and the question. A request whose rule is not on screen
+// is read as far as the screen goes, and marked Truncated. Option-shaped lines out of sequence, or more
+// than one selection mark anywhere between the rule and the footer, make the dialog Ambiguous: the
+// worker's text (a command, a path in an option) can wrap onto lines of its own shaped like options, and
+// agy wraps them to column 0, so which lines are the real options cannot be told.
 func readDialog(lines []string, spec dialogSpec) *Dialog {
 	footer, seen := -1, 0
 	for i := len(lines) - 1; i >= 0 && seen < footerReach; i-- {
@@ -116,18 +124,29 @@ func readDialog(lines []string, spec dialogSpec) *Dialog {
 	if footer < 0 {
 		return nil
 	}
-	first := -1
-	for i := footer - 1; i >= 0 && i >= footer-40; i-- {
-		if m := optionRe.FindStringSubmatch(lines[i]); m != nil && m[2] == "1" {
-			first = i
+	start, truncated := 0, true // the first line under the rule above the request
+	for i := footer - 1; i >= 0; i-- {
+		if isBoundary(lines[i]) {
+			start, truncated = i+1, false
 			break
+		}
+	}
+	first, marks := -1, 0
+	for i := start; i < footer; i++ {
+		if m := optionRe.FindStringSubmatch(lines[i]); m != nil {
+			if m[1] != "" {
+				marks++
+			}
+			if first < 0 && m[2] == "1" {
+				first = i
+			}
 		}
 	}
 	if first < 0 {
 		return nil
 	}
 	d := &Dialog{}
-	marks := 0
+	inSequence := true
 	col, joined := 0, true // where the last option's text starts; no blank line since it
 	for _, ln := range lines[first:footer] {
 		t := strings.TrimSpace(ln)
@@ -135,11 +154,14 @@ func readDialog(lines []string, spec dialogSpec) *Dialog {
 			joined = false
 			continue
 		}
-		if m := optionRe.FindStringSubmatchIndex(ln); m != nil && ln[m[4]:m[5]] == fmt.Sprint(len(d.Options)+1) {
+		if m := optionRe.FindStringSubmatchIndex(ln); m != nil {
+			if ln[m[4]:m[5]] != fmt.Sprint(len(d.Options)+1) {
+				inSequence = false
+				continue
+			}
 			o := Option{N: len(d.Options) + 1, Text: strings.TrimSpace(ln[m[6]:m[7]])}
 			if m[2] >= 0 {
 				d.Selected = o.N
-				marks++
 			}
 			d.Options = append(d.Options, o)
 			col, joined = utf8.RuneCountInString(ln[:m[6]]), true
@@ -153,7 +175,10 @@ func readDialog(lines []string, spec dialogSpec) *Dialog {
 		last := &d.Options[len(d.Options)-1]
 		last.Text += " " + t
 	}
-	if len(d.Options) < 2 || marks != 1 {
+	if !inSequence || marks > 1 {
+		return ambiguousDialog(lines[start:footer], truncated)
+	}
+	if len(d.Options) < 2 || d.Selected == 0 {
 		return nil
 	}
 	q := first - 1
@@ -177,13 +202,9 @@ func readDialog(lines []string, spec dialogSpec) *Dialog {
 	}
 	d.Question = strings.Join(question, " ")
 	var body []string
-	d.Truncated = true
-	for i := top - 1; i >= 0; i-- {
+	d.Truncated = truncated
+	for i := top - 1; i >= start; i-- {
 		t := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(lines[i]), "│")) // Claude Code marks a long command with │
-		if ruleRe.MatchString(t) {
-			d.Truncated = false
-			break
-		}
 		if t == "" || dashRuleRe.MatchString(t) || (spec.skip != nil && spec.skip.MatchString(t)) {
 			continue
 		}
@@ -201,6 +222,24 @@ func readDialog(lines []string, spec dialogSpec) *Dialog {
 			d.Options[i].Persist = !oneShotRe.MatchString(text)
 		}
 	}
+	d.Fingerprint = fingerprint(d)
+	return d
+}
+
+// isBoundary: the rule above a dialog's request.
+func isBoundary(line string) bool {
+	return ruleRe.MatchString(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "│")))
+}
+
+// ambiguousDialog is the whole dialog as shown, with no options to choose from.
+func ambiguousDialog(lines []string, truncated bool) *Dialog {
+	var screen []string
+	for _, ln := range lines {
+		if t := strings.TrimSpace(ln); t != "" {
+			screen = append(screen, t)
+		}
+	}
+	d := &Dialog{Body: strings.Join(screen, "\n"), Ambiguous: true, Truncated: truncated}
 	d.Fingerprint = fingerprint(d)
 	return d
 }
@@ -226,6 +265,9 @@ func fingerprint(d *Dialog) string {
 func AnswerCommand(target string, d *Dialog) string {
 	return fmt.Sprintf("harness-ops task answer %s <n> --expect %s", target, d.Fingerprint)
 }
+
+// ambiguousNote says what an Ambiguous dialog is. It suggests no answer command.
+const ambiguousNote = "This dialog is ambiguous: lines shaped like its choices are out of sequence or more than one is selected, so the worker's own text may pose as choices. task answer refuses it: read the pane and answer there by hand, or deny it"
 
 // unrecognizedNote says what an Unrecognized dialog is. It suggests no --persist command.
 const unrecognizedNote = "This is not a known permission dialog (a picker, or a question not seen before): every choice but No or cancel is marked [persist]; read the pane before choosing, or deny it"
@@ -264,6 +306,14 @@ func DialogLine(target string, d *Dialog) string { return dialogLine(target, d, 
 // status message) between markers that label it untrusted: it reaches the lead's prompt, and a request can
 // carry text written to look like instructions. The notice suggests no --persist command.
 func dialogLine(target string, d *Dialog, status string) string {
+	if d.Ambiguous {
+		screen := "dialog: " + noticeText(target, d.Body)
+		if r := squash(status); r != "" {
+			screen += " | the harness reports: " + term.Cut(r, 200)
+		}
+		return fmt.Sprintf("DIALOG %s: %s %s %s | deny: harness-ops task deny %s --expect %s. %s",
+			d.Fingerprint, screenOpen, untrusted(screen), screenClose, target, d.Fingerprint, ambiguousNote)
+	}
 	var opts []string
 	persist := false
 	for _, o := range d.Options {
@@ -274,11 +324,7 @@ func dialogLine(target string, d *Dialog, status string) string {
 		}
 		opts = append(opts, s)
 	}
-	body := squash(d.Body)
-	if len([]rune(body)) > noticeBody {
-		body = cutMiddle(body, noticeBody) + " (cut; the whole request: harness-ops read " + target + ")"
-	}
-	screen := fmt.Sprintf("question: %s | request: %s | choices: %s", squash(d.Question), body, strings.Join(opts, " "))
+	screen := fmt.Sprintf("question: %s | request: %s | choices: %s", squash(d.Question), noticeText(target, d.Body), strings.Join(opts, " "))
 	if r := squash(status); r != "" {
 		screen += " | the harness reports: " + term.Cut(r, 200)
 	}
@@ -295,9 +341,31 @@ func dialogLine(target string, d *Dialog, status string) string {
 	return fmt.Sprintf("DIALOG %s: %s %s %s | %s", d.Fingerprint, screenOpen, untrusted(screen), screenClose, tail)
 }
 
+// noticeText is screen text on one line, cut in the middle when long.
+func noticeText(target, s string) string {
+	s = squash(s)
+	if len([]rune(s)) > noticeBody {
+		s = cutMiddle(s, noticeBody) + " (cut; the whole request: harness-ops read " + target + ")"
+	}
+	return s
+}
+
 // DialogText is a dialog for a person or agent to read, one part per line.
 func DialogText(target string, d *Dialog) string {
 	var b strings.Builder
+	if d.Ambiguous {
+		fmt.Fprintf(&b, "ambiguous:   %s\n", ambiguousNote)
+		for i, ln := range strings.Split(d.Body, "\n") {
+			if i == 0 {
+				fmt.Fprintf(&b, "dialog:      %s\n", ln)
+			} else {
+				fmt.Fprintf(&b, "             %s\n", ln)
+			}
+		}
+		fmt.Fprintf(&b, "fingerprint: %s\n", d.Fingerprint)
+		fmt.Fprintf(&b, "deny:        harness-ops task deny %s --expect %s\n", target, d.Fingerprint)
+		return b.String()
+	}
 	fmt.Fprintf(&b, "question:    %s\n", d.Question)
 	for i, ln := range strings.Split(d.Body, "\n") {
 		if i == 0 {

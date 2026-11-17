@@ -3,7 +3,7 @@ type: Architecture
 title: Tasks and pane safety
 description: How harness-ops tracks a job given to another harness session, tells its owner of a permission dialog, and what stops it closing or spawning the wrong thing.
 tags: [architecture, harness, tasks, safety]
-generated: { by: claude-code/opus-5.5, at: '2026-11-17T17:00:06Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-17T17:03:14Z' }
 ---
 
 # Overview
@@ -90,7 +90,7 @@ Each round also delivers held-back results. The watcher stops when the owner pan
 | The caller is not the task's owner (the same pane ID on the same server), or the target is a pane the caller did not start (`PaneRecord` owner), or its own pane | 2 |
 | The harness has no calibrated dialog reader, or N is not an option | 2 |
 | No dialog on screen, or `--expect` names another fingerprint | 7 |
-| Option N grants more than this request and `--persist` is not given | 6 |
+| Option N grants more than this request and `--persist` is not given, or the dialog is `truncated` or `ambiguous` ([harness profiles](/architecture/harness-profiles.md#dialogs)); `task deny` still works on both | 6 |
 | The dialog changed before a key (re-read before the first arrow key and right before Enter or Esc), the selection did not reach N, or the dialog is still there 3 s after Enter (the harness did not take the key, or asked the same request again: the mark is dropped, so a re-ask is announced) | 1 |
 
 `task deny` presses Esc, which Claude Code and agy both document as cancel, and never Enter, then waits up to 3 s for the dialog to go (exit 1 if it stays). Enter takes the option that is really selected, whatever the parser read: until 2026-11-18 deny moved to the first option starting with "No" and pressed Enter, and a review (A2) showed a worker's own text wrapped onto lines of its own as `> 1. No, cancel` made the parser take a selected "Yes" for that "No", so a deny approved the request. Test: `TestDenyPressesEscNeverEnter`.

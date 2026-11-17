@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-11-18
+* **Fix**: a dialog whose option-shaped lines come out of sequence, or that shows more than one selection mark between its rule and its footer, is `ambiguous`: worker text wrapped into fake `> 1. No, cancel` lines no longer reads as the options (review A2). It is announced and returned with its whole screen and only a deny command; `task answer` refuses it (exit 6), `task deny` presses Esc. The real Claude Code and agy captures read as before, with the same fingerprints. Test: `TestWrappedFakeOptionsMakeAnAmbiguousDialog`. See [harness profiles](architecture/harness-profiles.md#dialogs). Runs: nothing new.
 * **Fix**: `task deny` presses Esc and never Enter. It chose the first "No" option with the arrow keys and pressed Enter, so a parser fooled by worker text wrapped into fake option lines turned a deny into an approval of the selected "Yes" (review A2). Test: `TestDenyPressesEscNeverEnter`; the fake harness takes a lone Esc as cancel. See [tasks](architecture/tasks.md#task-answer-and-task-deny). Runs: nothing new.
 
 ## 2026-11-17

@@ -64,6 +64,9 @@ func (o *Ops) Answer(p *term.Pane, opts AnswerOpts) (*Answered, error) {
 	if opts.Expect != "" && d.Fingerprint != opts.Expect {
 		return nil, term.Errf(term.CodeDialog, "the dialog on %s is %s, not %s: %q; read it again before answering", p.Address(), d.Fingerprint, opts.Expect, d.Question)
 	}
+	if d.Ambiguous && !opts.Deny {
+		return nil, term.Errf(term.CodeGuard, "the dialog on %s is ambiguous: lines shaped like its choices are out of sequence or more than one is selected, so which choice is which cannot be told. Read the pane and answer there by hand, or deny it", p.Address())
+	}
 	if d.Truncated && !opts.Deny {
 		return nil, term.Errf(term.CodeGuard, "the request in the dialog on %s is longer than the screen: its start is not read, so fingerprint %s does not cover it. Read the pane and answer there by hand, or deny it", p.Address(), d.Fingerprint)
 	}

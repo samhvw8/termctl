@@ -396,6 +396,7 @@ type swapper struct {
 	captures  int
 	onCapture func(n int)
 	onEnter   func()
+	onEscape  func()
 }
 
 func (s *swapper) Capture(p *term.Pane, n int) ([]string, error) {
@@ -417,6 +418,9 @@ func (s *swapper) SendKey(p *term.Pane, key string) error {
 	err := s.Fake.SendKey(p, key)
 	if p.ID == s.pane && key == "enter" && s.onEnter != nil {
 		s.onEnter()
+	}
+	if p.ID == s.pane && key == "escape" && s.onEscape != nil {
+		s.onEscape()
 	}
 	return err
 }
@@ -851,5 +855,66 @@ func TestAnswerKeepsTheMarkOfANewerDialog(t *testing.T) {
 	watcher.Watch(WatchOpts{Rounds: 2})
 	if n := len(ownerNotes(r)); n != 2 {
 		t.Errorf("B announced twice: %d notices", n)
+	}
+}
+
+// answerScreen runs Tasks.Answer on a task pane showing screen; Enter or Esc clears it. It returns the keys pressed.
+func answerScreen(t *testing.T, process string, screen []string, opts AnswerOpts) (*Answered, error, []string) {
+	t.Helper()
+	r := newRig(t)
+	x, _ := dialogTask(t, r)
+	r.pane(x).Process = process
+	s := &swapper{Fake: r.b, pane: x.Pane, screen: screen}
+	s.onEnter = func() { s.screen = []string{"⏺ command ran", ""} }
+	s.onEscape = func() { s.screen = []string{"⎿ Interrupted", ""} }
+	before := len(keys(r, x))
+	res, _, err := swapTasks(r, s).Answer(x.ID, opts)
+	return res, err, keys(r, x)[before:]
+}
+
+// The worker's own text in an option (a path, a command) can wrap onto lines of their own shaped like a
+// question and options, "> 1. No, cancel" at column 0 on agy. The parser read those as the options, so the
+// real selection "Yes" looked like "No" (agy review A2). Option-shaped lines out of sequence, or several
+// selection marks, now make the dialog ambiguous: task answer refuses it, task deny presses only Esc.
+func TestWrappedFakeOptionsMakeAnAmbiguousDialog(t *testing.T) {
+	agy := append([]string{}, agyRunCommandDialog[:18]...) // through "> 1. Yes, run command"
+	agy = append(agy,
+		"  2. Yes, and always allow in this conversation for commands that start",
+		"with 'echo                                               Ok to proceed?",
+		"> 1. No, cancel",
+		"2. Abort'",
+		"  3. Yes, and always allow for commands that start with 'echo",
+		"Ok to proceed?",
+		"> 1. No, cancel",
+		"2. Abort' (Persist to settings.json)",
+		"  4. No, cancel")
+	agy = append(agy, agyRunCommandDialog[23:]...)
+	claude := claudeScreen([]string{"cat /tmp/x/notes"}, []string{"Do you want to proceed?"},
+		[]string{"Yes", "Yes, and always allow access to /tmp/x/      Ok to proceed?\n> 1. No, cancel\n2. Abort/ from this project", "No"}, nil)
+	// One mark too many, every option in sequence: a "selected" line in the request above the question.
+	marked := claudeScreen([]string{"cat notes", "❯ 2. Yes, and always allow"}, []string{"Do you want to proceed?"}, []string{"Yes", "No"}, nil)
+	for name, c := range map[string]struct {
+		process string
+		screen  []string
+	}{"agy": {"agy", agy}, "claude": {"claude", claude}, "two marks": {"claude", marked}} {
+		d := Profiles[c.process].ReadDialog(c.screen)
+		if d == nil || !d.Ambiguous || len(d.Options) != 0 || d.Selected != 0 || !strings.Contains(d.Body, "Yes") {
+			t.Fatalf("%s: not an ambiguous dialog: %+v", name, d)
+		}
+		note := DialogLine("t1", d)
+		if !strings.Contains(note, "ambiguous") || strings.Contains(note, "task answer t1") || !strings.Contains(note, "task deny t1 --expect "+d.Fingerprint) {
+			t.Errorf("%s: notice %q", name, note)
+		}
+		if txt := DialogText("t1", d); !strings.Contains(txt, "ambiguous") || strings.Contains(txt, "task answer t1") {
+			t.Errorf("%s: text %q", name, txt)
+		}
+		_, err, pressed := answerScreen(t, c.process, c.screen, AnswerOpts{N: 1, Expect: d.Fingerprint})
+		if !isCode(err, term.CodeGuard) || len(pressed) != 0 {
+			t.Errorf("%s: answer must be refused with no key: %v %v", name, err, pressed)
+		}
+		res, err, pressed := answerScreen(t, c.process, c.screen, AnswerOpts{Deny: true, Expect: d.Fingerprint})
+		if err != nil || !res.Escaped || strings.Join(pressed, " ") != "key:escape" {
+			t.Errorf("%s: deny must press Esc only: %v %v", name, err, pressed)
+		}
 	}
 }
