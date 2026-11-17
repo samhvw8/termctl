@@ -22,11 +22,15 @@ type App struct {
 	Inbox       string
 	OpenBackend func(o *Options, target string) (term.Backend, error)
 	OpenSender  func(o *Options, b term.Backend) (*term.Pane, error)
+	// Factory reopens the backend of a recorded pane; nil uses the real backends (tests set it).
+	Factory func(paneID string, ref map[string]string) (term.Backend, error)
+	// StartWatcher starts a detached dialog watcher writing to log; nil starts none (tests).
+	StartWatcher func(o *Options, log string) error
 }
 
 // NewApp wires the real terminal.
 func NewApp() *App {
-	return &App{Out: os.Stdout, Err: os.Stderr, OpenBackend: defaultBackend, OpenSender: defaultSender}
+	return &App{Out: os.Stdout, Err: os.Stderr, OpenBackend: defaultBackend, OpenSender: defaultSender, StartWatcher: startWatcher}
 }
 
 var itermUUID = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)

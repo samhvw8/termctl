@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -215,5 +216,185 @@ func TestAgyBusy(t *testing.T) {
 	}
 	if ForProcess("agy") != p {
 		t.Fatal("agy is detected by its process name")
+	}
+}
+
+// A real Antigravity CLI 1.5.10 screen, 72 columns, waiting on "Run this command?". Options wrap onto
+// lines of their own; option 3 also persists to settings.json.
+var agyRunCommandDialog = []string{
+	"      ▄▀▀▄        Antigravity CLI 1.5.10",
+	"",
+	agyShort,
+	"> [task t5f0410 from Switching gh CLI accounts] Read the file",
+	"  /Users/samhv/.local/state/termctl/briefs/t5f0410.md and do what it",
+	"",
+	"● Ran 5 commands (cd /Users/samhv/work... ×5) (ctrl+o to expand)",
+	"",
+	"Command",
+	strings.Repeat("─", 72),
+	"",
+	"Reason: the auto-run safety check did not reach a decision",
+	"Requesting permission for:",
+	"   cd /Users/samhv/workspace/work/growtrics/growtrics_workflows &&",
+	"uv run pytest -q",
+	"",
+	"Run this command?",
+	"> 1. Yes, run command",
+	"  2. Yes, and always allow in this conversation for commands that start",
+	"with 'uv run pytest'",
+	"  3. Yes, and always allow for commands that start with 'uv run pytest'",
+	"(Persist to settings.json)",
+	"  4. No, cancel",
+	"",
+	"  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command",
+	"esc to cancel                          auto · Gemini 4 Hydrogen · medium",
+}
+
+// A real Claude Code 2.1.326 screen waiting on a Bash command. The input box is gone while it asks.
+var claudeBashDialog = []string{
+	"❯ [agent-ops from lead (claude) id=EFD186D6 folder=~/w] Run exactly this shell command with the Bash tool: touch x",
+	"",
+	"⏺ Bash(touch x)",
+	"  ⎿  Waiting…",
+	"",
+	strings.Repeat("─", 292),
+	" Bash command",
+	" Tip: auto mode handles these prompts for you — choose \"switch to auto mode\" below",
+	" Create empty file named x",
+	strings.Repeat("╌", 292),
+	" touch x",
+	strings.Repeat("╌", 292),
+	" Do you want to proceed?",
+	" ❯ 1. Yes",
+	"   2. Yes, and always allow access to /private/tmp/claude-run from this project",
+	"   3. Yes, and switch to auto mode · auto mode handles these prompts for you",
+	"   4. No",
+	"",
+	" Esc to cancel · Tab to amend",
+}
+
+func optionTexts(d *Dialog) []string {
+	var out []string
+	for _, o := range d.Options {
+		s := fmt.Sprintf("%d %s", o.N, o.Text)
+		if o.Persist {
+			s += " [persist]"
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func TestAgyRunCommandDialog(t *testing.T) {
+	p := Profiles["agy"]
+	d := p.ReadDialog(agyRunCommandDialog)
+	if d == nil {
+		t.Fatal("no dialog read")
+	}
+	want := []string{"1 Yes, run command",
+		"2 Yes, and always allow in this conversation for commands that start with 'uv run pytest' [persist]",
+		"3 Yes, and always allow for commands that start with 'uv run pytest' (Persist to settings.json) [persist]",
+		"4 No, cancel"}
+	if d.Question != "Run this command?" || d.Selected != 1 || !reflect.DeepEqual(optionTexts(d), want) || d.DenyOption() != 4 {
+		t.Fatalf("%+v\n%q", d, optionTexts(d))
+	}
+	if d.Body != "Reason: the auto-run safety check did not reach a decision\nRequesting permission for:\n"+
+		"cd /Users/samhv/workspace/work/growtrics/growtrics_workflows &&\nuv run pytest -q" {
+		t.Fatalf("body %q", d.Body)
+	}
+	if len(d.Fingerprint) != 8 {
+		t.Fatal(d.Fingerprint)
+	}
+	if p.ReadInput(agyRunCommandDialog) != nil || !p.IsBusy(agyRunCommandDialog) {
+		t.Fatal("the dialog hides the input box, and agy looks busy")
+	}
+	// Moving the selection keeps the fingerprint; a wider pane that wraps the options differently too.
+	moved := append([]string{}, agyRunCommandDialog...)
+	moved[17], moved[18] = "  1. Yes, run command", "> 2. Yes, and always allow in this conversation for commands that start"
+	wide := append(append(append([]string{}, agyRunCommandDialog[:18]...),
+		"  2. Yes, and always allow in this conversation for commands that start with 'uv run pytest'"), agyRunCommandDialog[20:]...)
+	for _, s := range [][]string{moved, wide} {
+		if e := p.ReadDialog(s); e == nil || e.Fingerprint != d.Fingerprint {
+			t.Fatalf("fingerprint changed: %+v", e)
+		}
+	}
+	if e := p.ReadDialog(moved); e.Selected != 2 {
+		t.Fatal(e.Selected)
+	}
+}
+
+func TestAgyFileAccessDialog(t *testing.T) {
+	dialog := append(agyScreen(nil, "", false)[:10], agyRule, "Read: /Users/x/SKILL.md", "Allow access to this file?",
+		"> 1. Yes, allow access", "  2. No, deny access", "  ↑/↓ Navigate", "esc to cancel      auto · Gemini 4 Carbon · low")
+	d := Profiles["agy"].ReadDialog(dialog)
+	if d == nil || d.Question != "Allow access to this file?" || d.Body != "Read: /Users/x/SKILL.md" || d.DenyOption() != 2 || d.Options[0].Persist {
+		t.Fatalf("%+v", d)
+	}
+}
+
+func TestClaudeBashDialog(t *testing.T) {
+	p := Profiles["claude"]
+	d := p.ReadDialog(claudeBashDialog)
+	if d == nil {
+		t.Fatal("no dialog read")
+	}
+	want := []string{"1 Yes", "2 Yes, and always allow access to /private/tmp/claude-run from this project [persist]",
+		"3 Yes, and switch to auto mode · auto mode handles these prompts for you [persist]", "4 No"}
+	if d.Question != "Do you want to proceed?" || d.Body != "Bash command\nCreate empty file named x\ntouch x" ||
+		d.Selected != 1 || !reflect.DeepEqual(optionTexts(d), want) || d.DenyOption() != 4 {
+		t.Fatalf("%+v\n%q", d, optionTexts(d))
+	}
+	if p.ReadInput(claudeBashDialog) != nil {
+		t.Fatal("the dialog hides the input box")
+	}
+}
+
+// The same session asking to run the report command: the command is marked with │, and "don’t" has a curly quote.
+var claudeReportDialog = []string{
+	strings.Repeat("─", 292),
+	" Bash command",
+	" Tip: auto mode handles these prompts for you — choose \"switch to auto mode\" below",
+	" Report task tb1d260 done to lead",
+	strings.Repeat("╌", 292),
+	` │ harness-ops task done tb1d260 --status ok --summary "Ran 'touch z' successfully; created empty file z in the working directory."`,
+	strings.Repeat("╌", 292),
+	" This command requires approval",
+	"",
+	" Do you want to proceed?",
+	"   1. Yes",
+	"   2. Yes, and don’t ask again for: harness-ops task *",
+	"   3. Yes, and switch to auto mode · auto mode handles these prompts for you",
+	" ❯ 4. No",
+	"",
+	" Esc to cancel · Tab to amend",
+}
+
+func TestClaudeReportDialog(t *testing.T) {
+	d := Profiles["claude"].ReadDialog(claudeReportDialog)
+	want := []string{"1 Yes", "2 Yes, and don’t ask again for: harness-ops task * [persist]",
+		"3 Yes, and switch to auto mode · auto mode handles these prompts for you [persist]", "4 No"}
+	if d == nil || d.Selected != 4 || !reflect.DeepEqual(optionTexts(d), want) ||
+		d.Body != "Bash command\nReport task tb1d260 done to lead\n"+
+			`harness-ops task done tb1d260 --status ok --summary "Ran 'touch z' successfully; created empty file z in the working directory."`+
+			"\nThis command requires approval" {
+		t.Fatalf("%+v\n%q", d, optionTexts(d))
+	}
+}
+
+func TestNoDialogOnOrdinaryScreens(t *testing.T) {
+	list := []string{"Steps:", "1. build it", "2. test it", "", rule, "❯", rule, "  esc to cancel"}
+	for name, s := range map[string][]string{"claude idle": claudeIdle, "claude named": claudeNamedIdle, "numbered list": list,
+		"agy idle": agyScreen(agyBox(">"), "? for shortcuts", true)} {
+		if d := Profiles["claude"].ReadDialog(s); d != nil {
+			t.Errorf("%s: claude read %+v", name, d)
+		}
+		if d := Profiles["agy"].ReadDialog(s); d != nil {
+			t.Errorf("%s: agy read %+v", name, d)
+		}
+	}
+	for _, n := range []string{"omp", "opencode", "codex", "gemini", "aider", "pi", "generic"} {
+		if Profiles[n].ReadDialog != nil {
+			t.Errorf("%s has no calibrated dialog reader", n)
+		}
 	}
 }

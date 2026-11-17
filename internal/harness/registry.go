@@ -37,6 +37,17 @@ type Task struct {
 	ExitCode *int              `json:"exit_code,omitempty"`
 	ReviewOf string            `json:"review_of,omitempty"` // the task this one reviews
 	Blind    bool              `json:"blind,omitempty"`     // a reviewer that must not see the worker's report
+	Dialog   *DialogMark       `json:"dialog,omitempty"`    // the dialog on the worker's screen when last read
+}
+
+// DialogMark is the dialog on a worker's screen. It is dropped when the worker's input line is seen again
+// with no dialog, so the same request asked again later is new again.
+type DialogMark struct {
+	Fingerprint string  `json:"fingerprint"`
+	Question    string  `json:"question"`
+	Since       float64 `json:"since"`
+	Notified    bool    `json:"notified,omitempty"` // the owner was sent a notice of it (watch)
+	Returned    bool    `json:"returned,omitempty"` // task wait has returned it once
 }
 
 // PaneRecord marks a pane as created by harness-ops, so close may act on it.
@@ -58,6 +69,8 @@ type Pending struct {
 	Text     string            `json:"text"`
 	Created  float64           `json:"created"`
 	Claimed  float64           `json:"claimed"`
+	Kind     string            `json:"kind,omitempty"`        // "" for a task result; "dialog" or another signal kind
+	Dialog   string            `json:"fingerprint,omitempty"` // the dialog a "dialog" notice is about
 }
 
 // Data is the whole registry file.
@@ -202,7 +215,7 @@ func realPath(path string) string {
 }
 
 func isStateFile(name string) bool {
-	return name == "registry.json" || name == "registry.lock" || name == "briefs" || strings.HasPrefix(name, ".registry-")
+	return name == "registry.json" || name == "registry.lock" || name == "briefs" || name == "watch" || strings.HasPrefix(name, ".registry-")
 }
 
 // CleanState removes a throwaway state directory. It refuses the live directory, anything

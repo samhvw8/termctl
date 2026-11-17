@@ -520,7 +520,7 @@ func TestWait(t *testing.T) {
 			w.Done(x.ID, "ok", "x", "")
 		}
 	}
-	if g, err := r.tasks.Wait(x.ID, false, 60); err != nil || g.Status != "ready" {
+	if g, err := r.tasks.Wait(x.ID, false, 60); err != nil || g.Task.Status != "ready" {
 		t.Fatal(g, err)
 	}
 }
@@ -539,11 +539,11 @@ func TestWaitAnyReturnsEachResultOnce(t *testing.T) {
 	r.done(t, a, "ok", "1")
 	r.clock.T++
 	r.done(t, b, "failed", "2")
-	if g, _ := r.tasks.Wait("", true, 1); g.ID != a.ID {
-		t.Fatal(g.ID)
+	if g, _ := r.tasks.Wait("", true, 1); g.Task.ID != a.ID {
+		t.Fatal(g.Task.ID)
 	}
-	if g, _ := r.tasks.Wait("", true, 1); g.ID != b.ID {
-		t.Fatal(g.ID)
+	if g, _ := r.tasks.Wait("", true, 1); g.Task.ID != b.ID {
+		t.Fatal(g.Task.ID)
 	}
 	_, err := r.tasks.Wait("", true, 1)
 	wantCode(t, err, 2)
@@ -560,8 +560,8 @@ func TestWaitReturnsOnLost(t *testing.T) {
 	r := newRig(t)
 	x := r.mustNew(t, nil, NewOpts{})
 	r.b.Close(r.pane(x))
-	if g, _ := r.tasks.Wait(x.ID, false, 10); g.Status != "lost" {
-		t.Fatal(g.Status)
+	if g, _ := r.tasks.Wait(x.ID, false, 10); g.Task.Status != "lost" {
+		t.Fatal(g.Task.Status)
 	}
 }
 

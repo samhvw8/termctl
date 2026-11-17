@@ -316,3 +316,69 @@ func TestLsMineListsOnlyPanesTheCallerStarted(t *testing.T) {
 		t.Fatalf("ls --mine = %v, want only the spawned worker", rows)
 	}
 }
+
+func TestTaskDialogCommands(t *testing.T) {
+	e := newEnv(t)
+	var started []string
+	e.app.StartWatcher = func(_ *Options, log string) error { started = append(started, log); return nil }
+	e.app.Factory = func(string, map[string]string) (term.Backend, error) { return e.b, nil }
+	code, out, stderr := e.run("task", "new", "generic", "--title", "t", "--brief", "b", "--cwd", "/w", "--command", "fake", "--timeout", "30")
+	if code != 0 || len(started) != 1 || !strings.Contains(started[0], "watch") {
+		t.Fatal(code, out, stderr, started)
+	}
+	id := strings.TrimSpace(out)
+	worker := e.b.Panes[len(e.b.Panes)-1]
+	worker.Process = "claude"
+	dlg := &termtest.Dialog{Body: "touch x", Options: []string{"Yes", "Yes, and don't ask again", "No"}, Selected: 1}
+	e.b.State[worker.ID].Dialog = dlg
+
+	code, out, stderr = e.run("task", "wait", id, "--json", "--timeout", "10")
+	var w struct {
+		Event  string
+		Task   struct{ ID, Status string }
+		Dialog struct{ Fingerprint string }
+	}
+	if code != 0 || json.Unmarshal([]byte(out), &w) != nil || w.Event != "dialog" || w.Task.ID != id || w.Dialog.Fingerprint == "" {
+		t.Fatal(code, out, stderr)
+	}
+	fp := w.Dialog.Fingerprint
+	for _, c := range []struct {
+		args []string
+		code int
+	}{
+		{[]string{"task", "answer", id, "2"}, 6},
+		{[]string{"task", "answer", id, "1", "--expect", "00000000"}, 7},
+		{[]string{"task", "answer", id, "x"}, 2},
+		{[]string{"task", "answer", id}, 2},
+	} {
+		if code, _, stderr := e.run(c.args...); code != c.code {
+			t.Fatal(c.args, code, stderr)
+		}
+	}
+	if code, out, stderr := e.run("task", "answer", id, "1", "--expect", fp); code != 0 || !strings.Contains(out, "answered dialog "+fp) || dlg.Answer != 1 {
+		t.Fatal(code, out, stderr)
+	}
+	if code, _, stderr := e.run("task", "answer", id, "1"); code != 7 || !strings.Contains(stderr, "no dialog") {
+		t.Fatal(code, stderr)
+	}
+	e.b.State[worker.ID].Dialog = &termtest.Dialog{Body: "rm -rf build", Options: []string{"Yes", "No"}, Selected: 1}
+	if code, out, _ := e.run("task", "wait", "--any", "--timeout", "10"); code != 0 || !strings.Contains(out, "DIALOG task "+id) ||
+		!strings.Contains(out, "rm -rf build") || !strings.Contains(out, "harness-ops task answer "+id+" <n> --expect ") {
+		t.Fatal(code, out)
+	}
+	if code, out, _ := e.run("task", "ls"); code != 0 || !strings.Contains(out, "[dialog ") {
+		t.Fatal(code, out)
+	}
+	if code, out, stderr := e.run("task", "deny", id); code != 0 || !strings.Contains(out, "2. No") {
+		t.Fatal(code, out, stderr)
+	}
+	if code, out, _ := e.run("--help"); code != 0 || !strings.Contains(out, "task answer") || !strings.Contains(out, "7 no dialog") || !strings.Contains(out, "watch") {
+		t.Fatal(out)
+	}
+	if code, _, _ := e.run("task", "close", "--force", id); code != 0 {
+		t.Fatal(code)
+	}
+	if code, out, stderr := e.run("watch", "--interval", "1"); code != 0 || !strings.Contains(out, "no open tasks") {
+		t.Fatal(code, out, stderr)
+	}
+}

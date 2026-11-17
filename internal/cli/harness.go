@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,17 +39,24 @@ Talk to coding-agent panes. Put options before the target: everything after the 
   task ls [--all] [--json]
   task show ID [--json]
   task send [--force] ID TEXT...
-  task wait (ID | --any) [--timeout S]
+  task wait (ID | --any) [--timeout S] [--json]   returns when a task stops running or its worker shows a dialog
+  task answer ID N [--expect FP] [--persist]  choose N in the dialog on the worker; ID may be a pane you started
+  task deny ID [--expect FP]                  choose the dialog's "No" choice (Esc when it has none)
   task done ID --status ok|failed|blocked (--summary TEXT | --summary-file F)   the worker reports; the session stays open
   task accept ID [--close]                    the lead's verdict; only the owner can finish a task
   task review ID --blind --harness H [--model M] [--brief-file F]   a new session that never sees the worker's report
   task close [--force] ID                     refused until the task is accepted, unless --force
+  watch [--interval S]                        tell you of each new dialog on your tasks' workers; task new starts one
   state clean                                 remove the throwaway directory in TERMCTL_STATE_DIR; refuses the live one
 
 --where auto (the default for spawn and task new): a new agent splits the largest pane in your tab, whatever
 its folder, up to 12 panes, and evens out the sizes; then a tab of an agent you started; then a new tab beside yours.
 
-Exit codes: 0 ok, 1 backend error, 2 refused target/usage, 4 draft on input line, 5 wait timed out, 6 refused by a safety limit.
+task wait prints a DIALOG block (JSON: "event": "dialog") instead of the task table (JSON: "event": "finished")
+when a worker waits on a dialog; both exit 0. A [persist] choice widens permission and needs --persist.
+
+Exit codes: 0 ok, 1 backend error, 2 refused target/usage, 4 draft on input line, 5 wait timed out, 6 refused by a safety limit,
+7 no dialog on screen, or not the one --expect names.
 `
 
 var (
@@ -122,7 +130,7 @@ func (a *App) openTasks(o *Options, b term.Backend) (*harness.Tasks, error) {
 			ref = other.ServerRef()
 		}
 	}
-	return &harness.Tasks{Reg: harness.NewRegistry(""), Backend: b, Sender: sender, SenderRef: ref, Clock: a.Clock, Inbox: a.Inbox}, nil
+	return &harness.Tasks{Reg: harness.NewRegistry(""), Backend: b, Sender: sender, SenderRef: ref, Clock: a.Clock, Inbox: a.Inbox, Factory: a.Factory}, nil
 }
 
 func (a *App) messageText(rest []string, literal bool, flags []string) (string, error) {
@@ -143,6 +151,47 @@ func when(ts float64) string {
 	return time.Unix(int64(ts), 0).Format("01-02 15:04")
 }
 
+// printWaited shows what task wait found: the task table for a finished task, a DIALOG block for a dialog.
+func (a *App) printWaited(w *harness.Waited, asJSON bool) {
+	if asJSON {
+		event := "finished"
+		if w.Dialog != nil {
+			event = "dialog"
+		}
+		data, _ := json.MarshalIndent(map[string]any{"event": event, "task": w.Task, "dialog": w.Dialog}, "", " ")
+		fmt.Fprintln(a.Out, string(data))
+		return
+	}
+	if w.Dialog == nil {
+		a.printTasks([]*harness.Task{w.Task})
+		return
+	}
+	fmt.Fprintf(a.Out, "DIALOG task %s (%s): its worker waits for an answer\n%s", w.Task.ID, w.Task.Title, harness.DialogText(w.Task.ID, w.Dialog))
+}
+
+func (a *App) printAnswered(target string, res *harness.Answered) {
+	switch {
+	case res.Escaped:
+		fmt.Fprintf(a.Out, "dialog %s on %s has no \"No\" choice: pressed Esc to cancel it\n", res.Dialog.Fingerprint, target)
+	case res.Chosen != nil:
+		fmt.Fprintf(a.Out, "answered dialog %s on %s: %d. %s\n", res.Dialog.Fingerprint, target, res.Chosen.N, res.Chosen.Text)
+	}
+	if res.Next != nil {
+		fmt.Fprintf(a.Out, "a new dialog is on screen:\n%s", harness.DialogText(target, res.Next))
+	}
+}
+
+// ensureWatcher starts a detached watcher for the caller unless one already runs. Failing to start
+// one only warns: the task itself is running.
+func (a *App) ensureWatcher(o *Options, tasks *harness.Tasks) {
+	if a.StartWatcher == nil || tasks.Sender == nil || tasks.Watching(tasks.Sender.ID) != 0 {
+		return
+	}
+	if err := a.StartWatcher(o, tasks.WatchLog(tasks.Sender.ID)); err != nil {
+		fmt.Fprintf(a.Err, "harness-ops: warning: could not start a dialog watcher: %v; run harness-ops watch yourself\n", err)
+	}
+}
+
 func (a *App) printTasks(tasks []*harness.Task) {
 	fmt.Fprintf(a.Out, "%-9s %-8s %-9s %-5s %-12s %-28s SUMMARY\n", "ID", "STATUS", "HARNESS", "ROUND", "STARTED", "TITLE")
 	for _, t := range tasks {
@@ -155,6 +204,9 @@ func (a *App) printTasks(tasks []*harness.Task) {
 		}
 		if t.ReviewOf != "" {
 			extra += " [reviews " + t.ReviewOf + "]"
+		}
+		if t.Dialog != nil {
+			extra += " [dialog " + t.Dialog.Fingerprint + "]"
 		}
 		fmt.Fprintf(a.Out, "%-9s %-8s %-9s %-5d %-12s %-28s %s%s\n", t.ID, t.Status, t.Harness, t.Round, when(t.Started), term.Cut(t.Title, 28),
 			term.Cut(strings.ReplaceAll(t.Summary, "\n", " "), 60), extra)
@@ -226,6 +278,8 @@ func (a *App) harness(argv []string) error {
 		return a.ls(o, p.bools["--all"], p.bools["--json"], p.bools["--mine"])
 	case "whoami", "name":
 		return a.selfCmd(cmd, rest, o)
+	case "watch":
+		return a.watch(rest, o)
 	case "move", "pull", "swap", "arrange":
 		return a.harnessLayout(cmd, rest, o)
 	case "which", "read", "capture":
@@ -589,7 +643,7 @@ func (a *App) lookCmd(cmd string, rest []string, o *Options) error {
 
 func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 	if len(rest) == 0 {
-		return term.UsageErr("usage: task new|ls|show|send|wait|done|close")
+		return term.UsageErr("usage: task new|ls|show|send|wait|answer|deny|done|accept|review|close")
 	}
 	cmd, rest := rest[0], rest[1:]
 	bools, vals, restAfter := []string{}, []string{}, -1
@@ -603,7 +657,11 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 	case "send":
 		bools, restAfter = []string{"--force"}, 1
 	case "wait":
-		bools, vals = []string{"--any"}, []string{"--timeout"}
+		bools, vals = []string{"--any", "--json"}, []string{"--timeout"}
+	case "answer":
+		bools, vals = []string{"--persist"}, []string{"--expect"}
+	case "deny":
+		vals = []string{"--expect"}
 	case "done":
 		vals = []string{"--status", "--summary", "--summary-file"}
 	case "close":
@@ -624,7 +682,11 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 	if err := applyOptions(p, o); err != nil {
 		return err
 	}
-	b, err := a.OpenBackend(o, p.vals["--reuse"])
+	hint := p.vals["--reuse"]
+	if (cmd == "answer" || cmd == "deny") && len(p.pos) > 0 {
+		hint = p.pos[0] // a pane target selects its backend
+	}
+	b, err := a.OpenBackend(o, hint)
 	if err != nil {
 		return err
 	}
@@ -660,6 +722,7 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 			return err
 		}
 		fmt.Fprintln(a.Out, t.ID)
+		a.ensureWatcher(o, tasks)
 	case "ls":
 		found, err := tasks.Ls(p.bools["--all"])
 		if err != nil {
@@ -706,6 +769,7 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 			return err
 		}
 		fmt.Fprintf(a.Out, "sent to task %s\n", id)
+		a.ensureWatcher(o, tasks)
 	case "wait":
 		timeout, err := p.float("--timeout", harness.WaitTimeout)
 		if err != nil {
@@ -718,11 +782,30 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 		if (id != "") == p.bools["--any"] {
 			return term.UsageErr("task wait needs a task id or --any, not both")
 		}
-		t, err := tasks.Wait(id, p.bools["--any"], timeout)
+		w, err := tasks.Wait(id, p.bools["--any"], timeout)
 		if err != nil {
 			return err
 		}
-		a.printTasks([]*harness.Task{t})
+		a.printWaited(w, p.bools["--json"])
+	case "answer", "deny":
+		want := 1
+		if cmd == "answer" {
+			want = 2
+		}
+		if len(p.pos) != want {
+			return term.UsageErr("usage: task answer ID N [--expect FP] [--persist] | task deny ID [--expect FP]")
+		}
+		opts := harness.AnswerOpts{Deny: cmd == "deny", Expect: p.vals["--expect"], Persist: p.bools["--persist"]}
+		if cmd == "answer" {
+			if opts.N, err = strconv.Atoi(p.pos[1]); err != nil || opts.N < 1 {
+				return term.UsageErr("task answer: the choice must be a number from the dialog, got %q", p.pos[1])
+			}
+		}
+		res, _, err := tasks.Answer(p.pos[0], opts)
+		if res != nil {
+			a.printAnswered(p.pos[0], res)
+		}
+		return err
 	case "done":
 		id, err := arg()
 		if err != nil {

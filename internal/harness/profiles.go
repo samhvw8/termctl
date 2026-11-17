@@ -183,8 +183,9 @@ type Profile struct {
 	StableView        func([]string) []string
 	BusyPatterns      []*regexp.Regexp
 	InterruptKeys     []string
-	InterruptVerified bool   // the keys were seen to stop a real turn
-	ReadOnlyFlags     string // verified flags for a mode that cannot change files; "" when none is verified
+	InterruptVerified bool                   // the keys were seen to stop a real turn
+	ReadOnlyFlags     string                 // verified flags for a mode that cannot change files; "" when none is verified
+	ReadDialog        func([]string) *Dialog // a permission dialog on screen, nil when none; nil for a harness not calibrated
 }
 
 // IsBusy looks for a busy pattern near the bottom of the screen.
@@ -218,6 +219,7 @@ var Profiles = func() map[string]*Profile {
 	claude.ReadOnlyFlags = `--setting-sources project --permission-mode dontAsk --disallowedTools Edit Write MultiEdit NotebookEdit ` +
 		`--allowedTools Read Grep Glob 'Bash(git status *)' 'Bash(git diff *)' 'Bash(git log *)' 'Bash(git show *)' 'Bash(harness-ops task done *)'`
 	claude.BusyPatterns = []*regexp.Regexp{regexp.MustCompile(`(?i)esc to interrupt`), claudeWorking}
+	claude.ReadDialog = claudeReadDialog // Claude Code 2.1.326: "Do you want to proceed?", "❯ 1. Yes"
 
 	omp := simple("omp")
 	omp.Calibrated, omp.PromptRequired, omp.InterruptVerified = true, true, true
@@ -235,6 +237,9 @@ var Profiles = func() map[string]*Profile {
 	agy.ReadInput, agy.StableView = agyInput, agyStableView
 	agy.BusyPatterns = []*regexp.Regexp{regexp.MustCompile(`esc to cancel`), regexp.MustCompile(`Press up to edit queued messages`),
 		regexp.MustCompile(`(?m)^\s*[\x{2800}-\x{28ff}]\s`)}
+	// Antigravity CLI 1.5.10: "Run this command?", "> 1. Yes, run command". The dialog hides the input box and
+	// keeps "esc to cancel" on the status line, so agy looks busy while it waits for an answer.
+	agy.ReadDialog = agyReadDialog
 
 	aider := simple("aider")
 	aider.InterruptKeys = []string{"ctrl-c"}

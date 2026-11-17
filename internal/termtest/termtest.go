@@ -4,6 +4,7 @@ package termtest
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/samhvw8/termctl/internal/term"
 )
@@ -25,9 +26,45 @@ type Screen struct {
 	Queued string // an interrupt puts this back on the input line, as Claude Code and agy do
 	Busy   int
 	Log    []string
+	Dialog *Dialog
+}
+
+// Dialog is a Claude Code permission dialog drawn in place of the input box until it is answered.
+type Dialog struct {
+	Body      string
+	Options   []string
+	Selected  int  // from 1
+	Answer    int  // the choice taken with Enter; -1 after Esc; 0 while it waits
+	Stuck     bool // Enter and Esc do nothing, as a harness that froze
+	NoArrows  bool // up and down do nothing
+	HideFirst int  // this many captures do not show it yet, as a dialog still being drawn
+	Lag       int  // this many captures after an arrow key still show the old selection, as Claude Code does
+	shown     int
+	wait      int
+}
+
+// Waiting reports whether the dialog is on screen.
+func (d *Dialog) Waiting() bool { return d != nil && d.Answer == 0 }
+
+func (d *Dialog) lines() []string {
+	if d.wait > 0 {
+		d.wait--
+	} else {
+		d.shown = d.Selected
+	}
+	out := []string{strings.Repeat("─", 40), " Bash command", " " + d.Body, " Do you want to proceed?"}
+	for i, o := range d.Options {
+		mark := "  "
+		if i+1 == d.shown {
+			mark = "❯ "
+		}
+		out = append(out, fmt.Sprintf(" %s%d. %s", mark, i+1, o))
+	}
+	return append(out, "", " Esc to cancel · Tab to amend")
 }
 
 type Fake struct {
+	mu            sync.Mutex // Capture and ProgramStatuses run in parallel in the watcher
 	Panes         []*term.Pane
 	Me            *term.Pane
 	State         map[string]*Screen
@@ -40,7 +77,30 @@ type Fake struct {
 	DropEnters    int // this many Enters are ignored, as a TUI does when text is still pasting
 	Ref           map[string]string
 	Spawned       []string
-	BackendName   string // Name() when set; default "fake"
+	BackendName   string                        // Name() when set; default "fake"
+	Statuses      map[string]term.ProgramStatus // a pane's program status; without one, Natives gives it as hc does
+	StatusCalls   int
+	CostlyStatus  bool // the status read costs a process, as on Rex and hc: the watcher reads it once per round
+}
+
+// StatusIsFree makes the fake a term.FreeStatus unless CostlyStatus is set.
+func (f *Fake) StatusIsFree() bool { return !f.CostlyStatus }
+
+// ProgramStatuses makes the fake a term.StatusReader: one call for many panes.
+func (f *Fake) ProgramStatuses(panes []*term.Pane) (map[string]term.ProgramStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.StatusCalls++
+	out := map[string]term.ProgramStatus{}
+	for _, p := range panes {
+		if st, ok := f.Statuses[p.ID]; ok {
+			out[p.ID] = st
+		} else if n := f.Natives[p.ID]; n != "" {
+			word, msg, _ := strings.Cut(n, ": ")
+			out[p.ID] = term.ProgramStatus{State: word, Msg: msg}
+		}
+	}
+	return out, nil
 }
 
 func New(panes []*term.Pane, me *term.Pane) *Fake {
@@ -114,6 +174,19 @@ func (f *Fake) SendText(p *term.Pane, text string) error {
 func (f *Fake) SendKey(p *term.Pane, key string) error {
 	st := f.State[p.ID]
 	f.Events = append(f.Events, Event{Kind: "key", Pane: p.ID, Text: key, Busy: st.Busy})
+	if d := st.Dialog; d.Waiting() {
+		switch {
+		case key == "up" && !d.NoArrows && d.Selected > 1:
+			d.Selected, d.wait = d.Selected-1, d.Lag
+		case key == "down" && !d.NoArrows && d.Selected < len(d.Options):
+			d.Selected, d.wait = d.Selected+1, d.Lag
+		case key == "enter" && !d.Stuck:
+			d.Answer = d.Selected
+		case key == "escape" && !d.Stuck:
+			d.Answer = -1
+		}
+		return nil
+	}
 	switch key {
 	case "enter":
 		if f.DropEnters > 0 {
@@ -140,6 +213,8 @@ func (f *Fake) SendKey(p *term.Pane, key string) error {
 }
 
 func (f *Fake) Capture(p *term.Pane, lines int) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	st := f.State[p.ID]
 	f.Events = append(f.Events, Event{Kind: "capture", Pane: p.ID})
 	if st.Busy > 0 {
@@ -147,7 +222,14 @@ func (f *Fake) Capture(p *term.Pane, lines int) ([]string, error) {
 		return append(append([]string{}, st.Log...), fmt.Sprintf("working %d", st.Busy)), nil
 	}
 	screen := append([]string{}, st.Log...)
-	if p.Process == "fakeagent" { // spawned panes pass every profile's input-line check
+	if d := st.Dialog; d.Waiting() {
+		if d.HideFirst > 0 {
+			d.HideFirst--
+			return append(screen, "drawing…"), nil
+		}
+		return append(screen, d.lines()...), nil
+	}
+	if p.Process == "fakeagent" || p.Process == "claude" { // spawned panes pass every profile's input-line check
 		rule := strings.Repeat("─", 40)
 		screen = append(screen, rule, "❯", rule, "╰─")
 	}

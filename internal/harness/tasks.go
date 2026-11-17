@@ -67,6 +67,7 @@ type Tasks struct {
 	Clock     Clock
 	Inbox     string
 
+	memo      *paneMemo        // one pane list per backend server while a watch round runs
 	spawnHook func(*term.Pane) // tests
 	sleepHook func(int)        // tests
 	sleeps    int
@@ -131,11 +132,7 @@ func sameServer(stored, current map[string]string) bool {
 
 // paneByID returns the live pane, or nil if it is gone. A restarted terminal server makes the same ID a different pane.
 func (t *Tasks) paneByID(paneID string, ref map[string]string) (term.Backend, *term.Pane, error) {
-	b, err := t.backendFor(paneID, ref)
-	if err != nil {
-		return nil, nil, err
-	}
-	panes, err := b.ListPanes()
+	b, panes, err := t.listPanes(paneID, ref)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -741,8 +738,16 @@ func unseen(tasks map[string]*Task, owner string) []*Task {
 	return out
 }
 
-// Wait returns when a task stops running. any returns each finished task once, so repeated calls walk through the results.
-func (t *Tasks) Wait(id string, any bool, timeout float64) (*Task, error) {
+// Waited is what Wait found: a task that stopped running, or, with Dialog set, a running task whose
+// worker shows a dialog.
+type Waited struct {
+	Task   *Task
+	Dialog *Dialog
+}
+
+// Wait returns when a task stops running, or when a waited task's worker shows a dialog. any returns each
+// finished task once and each dialog once while it stays on screen, so repeated calls walk through them.
+func (t *Tasks) Wait(id string, any bool, timeout float64) (*Waited, error) {
 	me := ""
 	if any {
 		o, err := t.owner()
@@ -792,7 +797,10 @@ func (t *Tasks) Wait(id string, any bool, timeout float64) (*Task, error) {
 				result = d.Tasks[found.ID]
 				return nil
 			})
-			return result, err
+			return &Waited{Task: result}, err
+		}
+		if w, err := t.waitDialog(d, me, id); w != nil || err != nil {
+			return w, err
 		}
 		if t.clock().Now() >= deadline {
 			what := "no task of yours"
@@ -803,6 +811,40 @@ func (t *Tasks) Wait(id string, any bool, timeout float64) (*Task, error) {
 		}
 		t.sleep(waitPoll)
 	}
+}
+
+// waitDialog reads the screens of the waited running tasks and returns one dialog not yet returned.
+func (t *Tasks) waitDialog(d *Data, owner, id string) (*Waited, error) {
+	var watch []*Task
+	if id != "" {
+		watch = []*Task{d.Tasks[id]}
+	} else {
+		watch, _ = ownerTasks(d, owner)
+	}
+	sigs := t.signals(watch)
+	if err := t.apply(sigs, false); err != nil {
+		return nil, err
+	}
+	for _, s := range sigs {
+		if s.Kind != "dialog" {
+			continue
+		}
+		var result *Task
+		if err := t.Reg.Update(func(d *Data) error {
+			x := d.Tasks[s.Task]
+			if x != nil && dialogOnScreen(x, s.Dialog.Fingerprint) && !x.Dialog.Returned {
+				x.Dialog.Returned = true
+				result = x
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		if result != nil {
+			return &Waited{Task: result, Dialog: s.Dialog}, nil
+		}
+	}
+	return nil, nil
 }
 
 func roundNote(round int) string {
@@ -849,6 +891,7 @@ func (t *Tasks) Done(id, status, summary, summaryFile string) (*Task, error) {
 			return term.UsageErr("task %s is already %s", x.ID, x.Status)
 		}
 		x.Status, x.Ended, x.Summary, x.Notify = stored, t.clock().Now(), summary, "pending"
+		x.Dialog = nil // the worker is reporting, so nothing waits on screen
 		tid = x.ID
 		tag, err := t.doneTag(x, t.Backend)
 		if err != nil {
@@ -889,10 +932,13 @@ func (t *Tasks) FlushPending() (int, error) {
 		keep := d.Pending[:0]
 		for _, p := range d.Pending {
 			if now-p.Created > PendingTTL {
-				if x := d.Tasks[p.Task]; x != nil {
+				if x := d.Tasks[p.Task]; x != nil && p.Kind == "" {
 					x.Notify = "expired"
 				}
 				continue
+			}
+			if p.Kind == "dialog" && !dialogOnScreen(d.Tasks[p.Task], p.Dialog) {
+				continue // answered or gone before its notice got through: telling the owner now would mislead
 			}
 			if p.Claimed == 0 || now-p.Claimed > claimTTL {
 				p.Claimed = now
@@ -917,7 +963,7 @@ func (t *Tasks) FlushPending() (int, error) {
 					if outcome == "retry" {
 						q.Claimed = 0
 					} else {
-						if x := d.Tasks[p.Task]; x != nil {
+						if x := d.Tasks[p.Task]; x != nil && p.Kind == "" {
 							x.Notify = outcome
 						}
 						d.Pending = append(d.Pending[:i], d.Pending[i+1:]...)
