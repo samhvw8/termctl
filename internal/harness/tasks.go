@@ -231,7 +231,7 @@ func (t *Tasks) Reconcile() error {
 	}
 	return t.Reg.Update(func(d *Data) error {
 		lose := func(x *Task, why string) {
-			x.Status, x.Ended = "lost", t.clock().Now()
+			x.Status, x.Ended, x.Dialog = "lost", t.clock().Now(), nil
 			if x.Summary == "" {
 				x.Summary = why
 			}
@@ -272,7 +272,7 @@ func (t *Tasks) markExited(d *Data, id string, code *int) {
 	if x == nil || !open(x.Status) {
 		return
 	}
-	x.Status, x.Ended, x.ExitCode, x.Notify = "exited", t.clock().Now(), code, "pending"
+	x.Status, x.Ended, x.ExitCode, x.Notify, x.Dialog = "exited", t.clock().Now(), code, "pending", nil
 	why := "the harness exited"
 	if code != nil {
 		why = fmt.Sprintf("the harness exited with status %d", *code)
@@ -1135,7 +1135,7 @@ func (t *Tasks) Close(id string, force bool) (*Task, error) {
 	var result *Task
 	err = t.Reg.Update(func(d *Data) error {
 		c := d.Tasks[x.ID]
-		c.Closed = true
+		c.Closed, c.Dialog = true, nil
 		if c.Status == "running" {
 			c.Status, c.Ended, c.Summary = "failed", t.clock().Now(), "closed by its owner before it finished"
 		}

@@ -953,3 +953,41 @@ func TestRuleInsideTheRequestIsBodyText(t *testing.T) {
 		t.Fatalf("agy read past its own rule: %+v", d)
 	}
 }
+
+// A dialog notice held for the owner's draft was delivered after the task ended: its pane gone, its
+// harness exited, or the task closed with --force. The task also kept its mark (agy review A5.1).
+func TestNoDialogNoticeAfterTheTaskEnds(t *testing.T) {
+	for _, end := range []string{"lost", "exited", "closed"} {
+		r := newRig(t)
+		x, _ := dialogTask(t, r)
+		r.b.State[r.owner.ID].Input = "owner typing"
+		r.tasks.Watch(WatchOpts{Rounds: 1})
+		if d := r.data(); len(d.Pending) != 1 || d.Tasks[x.ID].Dialog == nil {
+			t.Fatal("no held notice", d.Pending)
+		}
+		switch end {
+		case "lost":
+			r.b.Close(r.pane(x))
+			if err := r.tasks.Reconcile(); err != nil {
+				t.Fatal(err)
+			}
+		case "exited":
+			if _, err := r.as(r.pane(x)).Exited(x.ID, 0); err != nil {
+				t.Fatal(err)
+			}
+		case "closed":
+			if _, err := r.tasks.Close(x.ID, true); err != nil {
+				t.Fatal(err)
+			}
+		}
+		r.b.State[r.owner.ID].Input = ""
+		r.tasks.FlushPending()
+		g := r.data().Tasks[x.ID]
+		if n := ownerNotes(r); len(n) != 0 {
+			t.Errorf("%s: dialog notice delivered for a %s task: %q", end, g.Status, n)
+		}
+		if g.Dialog != nil {
+			t.Errorf("%s: a %s task keeps its dialog mark %+v", end, g.Status, g.Dialog)
+		}
+	}
+}

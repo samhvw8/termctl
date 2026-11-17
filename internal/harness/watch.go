@@ -231,8 +231,10 @@ func (t *Tasks) listPanes(paneID string, ref map[string]string) (term.Backend, [
 	return b, panes, err
 }
 
+// dialogOnScreen: the task's worker still waits on dialog fp. A task that is no longer running (lost,
+// exited, reported) or was closed waits on nothing, whatever mark it kept.
 func dialogOnScreen(x *Task, fp string) bool {
-	return x != nil && x.Dialog != nil && x.Dialog.Fingerprint == fp
+	return x != nil && x.Status == "running" && !x.Closed && x.Dialog != nil && x.Dialog.Fingerprint == fp
 }
 
 func dialogTag(x *Task) string {
