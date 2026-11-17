@@ -2,6 +2,7 @@ package harness
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -322,5 +323,96 @@ func TestOtherSignalKindsReachTheOwner(t *testing.T) {
 	}
 	if g, _ := r.tasks.Get(x.ID); g.Notify != "none" {
 		t.Fatal(g.Notify)
+	}
+}
+
+// vrule is Claude Code's full-width rule above a dialog.
+var vrule = strings.Repeat("─", 60)
+
+// claudeScreen draws a Claude Code dialog: the request lines, the question lines, the options (a "\n" in
+// one wraps it, indented under its text), extra lines under the options, and the footer.
+func claudeScreen(body []string, question []string, opts []string, extra []string) []string {
+	out := []string{"some output", vrule, " Bash command", ""}
+	for _, b := range body {
+		out = append(out, "   "+b)
+	}
+	out = append(out, "")
+	for _, q := range question {
+		out = append(out, " "+q)
+	}
+	for i, o := range opts {
+		mark := "  "
+		if i == 0 {
+			mark = "❯ "
+		}
+		lines := strings.Split(o, "\n")
+		out = append(out, fmt.Sprintf(" %s%d. %s", mark, i+1, lines[0]))
+		for _, l := range lines[1:] {
+			out = append(out, "      "+l)
+		}
+	}
+	out = append(out, extra...)
+	return append(out, "", " Esc to cancel · Tab to amend")
+}
+
+// swapper wraps the fake to change the world on the n-th capture of a pane, or on Enter.
+type swapper struct {
+	*termtest.Fake
+	pane      string
+	captures  int
+	onCapture func(n int)
+	onEnter   func()
+}
+
+func (s *swapper) Capture(p *term.Pane, n int) ([]string, error) {
+	if p.ID == s.pane {
+		s.captures++
+		defer func(n int) {
+			if s.onCapture != nil {
+				s.onCapture(n)
+			}
+		}(s.captures)
+	}
+	return s.Fake.Capture(p, n)
+}
+
+func (s *swapper) SendKey(p *term.Pane, key string) error {
+	err := s.Fake.SendKey(p, key)
+	if p.ID == s.pane && key == "enter" && s.onEnter != nil {
+		s.onEnter()
+	}
+	return err
+}
+
+func swapTasks(r *rig, s *swapper) *Tasks {
+	ts := r.as(r.owner)
+	ts.Backend = s
+	ts.Factory = func(string, map[string]string) (term.Backend, error) { return s, nil }
+	return ts
+}
+
+// A choice is one-shot only when its whole text is known to be: wording not seen before, such as the
+// plan dialog's "auto-accept edits", needs --persist (review F3).
+func TestPersistUnlessKnownOneShot(t *testing.T) {
+	lines := []string{"plan text", vrule, " Ready to code?", "", " Here is Claude's plan:", " step 1", "", " Would you like to proceed?", "",
+		" ❯ 1. Yes, and auto-accept edits", "   2. Yes, clear context and auto-accept edits", "   3. Yes, accept edits", "   4. Yes, and manually approve edits", "   5. No, keep planning", "", " Esc to cancel"}
+	d := claudeReadDialog(lines)
+	if d == nil {
+		t.Fatal("not read")
+	}
+	for _, n := range []int{1, 2, 3, 4} {
+		if !d.Option(n).Persist {
+			t.Errorf("option %d %q is not marked persist", n, d.Option(n).Text)
+		}
+	}
+	if d.Option(5).Persist {
+		t.Error("a No choice grants nothing")
+	}
+	for text, persist := range map[string]bool{"Yes": false, "Yes, run command": false, "Yes, allow access": false, "Yes, proceed": false,
+		"No, and tell Claude what to do differently (esc)": false, "Yes, allow all edits during this session (shift+tab)": true, "Yes, sure": true} {
+		d := claudeReadDialog(claudeScreen([]string{"x"}, []string{"Do you want to proceed?"}, []string{text, "No"}, nil))
+		if d == nil || d.Option(1).Persist != persist {
+			t.Errorf("%q: %+v", text, d)
+		}
 	}
 }

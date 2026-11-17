@@ -332,6 +332,15 @@ func TestAgyFileAccessDialog(t *testing.T) {
 	}
 }
 
+// agy draws the same footer under every numbered picker: one that asks for no permission is no dialog
+// (review F3).
+func TestAgyPickerIsNotADialog(t *testing.T) {
+	lines := []string{"Which model do you want to use?", "> 1. Gemini 3 Pro", "  2. Gemini 3 Flash", "", "↑/↓ Navigate · Enter Select · Esc Cancel"}
+	if d := Profiles["agy"].ReadDialog(lines); d != nil {
+		t.Errorf("a non-permission picker is read as a dialog: %+v", d)
+	}
+}
+
 func TestClaudeBashDialog(t *testing.T) {
 	p := Profiles["claude"]
 	d := p.ReadDialog(claudeBashDialog)

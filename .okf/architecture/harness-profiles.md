@@ -30,7 +30,9 @@ Parsers were checked against screens of real harnesses on 2026-11-09. A scratch 
 
 The reader looks for the harness's footer among the last 6 non-blank lines, the numbered options above it (numbered from 1, exactly one with the selection mark `>` or `❯`, other lines continue the option above), the question ending in `?` right above option 1, and the body up to the `─` rule above it. Dashed `╌` rules, `Tip:` lines and Claude's `│` command mark are left out of the body.
 
-`Persist` marks an option that grants more than the one request: text with `always`, `don't ask again` (straight or curly quote), `allow all`, `for this session`, `persist`, `auto mode` or `bypass`. Both agy's "always allow in this conversation" and "(Persist to settings.json)" count, and so does Claude's "switch to auto mode": each widens permission past this request, so `task answer` needs `--persist` for them.
+`Persist` marks every option that is not known to grant only this one request. The known one-shot texts are the whole option `Yes`, `Yes, run command`, `Yes, proceed`, `Yes, allow access` (and `allow once` forms), and any option starting with `No`, `cancel`, `deny`, `reject` or `exit`. Everything else needs `--persist` on `task answer`: agy's "always allow in this conversation" and "(Persist to settings.json)", Claude's "don't ask again", "switch to auto mode" and "allow all edits during this session", and any wording a harness adds later, such as the plan dialog's "auto-accept edits". Until 2026-11-17 the guard was a keyword list of widening words, and a review found that "Yes, and auto-accept edits" passed it as one-shot; an unknown text now fails safe.
+
+agy draws its `↑/↓ Navigate` footer under every numbered picker, a model choice too. So an agy screen is a dialog only when the question asks for permission (`Run this command?`, `Allow ...?`, or a question naming permission or access) or the body says `Requesting permission`.
 
 | Harness | Footer | Calibrated on | Notes |
 |---|---|---|---|

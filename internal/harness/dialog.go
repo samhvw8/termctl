@@ -10,8 +10,9 @@ import (
 	"github.com/samhvw8/termctl/internal/term"
 )
 
-// Option is one numbered choice of a dialog. Persist marks a choice that grants more than this one
-// request: "always allow", "don't ask again", or a switch to a mode that stops asking.
+// Option is one numbered choice of a dialog. Persist marks a choice that is not known to grant only this
+// one request ("Yes", "Yes, run command", "No..."): "always allow", "don't ask again", a switch to a mode
+// that stops asking, and any wording not seen before. Answering it needs --persist.
 type Option struct {
 	N       int    `json:"n"`
 	Text    string `json:"text"`
@@ -52,21 +53,27 @@ func (d *Dialog) DenyOption() int {
 
 // dialogSpec says how one harness draws a numbered dialog.
 type dialogSpec struct {
-	footer  *regexp.Regexp // a line under the options that only a dialog shows
-	skip    *regexp.Regexp // body lines that are not part of the request, such as tips
-	persist *regexp.Regexp
+	footer   *regexp.Regexp // a line under the options that only a dialog shows
+	skip     *regexp.Regexp // body lines that are not part of the request, such as tips
+	question *regexp.Regexp // when set, only a question that matches is a permission dialog
+	asks     *regexp.Regexp // when set, a body that matches also makes it a permission dialog
 }
 
 var (
 	optionRe   = regexp.MustCompile(`^\s*([>❯›])?\s*(\d{1,2})\.\s+(\S.*)$`)
 	dashRuleRe = regexp.MustCompile(`^[╌┄-]{10,}$`)
-	// Calibrated on Claude Code 2.1.326 and Antigravity CLI 1.5.10. Every choice that widens permission
-	// past this one request counts, including agy's "always allow in this conversation" and Claude's
-	// "switch to auto mode": the lead must say --persist for those.
-	persistRe = regexp.MustCompile(`(?i)always|don['’]t ask again|do not ask again|allow all|during this session|for this session|persist|auto mode|bypass`)
+	// oneShotRe is the whole text of a choice known to grant this one request only, or nothing: "Yes",
+	// "Yes, run command", "Yes, allow access", "Yes, proceed", and every "No..." or cancel. Calibrated on
+	// Claude Code 2.1.326 and Antigravity CLI 1.5.10. Any other choice counts as persist, so wording a
+	// harness adds later ("Yes, and auto-accept edits") needs --persist until it is listed here.
+	oneShotRe = regexp.MustCompile(`(?i)^(yes|yes, (run (this |the )?command|proceed|allow( access)?( once)?|allow (this )?once)|allow( once)?|(no|cancel|deny|reject|exit)\b.*)$`)
 
-	claudeDialog = dialogSpec{footer: regexp.MustCompile(`(?i)^esc to cancel`), skip: regexp.MustCompile(`^Tip: `), persist: persistRe}
-	agyDialog    = dialogSpec{footer: regexp.MustCompile(`^↑/↓ Navigate`), persist: persistRe}
+	claudeDialog = dialogSpec{footer: regexp.MustCompile(`(?i)^esc to cancel`), skip: regexp.MustCompile(`^Tip: `)}
+	// agy's "↑/↓ Navigate" footer is under every numbered picker (a model choice too), so only a question
+	// that asks for permission counts: "Run this command?", "Allow access to this file?".
+	agyDialog = dialogSpec{footer: regexp.MustCompile(`^↑/↓ Navigate`),
+		question: regexp.MustCompile(`(?i)^(run this command|allow\b.*|.*\b(permission|access)\b.*)\?$`),
+		asks:     regexp.MustCompile(`(?i)requesting permission`)}
 )
 
 func claudeReadDialog(lines []string) *Dialog { return readDialog(lines, claudeDialog) }
@@ -147,8 +154,11 @@ func readDialog(lines []string, spec dialogSpec) *Dialog {
 		body = append([]string{t}, body...)
 	}
 	d.Body = strings.Join(body, "\n")
+	if spec.question != nil && !spec.question.MatchString(d.Question) && (spec.asks == nil || !spec.asks.MatchString(d.Body)) {
+		return nil // a picker that asks for no permission, such as a model choice
+	}
 	for i := range d.Options {
-		d.Options[i].Persist = spec.persist.MatchString(d.Options[i].Text)
+		d.Options[i].Persist = !oneShotRe.MatchString(squash(d.Options[i].Text))
 	}
 	d.Fingerprint = fingerprint(d)
 	return d
