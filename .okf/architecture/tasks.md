@@ -3,14 +3,14 @@ type: Architecture
 title: Tasks and pane safety
 description: How harness-ops tracks a job given to another harness session, tells its owner of a permission dialog, and what stops it closing or spawning the wrong thing.
 tags: [architecture, harness, tasks, safety]
-generated: { by: claude-code/opus-5.5, at: '2026-11-17T16:36:54Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-17T16:38:58Z' }
 ---
 
 # Overview
 
 A task is one harness session doing one job. The registry is `~/.local/state/termctl/registry.json` (`TERMCTL_STATE_DIR` moves it). Code: `internal/harness/tasks.go` and `registry.go`.
 
-Writes hold an exclusive `flock` on `registry.lock` and replace the file atomically, so readers need no lock. The lock is taken without blocking and retried every 20 ms for up to 20 s; a lock held longer belongs to a hung process, and the update fails with exit 1 naming the lock file, instead of hanging every call behind it. A corrupt file is an error, never a reset, because a reset would forget running tasks.
+Writes hold an exclusive `flock` on `registry.lock` and replace the file atomically, so readers need no lock. The new file is synced before the rename and the directory after it, so a crash keeps either the old file or the new one, and never brings the old one back after an update returned; a failed directory sync is a warning, since the update has happened. The directory sync doubles an update's cost on this Mac's APFS, from about 5 ms to 10 ms (macOS syncs with `F_FULLFSYNC`; measured 2026-11-17). A failed write closes its temp file. The lock is taken without blocking and retried every 20 ms for up to 20 s; a lock held longer belongs to a hung process, and the update fails with exit 1 naming the lock file, instead of hanging every call behind it. A corrupt file is an error, never a reset, because a reset would forget running tasks.
 
 # State directory is live data
 

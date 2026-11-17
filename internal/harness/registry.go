@@ -3,6 +3,7 @@ package harness
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -222,6 +223,16 @@ func (r *Registry) write(d *Data) error {
 	}
 	if err := os.Rename(f.Name(), r.Path); err != nil {
 		return term.BackendErr("task registry: %v", err)
+	}
+	// The rename is on disk only once the directory is: without this sync a crash can bring the old file
+	// back. The update has happened either way, so a failed sync is a warning, not a failed update.
+	dir, err := os.Open(r.Root)
+	if err == nil {
+		err = syncFile(dir)
+		dir.Close()
+	}
+	if err != nil {
+		Warn(fmt.Sprintf("task registry: the update is written but may not survive a crash: syncing %s: %v", r.Root, err))
 	}
 	return nil
 }

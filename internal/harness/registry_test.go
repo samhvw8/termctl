@@ -77,6 +77,33 @@ func TestFailedWriteClosesItsTempFile(t *testing.T) {
 	}
 }
 
+// The rename is made durable: the directory is synced after it, so a crash cannot bring the old file
+// back (review O9).
+func TestWriteSyncsTheDirectoryAfterTheRename(t *testing.T) {
+	r := NewRegistry(t.TempDir())
+	var synced []string
+	stubSync(t, func(f *os.File) error {
+		if f.Name() == r.Root {
+			d, err := r.Read()
+			if err != nil || d.Tasks["a"] == nil {
+				t.Errorf("the directory was synced before the rename: %v", err)
+			}
+		}
+		synced = append(synced, f.Name())
+		err := f.Sync()
+		if err != nil {
+			t.Errorf("a real sync of %s failed: %v", f.Name(), err)
+		}
+		return err
+	})
+	if err := r.Update(func(d *Data) error { d.Tasks["a"] = &Task{ID: "a"}; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(synced) != 2 || synced[1] != r.Root {
+		t.Fatalf("want the temp file, then the directory, synced: %q", synced)
+	}
+}
+
 func TestCorruptRegistryIsAnErrorNotAReset(t *testing.T) {
 	r := NewRegistry(t.TempDir())
 	r.Update(func(*Data) error { return nil })
