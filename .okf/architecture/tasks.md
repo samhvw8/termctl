@@ -3,7 +3,7 @@ type: Architecture
 title: Tasks and pane safety
 description: How harness-ops tracks a job given to another harness session, tells its owner of a permission dialog, and what stops it closing or spawning the wrong thing.
 tags: [architecture, harness, tasks, safety]
-generated: { by: claude-code/opus-5.5, at: '2026-11-17T17:10:49Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-17T17:11:03Z' }
 ---
 
 # Overview
@@ -107,6 +107,8 @@ Both need an open task: running, ready or blocked. A `failed` task is refused by
 | A record from before a terminal server restart does not count: tmux pane IDs are reused, so `ServerRef` holds the server pid. | 6 or lost |
 
 # Verified on real harnesses
+
+On 2026-11-18, after `task deny` moved to Esc and the reader's rule and option fixes (reviews A1, A2), `TestDialogsRealMatrix` on tmux (`TERMCTL_DIALOGS_ONLY=tmux`): both cells pass. `task answer 1` made `<cell>-yes` appear; `task deny` (Esc) on the second dialog left `<cell>-no` absent on real Claude Code on haiku and on agy on `gemini-4-hydrogen-medium`. Claude's extra `task done` dialog after the answer was also denied with Esc. Notice ms (yes / no): tmux-claude 2421 / 2197, tmux-agy 2969 / 387. iTerm2, Rex and hc were not re-run.
 
 On 2026-11-17, `mise run test:dialogs` (`e2e/dialogs_real_test.go`): a lead running the fake harness gives a task to a real worker, Claude Code 2.1.326 on haiku (`--permission-mode default --setting-sources project --strict-mcp-config`) or agy 1.5.10 (`--mode accept-edits`, its terminal sandbox off for the session), told to run `touch <cell>-yes`. The notice must show on the lead's screen; `task answer 1 --expect <fp>` must make the file appear; a second `touch <cell>-no` denied with `task deny` must leave it absent for 10 s. Other dialogs (haiku asks to run `harness-ops task done`) are denied and counted.
 

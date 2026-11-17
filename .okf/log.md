@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-11-18
+* **Verified**: deny by Esc on real harnesses: `TestDialogsRealMatrix` on tmux passed both cells (Claude Code on haiku, agy on `gemini-4-hydrogen-medium`); the denied file stayed absent. See [tasks](architecture/tasks.md#verified-on-real-harnesses). Runs: nothing new.
 * **Docs**: `task answer` and `task deny` need an open task (running, ready or blocked); a `failed` task is refused by its ID (review A12.4). README: agy is a calibrated harness, and iTerm2 uses termctl's own Go client with no `it2` helper (review A12.5). Runs: nothing new.
 * **Fix**: the wait between watcher rounds runs to a deadline: a worker read and announced after a status poll pushed the next round back by the time that took (review A12.1). Test: `TestRoundsKeepTheirCadenceWhenAStatusPollAnnounces`. See [tasks](architecture/tasks.md#watcher). Runs: nothing new.
 * **Fix**: Rex program status takes a block's newest record (`updated_at`), with urgency only breaking a tie. The most urgent record across all ids won, so a stale or spoofed `blocked` stuck and cost a screen re-read every round (review A11). Test: `TestRexPrefersTheNewestRecord`; `mise run test:rex` passes. See [backends](architecture/backends.md#program-status). Runs: nothing new.
