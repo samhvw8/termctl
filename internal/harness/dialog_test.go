@@ -639,3 +639,52 @@ func TestAnswerChecksTheOwnersServer(t *testing.T) {
 		t.Errorf("a same-ID pane on another server answered the dialog: err=%v answer=%d", err, dlg.Answer)
 	}
 }
+
+// A dialog task wait returned is not told again by the watcher, and a notice of it already queued is
+// dropped (review F8).
+func TestWaitThenWatchDoesNotReportTwice(t *testing.T) {
+	r := newRig(t)
+	x, _ := dialogTask(t, r)
+	r.b.State[r.owner.ID].Input = "owner typing" // the watcher's notice is held
+	r.tasks.Watch(WatchOpts{Rounds: 1})
+	w, err := r.tasks.Wait(x.ID, false, 10)
+	if err != nil || w.Dialog == nil {
+		t.Fatal(w, err)
+	}
+	r.b.State[r.owner.ID].Input = ""
+	r.tasks.Watch(WatchOpts{Rounds: 1})
+	if n := ownerNotes(r); len(n) != 0 {
+		t.Fatalf("also notified after wait returned it: %q", n)
+	}
+	d, _ := r.reg.Read()
+	if len(d.Pending) != 0 {
+		t.Fatal(d.Pending)
+	}
+}
+
+// With a watcher running, task wait reads only a worker whose mark shows a dialog, not every screen
+// every 3 s on top of the watcher (review F26).
+func TestWaitReadsOnlyMarkedScreensWhileAWatcherRuns(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	r.pane(x).Process = "claude"
+	s := &swapper{Fake: r.b, pane: x.Pane}
+	ts := swapTasks(r, s)
+	lock, err := ts.lockWatcher(r.owner.ID) // a watcher runs
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if _, err := ts.Wait(x.ID, false, 9); !isCode(err, term.CodeTimeout) {
+		t.Fatal(err)
+	}
+	if s.captures != 0 {
+		t.Fatalf("wait read the worker's screen %d times with a watcher running and no mark", s.captures)
+	}
+	r.b.State[x.Pane].Dialog = &termtest.Dialog{Body: "touch x", Options: []string{"Yes", "No"}, Selected: 1}
+	sigs := screenSource{ts}.Signals([]*Task{mustGet(t, r, x.ID)}) // the watcher's round
+	ts.apply(sigs, false)
+	if w, err := ts.Wait(x.ID, false, 9); err != nil || w.Dialog == nil {
+		t.Fatal(w, err)
+	}
+}

@@ -829,13 +829,24 @@ func (t *Tasks) Wait(id string, any bool, timeout float64) (*Waited, error) {
 	}
 }
 
-// waitDialog reads the screens of the waited running tasks and returns one dialog not yet returned.
+// waitDialog reads the screens of the waited running tasks and returns one dialog not yet returned. When
+// a watcher serves the caller it reads every screen each round and keeps the marks, so only a worker whose
+// mark shows a dialog not returned yet is read, to get that dialog in full.
 func (t *Tasks) waitDialog(d *Data, owner, id string) (*Waited, error) {
 	var watch []*Task
 	if id != "" {
 		watch = []*Task{d.Tasks[id]}
 	} else {
 		watch = runningTasks(d, owner, t.SenderRef)
+	}
+	if t.Sender != nil && t.Watching(t.Sender.ID) != 0 {
+		var marked []*Task
+		for _, x := range watch {
+			if x.Dialog != nil && !x.Dialog.Returned {
+				marked = append(marked, x)
+			}
+		}
+		watch = marked
 	}
 	sigs := t.signals(watch)
 	if err := t.apply(sigs, false); err != nil {
@@ -849,7 +860,16 @@ func (t *Tasks) waitDialog(d *Data, owner, id string) (*Waited, error) {
 		if err := t.Reg.Update(func(d *Data) error {
 			x := d.Tasks[s.Task]
 			if x != nil && dialogOnScreen(x, s.Dialog.Fingerprint) && !x.Dialog.Returned {
-				x.Dialog.Returned = true
+				// The lead has it from task wait: the watcher must not tell it again, and a notice
+				// already queued would arrive stale.
+				x.Dialog.Returned, x.Dialog.Notified = true, true
+				keep := d.Pending[:0]
+				for _, p := range d.Pending {
+					if p.Kind != "dialog" || p.Task != x.ID || p.Dialog != s.Dialog.Fingerprint {
+						keep = append(keep, p)
+					}
+				}
+				d.Pending = keep
 				result = x
 			}
 			return nil
