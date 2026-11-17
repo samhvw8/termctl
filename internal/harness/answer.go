@@ -185,7 +185,7 @@ func (t *Tasks) answerTarget(target string) (term.Backend, *term.Pane, *Task, er
 		return nil, nil, nil, err
 	}
 	if err == nil {
-		if x.Owner != t.Sender.ID {
+		if x.Owner != t.Sender.ID || !sameServer(x.OwnerRef, t.callerRef()) { // a pane ID is reused on another server
 			return nil, nil, nil, term.TargetErr("only the owner of task %s can answer its dialogs", x.ID)
 		}
 		if !open(x.Status) || x.Pane == "" {

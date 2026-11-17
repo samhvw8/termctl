@@ -626,3 +626,16 @@ func TestNoticeMarksScreenTextUntrusted(t *testing.T) {
 		t.Fatalf("a long request loses its start or end: %s", n)
 	}
 }
+
+// A pane on another server with the owner's pane ID is not the owner (review F15).
+func TestAnswerChecksTheOwnersServer(t *testing.T) {
+	r := newRig(t)
+	x, dlg := dialogTask(t, r)
+	r.reg.Update(func(d *Data) error { d.Tasks[x.ID].OwnerRef = map[string]string{"pid": "111"}; return nil })
+	r.b.Ref = map[string]string{"pid": "222"} // the caller: same pane ID, another server
+	r.reg.Update(func(d *Data) error { d.Tasks[x.ID].Ref = map[string]string{"pid": "222"}; return nil }) // keep the worker reachable
+	_, _, err := r.tasks.Answer(x.ID, AnswerOpts{N: 1})
+	if !isCode(err, term.CodeUsage) || dlg.Answer != 0 {
+		t.Errorf("a same-ID pane on another server answered the dialog: err=%v answer=%d", err, dlg.Answer)
+	}
+}

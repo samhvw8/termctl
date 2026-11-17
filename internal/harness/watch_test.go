@@ -265,3 +265,24 @@ func TestWatcherWaitsForAHeldNotice(t *testing.T) {
 		t.Fatalf("rounds=%d texts=%q", rounds, r.b.Texts(r.owner.ID))
 	}
 }
+
+// The watcher lock is per owner pane and server: the same pane ID on another tmux server is another
+// owner, with a watcher of its own (review F15).
+func TestWatcherLockIsPerServer(t *testing.T) {
+	r := newRig(t)
+	a, b := r.as(r.owner), r.as(r.owner)
+	a.SenderRef, b.SenderRef = map[string]string{"pid": "111"}, map[string]string{"pid": "222"}
+	la, err := a.lockWatcher(r.owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer la.Close()
+	lb, err := b.lockWatcher(r.owner.ID)
+	if err != nil {
+		t.Fatal("another server's owner was refused its watcher:", err)
+	}
+	lb.Close()
+	if a.Watching(r.owner.ID) == 0 || b.Watching(r.owner.ID) != 0 {
+		t.Fatal("Watching does not tell the servers apart")
+	}
+}

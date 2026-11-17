@@ -287,9 +287,9 @@ func (t *Tasks) apply(sigs []Signal, notify bool) error {
 
 // runningTasks lists the owner's running tasks. Only these can show a live dialog: a ready, failed or
 // blocked worker has reported, and task send makes it running again.
-func runningTasks(d *Data, owner string) (running []*Task) {
+func runningTasks(d *Data, owner string, ref map[string]string) (running []*Task) {
 	for _, x := range d.Tasks {
-		if x.Owner == owner && !x.Closed && x.Status == "running" {
+		if x.Owner == owner && sameServer(x.OwnerRef, ref) && !x.Closed && x.Status == "running" {
 			running = append(running, x)
 		}
 	}
@@ -297,9 +297,9 @@ func runningTasks(d *Data, owner string) (running []*Task) {
 }
 
 // holdsNotice reports whether a notice for the owner is still waiting to be delivered.
-func holdsNotice(d *Data, owner string) bool {
+func holdsNotice(d *Data, owner string, ref map[string]string) bool {
 	for _, p := range d.Pending {
-		if p.Owner == owner {
+		if p.Owner == owner && sameServer(p.OwnerRef, ref) {
 			return true
 		}
 	}
@@ -313,8 +313,13 @@ var ErrWatching = errors.New("a watcher already runs for this owner")
 // executable changed. The lock is released when Watch returns it.
 var ErrRestart = errors.New("the watcher's executable changed")
 
+// watchPaths are keyed by the owner pane and its server: the same pane ID on another server is another owner.
 func (t *Tasks) watchPaths(owner string) (lock, log string) {
-	name := unsafeName.ReplaceAllString(owner, "_")
+	name := owner
+	if k := serverKey(t.SenderRef); k != "" {
+		name += "@" + k
+	}
+	name = unsafeName.ReplaceAllString(name, "_")
 	dir := filepath.Join(t.Reg.Root, "watch")
 	return filepath.Join(dir, name+".lock"), filepath.Join(dir, name+".log")
 }
@@ -430,8 +435,8 @@ func (t *Tasks) Watch(o WatchOpts) error {
 			say("the owner pane is gone; stopping")
 			return nil
 		}
-		running := runningTasks(d, owner.ID)
-		if len(running) == 0 && !holdsNotice(d, owner.ID) {
+		running := runningTasks(d, owner.ID, t.SenderRef)
+		if len(running) == 0 && !holdsNotice(d, owner.ID, t.SenderRef) {
 			t.stopMemo()
 			say("no running task and no held notice left; stopping")
 			return nil

@@ -147,6 +147,22 @@ func (t *Tasks) paneByID(paneID string, ref map[string]string) (term.Backend, *t
 	return b, nil, nil
 }
 
+// callerRef is the server of the caller's own pane.
+func (t *Tasks) callerRef() map[string]string {
+	if t.SenderRef != nil {
+		return t.SenderRef
+	}
+	return t.Backend.ServerRef()
+}
+
+// serverKey names the server a ref belongs to, as sameServer compares it: core_id, else pid.
+func serverKey(ref map[string]string) string {
+	if id := ref["core_id"]; id != "" {
+		return id
+	}
+	return ref["pid"]
+}
+
 func (t *Tasks) owner() (*term.Pane, error) {
 	if t.Sender == nil {
 		return nil, term.UsageErr("cannot tell which pane this runs in; a task needs an owner pane")
@@ -819,7 +835,7 @@ func (t *Tasks) waitDialog(d *Data, owner, id string) (*Waited, error) {
 	if id != "" {
 		watch = []*Task{d.Tasks[id]}
 	} else {
-		watch = runningTasks(d, owner)
+		watch = runningTasks(d, owner, t.SenderRef)
 	}
 	sigs := t.signals(watch)
 	if err := t.apply(sigs, false); err != nil {
