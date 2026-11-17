@@ -8,7 +8,7 @@ generated: { by: claude-code/opus-5.5, at: '2026-11-18T12:00:00Z' }
 
 # Overview
 
-A task is one harness session doing one job. The registry is `~/.local/state/termctl/registry.json` (`TERMCTL_STATE_DIR` moves it). Code: `internal/harness/tasks.go` and `registry.go`.
+A task is one harness session doing one job. The registry is `~/.local/state/termctl/registry.json` (`TERMCTL_STATE_DIR` moves it). Code: `internal/harness/tasks.go` and `registry.go`. The registry holds the current state only; the history of every task (brief, messages, reports) is in [the journal](journal.md), and a brief is a file in the owner's project folder there.
 
 Writes hold an exclusive `flock` on `registry.lock` and replace the file atomically, so readers need no lock. The new file is synced before the rename and the directory after it, so a crash keeps either the old file or the new one, and never brings the old one back after an update returned; a failed directory sync is a warning, since the update has happened. The directory sync doubles an update's cost on this Mac's APFS, from about 5 ms to 10 ms (macOS syncs with `F_FULLFSYNC`; measured 2026-11-17). A failed write closes its temp file. The lock is taken without blocking and retried every 20 ms for up to 20 s; a lock held longer belongs to a hung process, and the update fails with exit 1 naming the lock file, instead of hanging every call behind it. A corrupt file is an error, never a reset, because a reset would forget running tasks.
 
