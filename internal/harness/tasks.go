@@ -670,6 +670,31 @@ func (t *Tasks) GaveWork(b term.Backend, p *term.Pane) (bool, error) {
 	return true, nil
 }
 
+// OpenDialogs maps each pane this caller started (on the caller's backend) to the fingerprint of the dialog
+// marked open on it: the mark of the running task that holds the pane, else the pane record's. This is how
+// a lead whose harness is not typed dialog notices sees a held one on a spawned pane (ls --mine).
+func (t *Tasks) OpenDialogs() (map[string]string, error) {
+	d, err := t.Reg.Read()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for id, rec := range d.Panes {
+		if !t.ownsRecord(rec, t.Backend.ServerRef()) {
+			continue
+		}
+		if rec.Dialog != nil && !paneHeld(d, id) {
+			out[id] = rec.Dialog.Fingerprint
+		}
+	}
+	for _, x := range d.Tasks {
+		if x.Dialog != nil && dialogOnScreen(x, x.Dialog.Fingerprint) && t.ownsRecord(d.Panes[x.Pane], t.Backend.ServerRef()) {
+			out[x.Pane] = x.Dialog.Fingerprint
+		}
+	}
+	return out, nil
+}
+
 // Mine keeps the panes this caller started with spawn or task new.
 func (t *Tasks) Mine(panes []*term.Pane) ([]*term.Pane, error) {
 	d, err := t.Reg.Read()

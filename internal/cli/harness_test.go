@@ -540,3 +540,40 @@ func TestSpawnWithAPromptAndMsgToYourPaneStartAWatcher(t *testing.T) {
 		t.Fatalf("spawn must warn once: %q", warned)
 	}
 }
+
+// ls --mine shows a pane you started with a dialog marked open as STATUS "dialog <fp>", and --json carries
+// the fingerprint: the way a lead whose harness is not typed notices sees a held dialog on a spawned pane.
+func TestLsMineShowsAnOpenDialog(t *testing.T) {
+	e := newEnv(t)
+	e.app.Factory = func(string, map[string]string) (term.Backend, error) { return e.b, nil }
+	code, out, stderr := e.run("spawn", "claude", "--command", "fake", "--label", "partner", "--timeout", "30")
+	if code != 0 {
+		t.Fatal(code, out, stderr)
+	}
+	partner := strings.TrimSpace(out)
+	code, out, stderr = e.run("spawn", "claude", "--command", "fake", "--label", "quiet", "--timeout", "30")
+	if code != 0 {
+		t.Fatal(code, out, stderr)
+	}
+	quiet := strings.TrimSpace(out)
+	if err := harness.NewRegistry("").Update(func(d *harness.Data) error {
+		d.Panes[partner].Dialog = &harness.DialogMark{Fingerprint: "abcd1234", Notified: true}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, _ := e.run("ls", "--mine"); code != 0 || !regexp.MustCompile(`partner .* dialog abcd1234\n`).MatchString(out) || strings.Count(out, "dialog ") != 1 {
+		t.Fatalf("ls --mine:\n%s", out)
+	}
+	_, out, _ = e.run("ls", "--mine", "--json")
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(out), &rows); err != nil {
+		t.Fatal(err, out)
+	}
+	for _, r := range rows {
+		want := map[string]string{partner: "abcd1234", quiet: ""}[r["pane_id"].(string)]
+		if got, _ := r["dialog"].(string); got != want || (want != "" && r["status"] != "dialog "+want) {
+			t.Fatalf("row %v: dialog %q, want %q", r, got, want)
+		}
+	}
+}

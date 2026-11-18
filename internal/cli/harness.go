@@ -17,7 +17,8 @@ const harnessUsage = `usage: harness-ops [--backend NAME] [-L SOCKET] COMMAND
 
 Talk to coding-agent panes. Put options before the target: everything after the target is text.
 
-  ls [--json] [--all] [--mine]                panes with harness, label, folder, status; --mine: only the ones you started
+  ls [--json] [--all] [--mine]                panes with harness, label, folder, status; --mine: only the ones you started,
+                                              with STATUS "dialog <fp>" where a dialog waits (JSON: "dialog")
   which TARGET                                resolve a target; never sends
   read TARGET [-n LINES]                      print a pane's screen (alias: capture)
   msg [--force] [--clear-first] [--timeout S] TARGET TEXT...   tagged message (alias: send)
@@ -78,6 +79,7 @@ type row struct {
 	Status  string `json:"status"`
 	Tab     string `json:"tab"`              // the tab (tmux: window) ID, "" where the backend reports none
 	Hidden  bool   `json:"hidden,omitempty"` // behind a maximized pane (iTerm2)
+	Dialog  string `json:"dialog,omitempty"` // ls --mine: the fingerprint of the dialog marked open on the pane
 }
 
 func (a *App) printTable(panes []*term.Pane) {
@@ -551,6 +553,7 @@ func (a *App) ls(o *Options, all, asJSON, mine bool) error {
 		}
 	}
 	var panes []*term.Pane
+	dialogs := map[string]string{}
 	for _, name := range names {
 		opt := *o
 		if name != "" {
@@ -581,12 +584,28 @@ func (a *App) ls(o *Options, all, asJSON, mine bool) error {
 			}
 		}
 		fillStatus(a.newOps(b, nil), found)
+		if mine {
+			// A dialog the watcher marked: for a lead whose harness is not typed notices, the only sign of one.
+			tasks, err := a.openTasks(&opt, b)
+			if err != nil {
+				return err
+			}
+			open, err := tasks.OpenDialogs()
+			if err != nil {
+				return err
+			}
+			for _, p := range found {
+				if fp := open[p.ID]; fp != "" {
+					p.Status, dialogs[p.ID] = "dialog "+fp, fp
+				}
+			}
+		}
 		panes = append(panes, found...)
 	}
 	if asJSON {
 		rows := []row{}
 		for _, p := range panes {
-			rows = append(rows, row{p.Address(), p.ID, p.TTY, p.Title, p.Label, harness.HarnessName(p), p.Folder, p.IsSelf, p.Status, p.Tab, p.Hidden})
+			rows = append(rows, row{p.Address(), p.ID, p.TTY, p.Title, p.Label, harness.HarnessName(p), p.Folder, p.IsSelf, p.Status, p.Tab, p.Hidden, dialogs[p.ID]})
 		}
 		data, _ := json.MarshalIndent(rows, "", " ")
 		fmt.Fprintln(a.Out, string(data))

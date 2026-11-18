@@ -783,3 +783,25 @@ func TestGaveWorkOnlyMarksYourOwnPanes(t *testing.T) {
 		t.Fatal(owned, r.data().Panes[p.ID])
 	}
 }
+
+// A lead whose harness is not typed dialog notices: a dialog on its spawned pane stays held, and
+// OpenDialogs (ls --mine) shows it; a pane another lead started does not show.
+func TestHeldPaneNoticeShowsInOpenDialogs(t *testing.T) {
+	r := newRig(t)
+	r.owner.Process = "python3"
+	r.mustNew(t, nil, NewOpts{})
+	p, _ := spawnedDialog(t, r, r.tasks, "partner", "touch x")
+	spawnedDialog(t, r, r.as(r.other), "theirs", "touch y")
+	fp := readFP(t, r, &Task{Pane: p.ID})
+	r.tasks.Watch(WatchOpts{Rounds: 2})
+	if notes := ownerNotes(r); len(notes) != 0 {
+		t.Fatalf("typed to an uncalibrated lead: %q", notes)
+	}
+	if d := r.data(); len(d.Pending) != 1 || d.Pending[0].Pane != p.ID {
+		t.Fatalf("the pane's notice must stay held: %+v", d.Pending)
+	}
+	open, err := r.tasks.OpenDialogs()
+	if err != nil || len(open) != 1 || open[p.ID] != fp {
+		t.Fatalf("open dialogs %v (%v), want %s on %s", open, err, fp, p.ID)
+	}
+}
