@@ -3,8 +3,9 @@ package e2e
 // The real-harness dialog matrix behind "mise run test:dialogs" (opt-in: TERMCTL_DIALOGS_TEST=1; it
 // costs model turns). Each cell is one backend and one harness: a lead pane runs the fake harness, and
 // its task's worker is the real harness (Claude Code on haiku, or Antigravity CLI), told to run touch.
-// The outside judge is the file system: "task answer 1" must make the touch run, "task deny" on a
-// second dialog must leave its file absent. The notice must reach the lead's screen; the time from the
+// The outside judge is the file system: "answer 1" must make the touch run, "deny" on a
+// second dialog must leave its file absent. The spawn cell (<backend>-claude-spawn) starts the worker with
+// spawn, as pairs and live teams do, instead of task new. The notice must reach the lead's screen; the time from the
 // dialog first visible on the worker to the notice visible on the lead is measured.
 //
 // Every pane, server and core it creates is closed: iTerm2 scratch tabs, a private tmux socket
@@ -397,7 +398,7 @@ func flow(r *leadRig, notices *noticeWatch, h, cell, root string, logf func(stri
 	}
 	deny := func(d *harness.Dialog, why string) {
 		res.ExtraDenies++
-		code, out, stderr := r.ops("task", "deny", id, "--expect", d.Fingerprint)
+		code, out, stderr := r.ops("deny", id, "--expect", d.Fingerprint)
 		logf("%s: denied an extra dialog (%s) %q: exit %d %s%s", cell, why, harness.DialogLine(id, d), code, strings.TrimSpace(out), strings.TrimSpace(stderr))
 	}
 	// waitDialog waits for the dialog whose request names want; other dialogs are denied. It returns when
@@ -432,7 +433,7 @@ func flow(r *leadRig, notices *noticeWatch, h, cell, root string, logf func(stri
 	res.Latencies = append(res.Latencies, res.YesMs)
 	res.Upper = append(res.Upper, t1.Sub(t0Early).Milliseconds())
 	logf("%s: notice on the lead after %d ms (at most %d ms: the dialog came up after the look before, %d ms earlier)", cell, res.YesMs, t1.Sub(t0Early).Milliseconds(), t0.Sub(t0Early).Milliseconds())
-	if code, out, stderr := r.ops("task", "answer", id, "1", "--expect", d.Fingerprint); code != 0 {
+	if code, out, stderr := r.ops("answer", id, "1", "--expect", d.Fingerprint); code != 0 {
 		return fail("task answer: exit %d: %s %s", code, out, stderr)
 	}
 	ok = false
@@ -499,7 +500,7 @@ func flow(r *leadRig, notices *noticeWatch, h, cell, root string, logf func(stri
 	res.Latencies = append(res.Latencies, res.NoMs)
 	res.Upper = append(res.Upper, t3.Sub(t2Early).Milliseconds())
 	logf("%s: second notice on the lead after %d ms (at most %d ms)", cell, res.NoMs, t3.Sub(t2Early).Milliseconds())
-	if code, out, stderr := r.ops("task", "deny", id, "--expect", d2.Fingerprint); code != 0 {
+	if code, out, stderr := r.ops("deny", id, "--expect", d2.Fingerprint); code != 0 {
 		return fail("task deny: exit %d: %s %s", code, out, stderr)
 	}
 	// The harness may try again some other way; the lead denies each try.
@@ -510,6 +511,156 @@ func flow(r *leadRig, notices *noticeWatch, h, cell, root string, logf func(stri
 	}
 	if _, err := os.Stat(no); err == nil {
 		return fail("%s exists after task deny", no)
+	}
+	res.Pass = true
+	logf("%s: PASS", cell)
+	return res
+}
+
+// spawnFlow runs a spawn cell: the lead starts real Claude Code with harness-ops spawn and a prompt, as
+// pairs and live teams start members (no task). The watcher the spawn started must tell the lead of the
+// dialog; "answer <pane> 1" must make the touch run. Then a msg to the pane gives it a second touch (and
+// starts a watcher again if the first one stopped), whose dialog must reach the lead too; "deny <pane>"
+// must leave its file absent for 10 s.
+func spawnFlow(r *leadRig, notices *noticeWatch, cell, root string, logf func(string, ...any)) (res cellResult) {
+	res.Cell = cell
+	dir := filepath.Join(root, cell)
+	os.MkdirAll(dir, 0o755)
+	yes, no := filepath.Join(dir, cell+"-yes"), filepath.Join(dir, cell+"-no")
+	fail := func(format string, a ...any) cellResult {
+		res.Note = fmt.Sprintf(format, a...)
+		logf("%s: FAIL: %s", cell, res.Note)
+		return res
+	}
+	cmd, err := harnessCommand("claude", dir, r.state)
+	if err != nil {
+		return fail("%v", err)
+	}
+	prompt := fmt.Sprintf("Run this exact shell command and nothing else: touch %s . Do not run any other command.", yes)
+	code, out, stderr := r.ops("spawn", "claude", "--label", cell, "--prompt", prompt, "--cwd", dir, "--command", cmd, "--where", "tab", "--timeout", "180")
+	if code != 0 {
+		return fail("spawn: exit %d: %s %s", code, out, stderr)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	pane := lines[len(lines)-1]
+	defer func() {
+		if code, _, stderr := r.ops("close", "--force", pane); code != 0 {
+			logf("%s: close: %s", cell, stderr)
+		}
+	}()
+	wp := findPane(r.b, pane)
+	if wp == nil {
+		return fail("spawned pane %q not found", pane)
+	}
+	prof := harness.Profiles["claude"]
+	read := func() *harness.Dialog {
+		lines, err := r.b.Capture(wp, 200)
+		if err != nil {
+			return nil
+		}
+		return prof.ReadDialog(lines)
+	}
+	deny := func(d *harness.Dialog, why string) {
+		res.ExtraDenies++
+		code, out, stderr := r.ops("deny", pane, "--expect", d.Fingerprint)
+		logf("%s: denied an extra dialog (%s) %q: exit %d %s%s", cell, why, harness.DialogLine(pane, d), code, strings.TrimSpace(out), strings.TrimSpace(stderr))
+	}
+	waitDialog := func(want string) (*harness.Dialog, time.Time) {
+		for end := time.Now().Add(turnWait); time.Now().Before(end); time.Sleep(100 * time.Millisecond) {
+			if d := read(); d != nil {
+				if strings.Contains(strip(d.Body+d.Question), want) {
+					return d, time.Now()
+				}
+				deny(d, "not the touch asked for")
+			}
+		}
+		return nil, time.Time{}
+	}
+	d, t0 := waitDialog(cell + "-yes")
+	if d == nil {
+		lines, _ := r.b.Capture(wp, 60)
+		return fail("no touch dialog on the spawned pane in %v; screen:\n%s", turnWait, strings.Join(lines, "\n"))
+	}
+	logf("%s: dialog %s on the spawned pane: %s", cell, d.Fingerprint, harness.DialogLine(pane, d))
+	t1, ok := notices.wait(d.Fingerprint, 60*time.Second)
+	if !ok {
+		return fail("the notice of dialog %s never showed on the lead's screen", d.Fingerprint)
+	}
+	res.YesMs = t1.Sub(t0).Milliseconds()
+	logf("%s: notice on the lead after %d ms", cell, res.YesMs)
+	if code, out, stderr := r.ops("answer", pane, "1", "--expect", d.Fingerprint); code != 0 {
+		return fail("answer: exit %d: %s %s", code, out, stderr)
+	}
+	ok = false
+	for end := time.Now().Add(90 * time.Second); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+		if _, err := os.Stat(yes); err == nil {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		lines, _ := r.b.Capture(wp, 60)
+		return fail("answer 1 went through, but %s does not exist after 90 s; screen:\n%s", yes, strings.Join(lines, "\n"))
+	}
+	logf("%s: answer 1 by the pane ID made %s", cell, filepath.Base(yes))
+	ready, calm := false, 0
+	for end := time.Now().Add(turnWait); time.Now().Before(end); time.Sleep(300 * time.Millisecond) {
+		lines, err := r.b.Capture(wp, 200)
+		if err != nil {
+			continue
+		}
+		if d := prof.ReadDialog(lines); d != nil {
+			deny(d, "after the answer")
+			calm = 0
+			continue
+		}
+		if prof.ReadInput(lines) != nil && !prof.IsBusy(lines) {
+			if calm++; calm >= 3 {
+				ready = true
+				break
+			}
+		} else {
+			calm = 0
+		}
+	}
+	if !ready {
+		lines, _ := r.b.Capture(wp, 60)
+		return fail("the spawned pane never came back to its input line; screen:\n%s", strings.Join(lines, "\n"))
+	}
+	type seen struct {
+		d  *harness.Dialog
+		at time.Time
+	}
+	second := make(chan seen, 1)
+	go func() {
+		d, at := waitDialog(cell + "-no")
+		second <- seen{d, at}
+	}()
+	if code, out, stderr := r.ops("msg", pane, "Now run this exact shell command and nothing else: touch "+no); code != 0 {
+		<-second
+		return fail("msg: exit %d: %s %s", code, out, stderr)
+	}
+	s2 := <-second
+	if s2.d == nil {
+		lines, _ := r.b.Capture(wp, 60)
+		return fail("no second touch dialog in %v; screen:\n%s", turnWait, strings.Join(lines, "\n"))
+	}
+	t3, ok := notices.wait(s2.d.Fingerprint, 60*time.Second)
+	if !ok {
+		return fail("the notice of dialog %s after the msg never showed on the lead's screen", s2.d.Fingerprint)
+	}
+	res.NoMs = t3.Sub(s2.at).Milliseconds()
+	logf("%s: second notice on the lead after %d ms", cell, res.NoMs)
+	if code, out, stderr := r.ops("deny", pane, "--expect", s2.d.Fingerprint); code != 0 {
+		return fail("deny: exit %d: %s %s", code, out, stderr)
+	}
+	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(300 * time.Millisecond) {
+		if d := read(); d != nil {
+			deny(d, "a retry after the deny")
+		}
+	}
+	if _, err := os.Stat(no); err == nil {
+		return fail("%s exists after deny", no)
 	}
 	res.Pass = true
 	logf("%s: PASS", cell)
@@ -591,7 +742,7 @@ func tallFlow(r *leadRig, notices *noticeWatch, cell, root string, logf func(str
 		}
 		if !strings.Contains(strip(s.Body), strip(last)) {
 			res.ExtraDenies++
-			code, o, e := r.ops("task", "deny", id, "--expect", mark)
+			code, o, e := r.ops("deny", id, "--expect", mark)
 			logf("%s: denied an extra dialog %q: exit %d %s%s", cell, harness.DialogLine(id, s), code, strings.TrimSpace(o), strings.TrimSpace(e))
 			time.Sleep(2 * time.Second)
 			continue
@@ -623,7 +774,7 @@ func tallFlow(r *leadRig, notices *noticeWatch, cell, root string, logf func(str
 		return fail("the notice of the whole dialog %s never showed on the lead's screen", d.Fingerprint)
 	}
 	res.YesMs = t1.Sub(seen).Milliseconds()
-	if code, stdout, stderr := r.ops("task", "answer", id, "1", "--expect", d.Fingerprint); code != 0 {
+	if code, stdout, stderr := r.ops("answer", id, "1", "--expect", d.Fingerprint); code != 0 {
 		return fail("task answer: exit %d: %s %s", code, stdout, stderr)
 	}
 	for end := time.Now().Add(90 * time.Second); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
@@ -688,7 +839,7 @@ func TestDialogsRealMatrix(t *testing.T) {
 	root := dialogsRoot(t)
 	var results []cellResult
 	for _, be := range dialogBackends {
-		if !wanted(be.name, be.name+"-claude", be.name+"-agy", be.name+"-claude-tall") {
+		if !wanted(be.name, be.name+"-claude", be.name+"-agy", be.name+"-claude-tall", be.name+"-claude-spawn") {
 			continue
 		}
 		t.Run(be.name, func(t *testing.T) {
@@ -706,6 +857,13 @@ func TestDialogsRealMatrix(t *testing.T) {
 					continue
 				}
 				res := flow(r, notices, h, cell, root, t.Logf)
+				results = append(results, res)
+				if !res.Pass {
+					t.Errorf("%s: %s", cell, res.Note)
+				}
+			}
+			if cell := be.name + "-claude-spawn"; wanted(be.name, cell) {
+				res := spawnFlow(r, notices, cell, root, t.Logf)
 				results = append(results, res)
 				if !res.Pass {
 					t.Errorf("%s: %s", cell, res.Note)
@@ -940,7 +1098,7 @@ func TestDialogsRealHiddenAgy(t *testing.T) {
 		if got := read(); got != nil && got.Hidden {
 			d = got
 		} else if got != nil {
-			code, _, stderr := r.ops("task", "deny", id, "--expect", got.Fingerprint)
+			code, _, stderr := r.ops("deny", id, "--expect", got.Fingerprint)
 			t.Logf("denied another dialog %q: exit %d %s", harness.DialogLine(id, got), code, stderr)
 		}
 	}
@@ -953,7 +1111,7 @@ func TestDialogsRealHiddenAgy(t *testing.T) {
 		t.Fatalf("the notice of dialog %s never showed on the lead's screen", d.Fingerprint)
 	}
 	for _, args := range [][]string{{"1"}, {"2", "--persist"}} {
-		code, stdout, stderr := r.ops(append([]string{"task", "answer", id}, append(args, "--expect", d.Fingerprint)...)...)
+		code, stdout, stderr := r.ops(append([]string{"answer", id}, append(args, "--expect", d.Fingerprint)...)...)
 		t.Logf("task answer %v: exit %d %s%s", args, code, stdout, stderr)
 		if code != 6 {
 			t.Fatalf("task answer %v on a partly hidden request: want exit 6, got %d", args, code)
@@ -962,12 +1120,12 @@ func TestDialogsRealHiddenAgy(t *testing.T) {
 	if now := read(); now == nil || now.Fingerprint != d.Fingerprint {
 		t.Fatalf("a refused answer changed the dialog: %+v", now)
 	}
-	if code, stdout, stderr := r.ops("task", "deny", id, "--expect", d.Fingerprint); code != 0 {
+	if code, stdout, stderr := r.ops("deny", id, "--expect", d.Fingerprint); code != 0 {
 		t.Fatalf("task deny: exit %d %s %s", code, stdout, stderr)
 	}
 	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(300 * time.Millisecond) {
 		if got := read(); got != nil {
-			r.ops("task", "deny", id, "--expect", got.Fingerprint)
+			r.ops("deny", id, "--expect", got.Fingerprint)
 		}
 	}
 	if _, err := os.Stat(out); err == nil {

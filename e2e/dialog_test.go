@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 var dialogFP = regexp.MustCompile(`DIALOG ([0-9a-f]{8}):`)
@@ -98,4 +99,83 @@ func TestDialogWatchAndAnswer(t *testing.T) {
 		data, _ := os.ReadFile(logs[0])
 		return strings.Contains(string(data), "no running task and no held notice left")
 	})
+}
+
+// A lead starts a partner with spawn (as pairs and live teams do), not task new: the watcher that the
+// spawn's prompt started tells the lead of the partner's dialog, the lead answers and denies it with the
+// top-level commands by the pane's ID, another pane is refused, the watcher stops once the partner is idle,
+// and a msg to the partner starts it again.
+func TestDialogOnASpawnedPane(t *testing.T) {
+	r := newRig(t)
+	lead, leadLog := r.lead()
+	workerLog := filepath.Join(r.tmp, "partner.log")
+	code, out, stderr := r.ops(lead, "spawn", "generic", "--where", "tab", "--label", "partner", "--cwd", r.tmp,
+		"--command", filepath.Join(binDir, "agy", "agy")+" "+workerLog, "--prompt", "start", "--timeout", "30")
+	if code != 0 {
+		t.Fatal(out, stderr)
+	}
+	pane := strings.TrimSpace(out)
+	worker := strings.TrimPrefix(pane, "tmux:")
+	waitFor(t, "prompt", func() bool { return len(readLog(workerLog)) > 0 })
+	notice := func(n int) string {
+		var notes []string
+		waitFor(t, "dialog notice to the lead", func() bool {
+			notes = nil
+			for _, l := range readLog(leadLog) {
+				if strings.Contains(l, "DIALOG") {
+					notes = append(notes, l)
+				}
+			}
+			return len(notes) >= n
+		})
+		return notes[n-1]
+	}
+	tmux(t, "send-keys", "-t", worker, "/dialog", "Enter")
+	note := notice(1)
+	t.Log(note)
+	m := dialogFP.FindStringSubmatch(note)
+	if m == nil || !strings.HasPrefix(note, "[agent-ops from partner (generic) id="+pane+" ") || !strings.Contains(note, "pane "+pane+" (partner) DIALOG") ||
+		!strings.Contains(note, "touch fake-file") || !strings.Contains(note, "answer: harness-ops answer "+pane+" <n> --expect "+m[1]) {
+		t.Fatal(note)
+	}
+	fp := m[1]
+	if code, _, _ := r.ops(r.sender, "answer", pane, "1", "--expect", fp); code != 2 {
+		t.Fatal("only the pane's owner answers: ", code)
+	}
+	if code, _, _ := r.ops(lead, "answer", pane, "2", "--expect", fp); code != 6 {
+		t.Fatal("an always-allow choice went through without --persist: ", code)
+	}
+	if code, out, stderr := r.ops(lead, "answer", pane, "3", "--expect", fp); code != 0 || !strings.Contains(out, "No, cancel") {
+		t.Fatal(code, out, stderr)
+	}
+	waitFor(t, "answer logged", func() bool { return strings.Contains(strings.Join(readLog(workerLog), "\n"), "<<ANSWER 3>>") })
+	tmux(t, "send-keys", "-t", worker, "/dialog", "Enter")
+	fp = dialogFP.FindStringSubmatch(notice(2))[1]
+	if code, out, stderr := r.ops(lead, "deny", pane, "--expect", fp); code != 0 || !strings.Contains(out, "pressed Esc") {
+		t.Fatal(code, out, stderr)
+	}
+	waitFor(t, "deny logged", func() bool { return strings.Contains(strings.Join(readLog(workerLog), "\n"), "<<CANCELLED>>") })
+
+	// The partner is idle: the watcher stops, and is not kept on by the open pane. A msg starts it again.
+	logs, _ := filepath.Glob(filepath.Join(r.tmp, "state", "watch", "*.log"))
+	if len(logs) != 1 {
+		t.Fatal(logs)
+	}
+	watchLog := func() string { data, _ := os.ReadFile(logs[0]); return string(data) }
+	for end := time.Now().Add(60 * time.Second); !strings.Contains(watchLog(), "no running task and no held notice left"); time.Sleep(200 * time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatalf("the watcher did not stop with its partner idle:\n%s", watchLog())
+		}
+	}
+	// --force: the fake draws no agy input line.
+	if code, _, stderr := r.ops(lead, "msg", "--force", "partner", "your turn"); code != 0 {
+		t.Fatal(stderr)
+	}
+	waitFor(t, "a watcher again", func() bool { return strings.Count(watchLog(), "watching the tasks of") == 2 })
+	tmux(t, "send-keys", "-t", worker, "/dialog", "Enter")
+	notice(3)
+	if code, out, _ := r.ops(lead, "ls", "--mine"); code != 0 || !strings.Contains(out, "dialog "+dialogFP.FindStringSubmatch(notice(3))[1]) {
+		t.Fatal("ls --mine does not show the open dialog: ", out)
+	}
+	r.ops(lead, "close", "--force", pane)
 }
