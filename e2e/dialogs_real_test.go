@@ -514,6 +514,151 @@ func flow(r *leadRig, notices *noticeWatch, h, cell, root string, logf func(stri
 	return res
 }
 
+// tallLines is the length of the tall cell's heredoc: taller than every cell's worker pane (an iTerm2 tab
+// the size of its window, tmux's 60-row windows, Rex's 24 rows, hc's 120 rows), so the dialog's rule is off
+// the screen and only a history read sees the whole request.
+const tallLines = 160
+
+// tallFlow runs a tall cell: Claude Code asks to run a heredoc taller than the pane. The watcher, task wait
+// and task answer must read it whole from the backend's history (term.SafeHistory): the notice and the
+// task wait block carry the fingerprint of the whole request, task answer 1 --expect that fingerprint must
+// go through, and the file must hold every line. A backend whose history is not safe fails here (the
+// request reads truncated and task answer refuses it with exit 6).
+func tallFlow(r *leadRig, notices *noticeWatch, cell, root string, logf func(string, ...any)) (res cellResult) {
+	res.Cell = cell
+	dir := filepath.Join(root, cell)
+	os.MkdirAll(dir, 0o755)
+	out := filepath.Join(dir, cell+"-yes.txt")
+	fail := func(format string, a ...any) cellResult {
+		res.Note = fmt.Sprintf(format, a...)
+		logf("%s: FAIL: %s", cell, res.Note)
+		return res
+	}
+	var want strings.Builder
+	for i := 1; i <= tallLines; i++ {
+		fmt.Fprintf(&want, "request line %03d of %d: the quick brown fox jumps over the lazy dog\n", i, tallLines)
+	}
+	cmdFile := filepath.Join(dir, "cmd.txt")
+	if err := os.WriteFile(cmdFile, []byte("cat > "+out+" <<'EOF'\n"+want.String()+"EOF\n"), 0o644); err != nil {
+		return fail("%v", err)
+	}
+	cmd, err := harnessCommand("claude", dir, r.state)
+	if err != nil {
+		return fail("%v", err)
+	}
+	brief := fmt.Sprintf("Read the file %s, then run its whole content verbatim as one single Bash shell command (it is a heredoc that writes %s). "+
+		"Do not run it as a script file (no bash cmd.txt, no sh), do not split or shorten it, run nothing else.", cmdFile, filepath.Base(out))
+	code, stdout, stderr := r.ops("task", "new", "claude", "--title", cell, "--brief", brief, "--cwd", dir, "--command", cmd, "--where", "tab", "--timeout", "180")
+	if code != 0 {
+		return fail("task new: exit %d: %s %s", code, stdout, stderr)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	id := lines[len(lines)-1]
+	defer func() {
+		if code, _, stderr := r.ops("task", "close", "--force", id); code != 0 {
+			logf("%s: task close: %s", cell, stderr)
+		}
+	}()
+	// The dialog the watcher marked on the task is the one the lead is told of (a notice; task wait then does not
+	// return it again). Its fingerprint must be that of the whole request, read here from the history too.
+	prof := harness.Profiles["claude"]
+	last := fmt.Sprintf("request line %03d of %d: the quick brown fox jumps over the lazy dog", tallLines, tallLines)
+	var d *harness.Dialog
+	var seen time.Time // when a screen first showed the heredoc dialog
+	var screenRead *harness.Dialog
+	for end := time.Now().Add(turnWait); d == nil && time.Now().Before(end); time.Sleep(300 * time.Millisecond) {
+		wp := findPane(r.b, taskPane(r, id))
+		if wp == nil {
+			continue
+		}
+		rows := wp.Rows
+		if rows == 0 {
+			rows = 200 // tmux reports no height: harness-ops reads 200 lines there too
+		}
+		lines, err := r.b.Capture(wp, rows)
+		if err != nil {
+			continue
+		}
+		s := prof.ReadDialog(lines)
+		if s != nil && seen.IsZero() && strings.Contains(strip(s.Body), strip(last)) {
+			seen = time.Now()
+		}
+		mark := taskMark(r, id)
+		if s == nil || mark == "" {
+			continue
+		}
+		if !strings.Contains(strip(s.Body), strip(last)) {
+			res.ExtraDenies++
+			code, o, e := r.ops("task", "deny", id, "--expect", mark)
+			logf("%s: denied an extra dialog %q: exit %d %s%s", cell, harness.DialogLine(id, s), code, strings.TrimSpace(o), strings.TrimSpace(e))
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		history, err := r.b.Capture(wp, 2000)
+		if err != nil {
+			continue
+		}
+		if whole := prof.ReadScrollbackDialog(history); whole != nil && whole.Fingerprint == mark {
+			d, screenRead = whole, s
+		}
+	}
+	if d == nil {
+		screen := ""
+		if wp := findPane(r.b, taskPane(r, id)); wp != nil {
+			lines, _ := r.b.Capture(wp, 60)
+			screen = strings.Join(lines, "\n")
+		}
+		return fail("no heredoc dialog marked with the fingerprint of its history read in %v (mark %q); screen:\n%s", turnWait, taskMark(r, id), screen)
+	}
+	logf("%s: the screen read %s (truncated %v), the history read %s", cell, screenRead.Fingerprint, screenRead.Truncated, d.Fingerprint)
+	first := fmt.Sprintf("request line 001 of %d", tallLines)
+	logf("%s: dialog %s (truncated %v, ambiguous %v, %d body lines)", cell, d.Fingerprint, d.Truncated, d.Ambiguous, strings.Count(d.Body, "\n")+1)
+	if d.Truncated || d.Ambiguous || !strings.Contains(d.Body, first) || !strings.Contains(d.Body, last) {
+		return fail("the request was not read whole from the history: truncated %v, ambiguous %v, body starts %q", d.Truncated, d.Ambiguous, harness.DialogLine(id, d))
+	}
+	t1, ok := notices.wait(d.Fingerprint, 60*time.Second)
+	if !ok {
+		return fail("the notice of the whole dialog %s never showed on the lead's screen", d.Fingerprint)
+	}
+	res.YesMs = t1.Sub(seen).Milliseconds()
+	if code, stdout, stderr := r.ops("task", "answer", id, "1", "--expect", d.Fingerprint); code != 0 {
+		return fail("task answer: exit %d: %s %s", code, stdout, stderr)
+	}
+	for end := time.Now().Add(90 * time.Second); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+		if got, err := os.ReadFile(out); err == nil && string(got) == want.String() {
+			res.Pass = true
+			logf("%s: PASS: answered the whole %d-line request; %s holds every line", cell, tallLines, filepath.Base(out))
+			return res
+		}
+	}
+	got, _ := os.ReadFile(out)
+	return fail("task answer 1 went through, but %s does not hold the %d lines after 90 s (%d bytes)", out, tallLines, len(got))
+}
+
+// taskMark is the fingerprint of the dialog the watcher marked on a task, from task show; "" for none.
+func taskMark(r *leadRig, id string) string {
+	_, shown, _ := r.ops("task", "show", id, "--json")
+	var task struct {
+		Dialog *struct {
+			Fingerprint string `json:"fingerprint"`
+		} `json:"dialog"`
+	}
+	if json.Unmarshal([]byte(shown), &task) != nil || task.Dialog == nil {
+		return ""
+	}
+	return task.Dialog.Fingerprint
+}
+
+// taskPane is the pane of a task, from task show.
+func taskPane(r *leadRig, id string) string {
+	_, shown, _ := r.ops("task", "show", id, "--json")
+	var task struct {
+		Pane string `json:"pane"`
+	}
+	json.Unmarshal([]byte(shown), &task)
+	return task.Pane
+}
+
 // killWatchers stops a watcher left behind by a failed cell. Watchers stop by themselves once no task is open.
 func killWatchers(state string) {
 	locks, _ := filepath.Glob(filepath.Join(state, "watch", "*.lock"))
@@ -541,7 +686,7 @@ func TestDialogsRealMatrix(t *testing.T) {
 	root := dialogsRoot(t)
 	var results []cellResult
 	for _, be := range dialogBackends {
-		if !wanted(be.name, be.name+"-claude", be.name+"-agy") {
+		if !wanted(be.name, be.name+"-claude", be.name+"-agy", be.name+"-claude-tall") {
 			continue
 		}
 		t.Run(be.name, func(t *testing.T) {
@@ -564,17 +709,24 @@ func TestDialogsRealMatrix(t *testing.T) {
 					t.Errorf("%s: %s", cell, res.Note)
 				}
 			}
+			if cell := be.name + "-claude-tall"; wanted(be.name, cell) {
+				res := tallFlow(r, notices, cell, root, t.Logf)
+				results = append(results, res)
+				if !res.Pass {
+					t.Errorf("%s: %s", cell, res.Note)
+				}
+			}
 		})
 	}
 	var b strings.Builder
-	b.WriteString("\nDIALOG MATRIX\ncell            result  yes-notice-ms  no-notice-ms  extra-denies\n")
+	b.WriteString("\nDIALOG MATRIX\ncell                 result  yes-notice-ms  no-notice-ms  extra-denies\n")
 	pass := 0
 	for _, r := range results {
 		word := "FAIL"
 		if r.Pass {
 			word, pass = "pass", pass+1
 		}
-		fmt.Fprintf(&b, "%-15s %-7s %13d %13d %13d\n", r.Cell, word, r.YesMs, r.NoMs, r.ExtraDenies)
+		fmt.Fprintf(&b, "%-20s %-7s %13d %13d %13d\n", r.Cell, word, r.YesMs, r.NoMs, r.ExtraDenies)
 	}
 	fmt.Fprintf(&b, "%d/%d cells pass\n", pass, len(results))
 	fmt.Print(b.String())
