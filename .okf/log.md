@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-11-18
+* **Release**: v0.5.0 — `answer` and `deny` are top-level commands (`task answer` and `task deny` stay as aliases for one release), and the watcher announces dialogs on every pane its owner started with `spawn` or `task new`, not only tasks' workers; `ls --mine` shows an open dialog (the entries below, above v0.4.1). The journal (`feat/journal`) is not in this release. Runs: as the watcher entries below.
 * **Fix**: a spawned pane seen at work while tasks still run is remembered, so the watcher keeps its 3 quiet rounds when the last task ends; it stopped at the first idle look of a member that was still between two steps. Test: `TestAPaneAtWorkBesideATaskKeepsTheQuietRounds`. See [tasks](architecture/tasks.md#watcher). Runs: nothing new.
 * **Verified**: the whole real run after v0.5.0's pane dialogs: `TestDialogsRealMatrix` 16/16 cells pass on iTerm2, tmux, Rex and hc (the 4 new `-claude-spawn` cells included), `TestDialogsRealHiddenAgy` passes; `TestDialogsRealLatency` failed (iTerm2 1/6, tmux 5/6 workers) at `task new`'s submit under 6 parallel starts, and passed 6/6 on a tmux rerun (p95 3040 ms). See [tasks](architecture/tasks.md#verified-on-real-harnesses). Runs: nothing new.
 * **Fix (test)**: the real dialog cells close the worker's pane when `task new` or `spawn` fails after making it (a brief typed but not submitted, exit 4): such a cell returned before its cleanup, and three agy tabs of `TestDialogsRealLatency` stayed open in iTerm2, waiting, after the 2026-11-18 run. Runs: nothing new.
