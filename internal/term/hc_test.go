@@ -766,3 +766,35 @@ func TestHcUnreachableCoreIsUnknown(t *testing.T) {
 		t.Errorf("unreachable core: panes=%v err=nil (reconcile would mark every hc task lost)", panes)
 	}
 }
+
+// hc reads a full-screen app's history by scrolling it with mouse-wheel input ("how": "stitched"), except
+// while the program reports working, blocked or error ("how": "screen", "why": "blocked"; measured on hc
+// 0.1.19, 2026-11-18). A main-screen program's history is read from hc's copy, but which screen a program is
+// on cannot be told before reading, so the history read is safe only in those three states. Claude Code
+// reports blocked during a permission dialog.
+func TestHcHistoryIsSafeOnlyWhileTheProgramReportsBusy(t *testing.T) {
+	inline := func(state string) string { return `{"address":"t1","rows":120,"status":{"state":"` + state + `"}}` }
+	for _, c := range []struct {
+		name, get string
+		code      int
+		safe      bool
+	}{
+		{"blocked on a permission", fixture(t, "get_permission.json"), 0, true},
+		{"blocked", fixture(t, "get_blocked.json"), 0, true},
+		{"working", inline("working"), 0, true},
+		{"error", inline("error"), 0, true},
+		{"idle", fixture(t, "get_idle.json"), 0, false},
+		{"idle claude", fixture(t, "get_claude.json"), 0, false},
+		{"done", inline("done"), 0, false},
+		{"never reported", fixture(t, "get_plain.json"), 0, false},
+		{"gone", fixture(t, "err_notfound.json"), hcExitNotFound, false},
+	} {
+		s := &hcStub{route: func(args []string) hcReply { return hcReply{out: c.get, code: c.code} }}
+		if got := hcBackend(s, true).HistoryIsSafe(hcPane()); got != c.safe {
+			t.Errorf("%s: HistoryIsSafe = %v, want %v", c.name, got, c.safe)
+		}
+		if len(s.calls) != 1 || s.calls[0][0] != "get" {
+			t.Errorf("%s: %q", c.name, s.calls)
+		}
+	}
+}
