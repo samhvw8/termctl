@@ -1,0 +1,39 @@
+ │ request line 52 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 53 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 54 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 55 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 56 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 57 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 58 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 59 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 60 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 61 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 62 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 63 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 64 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 65 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 66 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 67 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 68 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 69 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 70 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 71 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 72 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 73 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 74 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 75 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 76 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 77 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 78 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 79 of 80: the quick brown fox jumps over the lazy dog
+ │ request line 80 of 80: the quick brown fox jumps over the lazy dog
+ │ EOF
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and always allow access to /private/tmp/claude-501/-Users-xuser-workspace-tools-termctl/9daaef32-a7d4-447f-b
+      ebe-5064749663d6/scratchpad/r2cal/claude from this project
+   3. Yes, and switch to auto mode · auto mode handles these prompts for you
+   4. No
+
+ Esc to cancel · Tab to amend

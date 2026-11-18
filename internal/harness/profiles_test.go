@@ -2,6 +2,8 @@ package harness
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -413,6 +415,91 @@ func TestNoDialogOnOrdinaryScreens(t *testing.T) {
 	for _, n := range []string{"omp", "opencode", "codex", "gemini", "aider", "pi", "generic"} {
 		if Profiles[n].ReadDialog != nil {
 			t.Errorf("%s has no calibrated dialog reader", n)
+		}
+	}
+}
+
+// capture reads a real screen saved under testdata/.
+func capture(t *testing.T, name string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+}
+
+func persistMarks(d *Dialog) []bool {
+	var out []bool
+	for _, o := range d.Options {
+		out = append(out, o.Persist)
+	}
+	return out
+}
+
+// Real Claude Code 2.1.326 on haiku, in a 120x40 tmux pane, asked to run an 82-line heredoc (round-6 review
+// R2, 2026-11-18). The screen shows the request's last 30 lines: its rule is off screen, so the screen read is
+// truncated. tmux's scrollback (capture-pane -S) holds the whole dialog: one full-width rule, then the
+// " Bash command" title, every line under it indented (the command marked with │) but the ╌ separators.
+// The second capture is the same request asked again after the first was denied: the first dialog's top
+// stayed in the scrollback above it, so a plain read sees two rules and the dialog's is the lowest.
+func TestClaudeTallRequestOnTmux(t *testing.T) {
+	p := Profiles["claude"]
+	screen := p.ReadDialog(capture(t, "claude-tall-request-screen.txt"))
+	if screen == nil || !screen.Truncated || screen.Ambiguous || screen.Fingerprint != "286e6f8c" ||
+		!reflect.DeepEqual(persistMarks(screen), []bool{false, true, true, false}) || !strings.HasPrefix(screen.Body, "request line 52 of 80") {
+		t.Fatalf("screen: %+v", screen)
+	}
+	for _, c := range []struct{ file, title, fp string }{
+		{"claude-tall-request-history.txt", "Run heredoc from cmd.txt verbatim to write out.txt", "c2f75c35"},
+		{"claude-second-tall-request-history.txt", "Run cmd.txt heredoc verbatim as one Bash command", ""},
+	} {
+		lines := capture(t, c.file)
+		d := p.ReadScrollbackDialog(lines)
+		if d == nil || d.Truncated || d.Ambiguous || d.Question != "Do you want to proceed?" ||
+			!strings.HasPrefix(d.Body, "Bash command\n"+c.title+"\ncat > ") || !strings.Contains(d.Body, "\nrequest line 01 of 80") ||
+			!strings.HasSuffix(d.Body, "request line 80 of 80: the quick brown fox jumps over the lazy dog\nEOF") ||
+			!reflect.DeepEqual(persistMarks(d), []bool{false, true, true, false}) || (c.fp != "" && d.Fingerprint != c.fp) {
+			t.Fatalf("%s: %+v", c.file, d)
+		}
+		if !strings.HasSuffix(unspaced(d.Body), unspaced(screen.Body)) {
+			t.Fatalf("%s: the scrollback read does not end with the screen's request", c.file)
+		}
+		// A column-0 full-width rule inside the request is never the dialog's: Claude Code draws none there.
+		forged := append([]string{}, lines...)
+		for i, ln := range forged {
+			if strings.Contains(ln, "request line 40 of 80") {
+				forged[i] = strings.Repeat("─", 120)
+			}
+		}
+		if f := p.ReadScrollbackDialog(forged); f == nil || !f.Ambiguous {
+			t.Fatalf("%s: a forged rule inside the request: %+v", c.file, f)
+		}
+	}
+	if d := p.ReadDialog(capture(t, "claude-second-tall-request-history.txt")); d == nil || !d.Ambiguous {
+		t.Fatalf("read as a screen, a scrollback with a past dialog's rule shows two rules: %+v", d)
+	}
+}
+
+// Real Antigravity CLI 1.5.10 asked for the same 82-line heredoc and for a 4800-character one-line echo, in
+// 120x40 and 120x20 tmux panes (2026-11-18). agy draws on the alternate screen (no scrollback) and never
+// draws a request taller than the pane: it shows 3 lines of a long command and "⋯ (78 lines hidden)", or
+// cuts a long line after 12 rows (5 in 20 rows) with "...", so its rule stays on screen. The hidden part is
+// not read, so neither the body nor the fingerprint covers it.
+func TestAgyTallRequestFitsThePane(t *testing.T) {
+	if Profiles["agy"].ReadScrollbackDialog != nil {
+		t.Fatal("agy keeps no scrollback to read")
+	}
+	for _, c := range []struct{ file, fp, tail string }{
+		{"agy-tall-request-screen.txt", "14271944", "request line 03 of 80: the quick brown fox jumps over the lazy dog\n⋯ (78 lines hidden)"},
+		{"agy-long-line-screen.txt", "7c7c5964", "word167..."},
+		{"agy-long-line-20-rows.txt", "79e520e2", "word069..."},
+	} {
+		d := Profiles["agy"].ReadDialog(capture(t, c.file))
+		if d == nil || d.Truncated || d.Ambiguous || d.Unrecognized || d.Question != "Run this command?" || d.Fingerprint != c.fp ||
+			!strings.HasPrefix(d.Body, "Requesting permission for:\n") || !strings.HasSuffix(d.Body, c.tail) ||
+			!reflect.DeepEqual(persistMarks(d), []bool{false, true, true, false}) {
+			t.Fatalf("%s: %+v", c.file, d)
 		}
 	}
 }

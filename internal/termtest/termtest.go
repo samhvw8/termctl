@@ -52,7 +52,11 @@ func (d *Dialog) lines() []string {
 	} else {
 		d.shown = d.Selected
 	}
-	out := []string{strings.Repeat("─", 40), " Bash command", " " + d.Body, "", " Do you want to proceed?"}
+	out := []string{strings.Repeat("─", 40), " Bash command"}
+	for _, ln := range strings.Split(d.Body, "\n") {
+		out = append(out, " "+ln)
+	}
+	out = append(out, "", " Do you want to proceed?")
 	for i, o := range d.Options {
 		mark := "  "
 		if i+1 == d.shown {
@@ -81,7 +85,13 @@ type Fake struct {
 	Statuses      map[string]term.ProgramStatus // a pane's program status
 	StatusCalls   int
 	CostlyStatus  bool // the status read costs a process, as on Rex and hc: the watcher reads it once per round
+	// History makes the fake a term.SafeHistory: a pane with Rows shows that many lines, and a Capture of
+	// more reads the lines above them, as tmux's scrollback.
+	History bool
 }
+
+// HistoryIsSafe makes the fake a term.SafeHistory when History is set.
+func (f *Fake) HistoryIsSafe() bool { return f.History }
 
 // StatusIsFree makes the fake a term.FreeStatus unless CostlyStatus is set.
 func (f *Fake) StatusIsFree() bool { return !f.CostlyStatus }
@@ -212,25 +222,39 @@ func (f *Fake) SendKey(p *term.Pane, key string) error {
 func (f *Fake) Capture(p *term.Pane, lines int) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	out := f.capture(p)
+	// A pane with Rows shows its last Rows lines; only a backend with safe history reads further back.
+	if n := lines; p.Rows > 0 {
+		if !f.History {
+			n = min(n, p.Rows)
+		}
+		if len(out) > n {
+			out = out[len(out)-n:]
+		}
+	}
+	return out, nil
+}
+
+func (f *Fake) capture(p *term.Pane) []string {
 	st := f.State[p.ID]
 	f.Events = append(f.Events, Event{Kind: "capture", Pane: p.ID})
 	if st.Busy > 0 {
 		st.Busy--
-		return append(append([]string{}, st.Log...), fmt.Sprintf("working %d", st.Busy)), nil
+		return append(append([]string{}, st.Log...), fmt.Sprintf("working %d", st.Busy))
 	}
 	screen := append([]string{}, st.Log...)
 	if d := st.Dialog; d.Waiting() {
 		if d.HideFirst > 0 {
 			d.HideFirst--
-			return append(screen, "drawing…"), nil
+			return append(screen, "drawing…")
 		}
-		return append(screen, d.lines()...), nil
+		return append(screen, d.lines()...)
 	}
 	if p.Process == "fakeagent" || p.Process == "claude" { // spawned panes pass every profile's input-line check
 		rule := strings.Repeat("─", 40)
 		screen = append(screen, rule, "❯", rule, "╰─")
 	}
-	return append(screen, "> "+st.Input), nil
+	return append(screen, "> "+st.Input)
 }
 
 func (f *Fake) Close(p *term.Pane) error {

@@ -3,6 +3,8 @@ package harness
 import (
 	"errors"
 	"fmt"
+	"reflect"
+	"strings"
 
 	"github.com/samhvw8/termctl/internal/term"
 )
@@ -22,7 +24,41 @@ func (o *Ops) ReadDialog(p *term.Pane) (*Dialog, error) {
 	if err != nil {
 		return nil, err
 	}
-	return prof.ReadDialog(lines), nil
+	return readPaneDialog(o.Backend, p, prof, lines), nil
+}
+
+// historyLines is how far back a request taller than the pane is looked for: tmux's default history-limit.
+const historyLines = 2000
+
+// readPaneDialog reads the dialog on a captured screen. A request taller than the pane (Truncated) is read
+// again with the scrollback when the backend reads it without disturbing the program (term.SafeHistory) and
+// the harness keeps its dialog there; the whole read is taken only when it ends with what the screen showed
+// (the same question, choices and end of the request), else the screen's truncated read stands.
+func readPaneDialog(b term.Backend, p *term.Pane, prof *Profile, screen []string) *Dialog {
+	d := prof.ReadDialog(screen)
+	if d == nil || !d.Truncated || d.Ambiguous || prof.ReadScrollbackDialog == nil {
+		return d
+	}
+	if h, ok := b.(term.SafeHistory); !ok || !h.HistoryIsSafe() {
+		return d
+	}
+	lines, err := b.Capture(p, historyLines)
+	if err != nil {
+		return d
+	}
+	whole := prof.ReadScrollbackDialog(lines)
+	switch {
+	case whole == nil || whole.Truncated:
+		return d
+	case whole.Ambiguous:
+		if strings.Contains(unspaced(whole.Body), unspaced(d.Body)) {
+			return whole
+		}
+		return d
+	case whole.Question != d.Question || !reflect.DeepEqual(whole.Options, d.Options) || !strings.HasSuffix(unspaced(whole.Body), unspaced(d.Body)):
+		return d
+	}
+	return whole
 }
 
 // AnswerOpts are options of Answer. N is the choice; Deny picks the "No" choice instead.

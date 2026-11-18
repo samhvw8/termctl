@@ -141,7 +141,7 @@ func (t *Tasks) read(ws []worker, status map[string]term.ProgramStatus) []Signal
 		if err != nil {
 			return
 		}
-		screens[i], dialogs[i] = lines, ws[i].prof.ReadDialog(lines)
+		screens[i], dialogs[i] = lines, readPaneDialog(ws[i].b, ws[i].p, ws[i].prof, lines)
 	}
 	parallel(len(ws), look)
 	var again []int

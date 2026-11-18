@@ -1125,3 +1125,40 @@ func TestDialogAnsweredDuringAnEarlierNoticeIsNotAnnounced(t *testing.T) {
 		t.Fatal("the stale notice stays queued:", d.Pending)
 	}
 }
+
+// A request taller than the pane is read whole from the scrollback on a backend whose history read does not
+// disturb the program (tmux), so it can be answered; elsewhere it stays truncated and refused (round-6 R2).
+func TestTallRequestIsReadFromSafeHistory(t *testing.T) {
+	for _, history := range []bool{true, false} {
+		r := newRig(t)
+		r.b.History = history
+		x, dlg := dialogTask(t, r)
+		var body []string
+		for i := 1; i <= 20; i++ {
+			body = append(body, fmt.Sprintf("│ request line %02d", i))
+		}
+		dlg.Body = strings.Join(body, "\n")
+		r.pane(x).Rows = 12
+		d, err := r.tasks.ops(r.b, r.owner).ReadDialog(r.pane(x))
+		if err != nil || d == nil {
+			t.Fatal(err)
+		}
+		sigs := screenSource{r.tasks}.Signals([]*Task{mustGet(t, r, x.ID)})
+		if len(sigs) != 1 || sigs[0].Dialog == nil || sigs[0].Dialog.Fingerprint != d.Fingerprint {
+			t.Fatalf("history %v: the watcher and the answer read different dialogs: %+v %+v", history, sigs, d)
+		}
+		_, _, err = r.tasks.Answer(x.ID, AnswerOpts{N: 1, Expect: d.Fingerprint})
+		if !history {
+			if !d.Truncated || !isCode(err, term.CodeGuard) || dlg.Answer != 0 {
+				t.Fatalf("no safe history: want a truncated request refused, got %+v %v", d, err)
+			}
+			continue
+		}
+		if d.Truncated || !strings.HasPrefix(d.Body, "Bash command\nrequest line 01") || !strings.HasSuffix(d.Body, "request line 20") {
+			t.Fatalf("safe history: want the whole request, got %+v", d)
+		}
+		if err != nil || dlg.Answer != 1 {
+			t.Fatalf("a request read whole is answerable: %v %d", err, dlg.Answer)
+		}
+	}
+}

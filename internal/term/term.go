@@ -130,6 +130,13 @@ type FreeStatus interface {
 	StatusIsFree() bool
 }
 
+// SafeHistory marks a backend whose Capture of more lines than the screen reads the scrollback above it
+// without disturbing the program: tmux's capture-pane -S reads its buffer. hc is not one (a history read can
+// scroll a full-screen app), and iTerm2 and Rex read the screen only.
+type SafeHistory interface {
+	HistoryIsSafe() bool
+}
+
 // Submitter is for a backend that cannot type without pressing Enter (hc). A backend that has it
 // is sent whole lines through SubmitText; its SendText must refuse rather than submit.
 // from names the sender of an agent message, as <backend>/<id>, and is empty for anything else.

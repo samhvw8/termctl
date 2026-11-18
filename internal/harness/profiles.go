@@ -186,6 +186,9 @@ type Profile struct {
 	InterruptVerified bool                   // the keys were seen to stop a real turn
 	ReadOnlyFlags     string                 // verified flags for a mode that cannot change files; "" when none is verified
 	ReadDialog        func([]string) *Dialog // a permission dialog on screen, nil when none; nil for a harness not calibrated
+	// ReadScrollbackDialog reads a dialog from the screen and the scrollback above it, for a request taller
+	// than the pane; nil for a harness that keeps no dialog there (agy draws on the alternate screen).
+	ReadScrollbackDialog func([]string) *Dialog
 }
 
 // IsBusy looks for a busy pattern near the bottom of the screen.
@@ -232,6 +235,7 @@ var Profiles = func() map[string]*Profile {
 		`--allowedTools Read Grep Glob 'Bash(git status *)' 'Bash(git diff *)' 'Bash(git log *)' 'Bash(git show *)' 'Bash(harness-ops task done *)'`
 	claude.BusyPatterns = []*regexp.Regexp{regexp.MustCompile(`(?i)esc to interrupt`), claudeWorking}
 	claude.ReadDialog = unlessInput(claudeReadDialog, claudeInput) // Claude Code 2.1.326: "Do you want to proceed?", "❯ 1. Yes"
+	claude.ReadScrollbackDialog = claudeReadScrollbackDialog
 
 	omp := simple("omp")
 	omp.Calibrated, omp.PromptRequired, omp.InterruptVerified = true, true, true

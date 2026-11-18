@@ -96,8 +96,13 @@ var (
 		asks:     regexp.MustCompile(`(?i)requesting permission`)}
 )
 
-func claudeReadDialog(lines []string) *Dialog { return readDialog(lines, claudeDialog) }
-func agyReadDialog(lines []string) *Dialog    { return readDialog(lines, agyDialog) }
+func claudeReadDialog(lines []string) *Dialog { return readDialog(lines, claudeDialog, false) }
+func agyReadDialog(lines []string) *Dialog    { return readDialog(lines, agyDialog, false) }
+
+// claudeReadScrollbackDialog reads a Claude Code dialog from the screen and the scrollback above it. Claude
+// Code draws on the main screen, so the top of a dialog taller than the pane scrolls into the history, and
+// so does the top of every earlier tall dialog: the dialog's rule is the lowest full-width rule.
+func claudeReadScrollbackDialog(lines []string) *Dialog { return readDialog(lines, claudeDialog, true) }
 
 const footerReach = 6 // the footer is among the last lines of the screen
 
@@ -109,7 +114,11 @@ const footerReach = 6 // the footer is among the last lines of the screen
 // is more than one, or when more than one full-width rule shows: the worker's text (a command, a path in
 // an option) can wrap onto lines of its own shaped like options or rules, and agy wraps them to column 0,
 // so which lines are the real ones cannot be told.
-func readDialog(lines []string, spec dialogSpec) *Dialog {
+//
+// With scrollback, lines reach above the screen into the history, where past dialogs left their rules: the
+// lowest rule is the dialog's, and the dialog must be drawn as Claude Code draws it (drawnIndented), or it is
+// Ambiguous: a full-width rule at column 0 inside the request would otherwise read as the rule.
+func readDialog(lines []string, spec dialogSpec, scrollback bool) *Dialog {
 	footer, seen := -1, 0
 	for i := len(lines) - 1; i >= 0 && seen < footerReach; i-- {
 		t := strings.TrimSpace(lines[i])
@@ -131,6 +140,9 @@ func readDialog(lines []string, spec dialogSpec) *Dialog {
 		if isBoundary(lines[i], width) {
 			rules = append(rules, i)
 		}
+	}
+	if scrollback && len(rules) > 1 {
+		rules = rules[len(rules)-1:]
 	}
 	start, truncated := 0, true // the first line under the rule above the request
 	if len(rules) > 0 {
@@ -196,7 +208,7 @@ func readDialog(lines []string, spec dialogSpec) *Dialog {
 	// The one selection mark must be on an option (the worker's text may pose as options below the real
 	// ones, with or without a mark: review A2, round-5 D2). A dialog draws one full-width rule; agy wraps a
 	// command to column 0, so a command can draw another, and which is the dialog's cannot be told (round-5 D1).
-	if !inSequence || marks > 1 || d.Selected == 0 || len(rules) > 1 {
+	if !inSequence || marks > 1 || d.Selected == 0 || len(rules) > 1 || (scrollback && !truncated && !drawnIndented(lines[start:footer])) {
 		return ambiguousDialog(lines[start:footer], truncated)
 	}
 	if len(d.Options) < 2 {
@@ -258,6 +270,28 @@ func ruleWidth(lines []string) int {
 func isBoundary(line string, width int) bool {
 	t := strings.TrimRight(line, " ")
 	return width > 0 && ruleRe.MatchString(t) && utf8.RuneCountInString(t) == width
+}
+
+// drawnIndented: under its rule, a Claude Code dialog starts with a title indented by one space ("Bash
+// command") and indents every line but its ╌ separators; the request is indented too (a command is marked
+// with │). Seen on 2026-11-18 on a real 82-line request (testdata/claude-tall-request-*.txt). So a rule
+// followed by anything else, such as a forged rule at column 0 inside the request, is not the dialog's.
+func drawnIndented(body []string) bool {
+	title := false
+	for _, ln := range body {
+		t := strings.TrimSpace(ln)
+		switch {
+		case t == "":
+		case !title:
+			if !strings.HasPrefix(ln, " ") || strings.HasPrefix(ln, "  ") || strings.HasPrefix(t, "│") {
+				return false
+			}
+			title = true
+		case !strings.HasPrefix(ln, " ") && !dashRuleRe.MatchString(t):
+			return false
+		}
+	}
+	return title
 }
 
 // ambiguousDialog is the whole dialog as shown, with no options to choose from.

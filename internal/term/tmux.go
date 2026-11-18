@@ -268,6 +268,9 @@ func (b *TmuxBackend) Capture(p *Pane, lines int) ([]string, error) {
 	return TrimScreen(strings.Split(out, "\n"), lines), nil
 }
 
+// HistoryIsSafe: capture-pane -S reads the pane's history buffer; the program sees nothing.
+func (b *TmuxBackend) HistoryIsSafe() bool { return true }
+
 func (b *TmuxBackend) Close(p *Pane) error {
 	_, err := b.run("kill-pane", "-t", p.Native)
 	return err
