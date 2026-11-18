@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/samhvw8/termctl/internal/term"
 	"github.com/samhvw8/termctl/internal/termtest"
 )
 
@@ -26,6 +27,24 @@ func TestProjectSlugIsOmpStyleWithoutTheLeadingDash(t *testing.T) {
 		if got := ProjectSlug(in); got != want {
 			t.Errorf("ProjectSlug(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestAPaneInHomeIsTheHomeProject(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip(err)
+	}
+	// Backends show a pane's folder with term.Tilde, so a pane in home has the folder "~".
+	p := &term.Pane{Folder: "~"}
+	if got := ProjectOf(p); got != home {
+		t.Fatalf("ProjectOf(~) = %q, want %q", got, home)
+	}
+	if got := ProjectSlug(ProjectOf(p)); got != "home" {
+		t.Fatalf("slug = %q, want home", got)
+	}
+	if got := ProjectOf(&term.Pane{Folder: "~/w/x"}); got != filepath.Join(home, "w/x") {
+		t.Fatalf("ProjectOf(~/w/x) = %q", got)
 	}
 }
 

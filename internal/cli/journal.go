@@ -71,19 +71,11 @@ func (a *App) projectArg(p string, o *Options) (string, error) {
 	if p == "." {
 		return a.myProject(o), nil
 	}
-	abs, err := filepath.Abs(expandTilde(p))
+	abs, err := filepath.Abs(harness.ExpandHome(p))
 	if err != nil {
 		return "", term.UsageErr("--project: %v", err)
 	}
 	return abs, nil
-}
-
-func expandTilde(p string) string {
-	if p == "~" || strings.HasPrefix(p, "~/") {
-		home, _ := os.UserHomeDir()
-		return filepath.Join(home, strings.TrimPrefix(p, "~"))
-	}
-	return p
 }
 
 func (a *App) readJournal(f harness.Filter) ([]harness.Entry, error) {
@@ -369,7 +361,7 @@ func (a *App) noteCmd(rest, tail []string, dashed bool, o *Options) error {
 	case p.vals["--file"] != "" && text != "":
 		return term.UsageErr("note: give the text or --file, not both")
 	case p.vals["--file"] != "":
-		data, err := os.ReadFile(expandTilde(p.vals["--file"]))
+		data, err := os.ReadFile(harness.ExpandHome(p.vals["--file"]))
 		if err != nil {
 			return term.UsageErr("--file: %v", err)
 		}

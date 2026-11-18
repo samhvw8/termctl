@@ -536,7 +536,7 @@ func (o *Ops) Spawn(harness, where, cwd string, opts SpawnOpts) (*term.Pane, err
 	}
 	prompt := opts.Prompt
 	if opts.PromptFile != "" {
-		abs, err := filepath.Abs(expandHome(opts.PromptFile))
+		abs, err := filepath.Abs(ExpandHome(opts.PromptFile))
 		if err != nil {
 			return nil, term.UsageErr("--prompt-file: %v", err)
 		}
@@ -638,10 +638,12 @@ func (o *Ops) Status(p *term.Pane, native string) string {
 	return "?"
 }
 
-func expandHome(path string) string {
-	if strings.HasPrefix(path, "~/") {
+// ExpandHome turns a leading ~ (alone or as ~/...) into the home folder. Backends show folders with
+// term.Tilde, so a pane in home has the folder "~".
+func ExpandHome(path string) string {
+	if path == "~" || strings.HasPrefix(path, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, path[2:])
+			return filepath.Join(home, path[1:])
 		}
 	}
 	return path

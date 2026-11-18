@@ -106,7 +106,7 @@ func ProjectSlug(project string) string {
 // ProjectOf is the project of an action: the pane's folder, else the working directory.
 func ProjectOf(p *term.Pane) string {
 	if p != nil && p.Folder != "" && p.Folder != "-" {
-		return filepath.Clean(expandHome(p.Folder))
+		return filepath.Clean(ExpandHome(p.Folder))
 	}
 	wd, _ := os.Getwd()
 	return wd

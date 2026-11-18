@@ -503,7 +503,7 @@ func (t *Tasks) New(o NewOpts) (*Task, error) {
 	}
 	brief := o.Brief
 	if o.BriefFile != "" {
-		abs, err := filepath.Abs(expandHome(o.BriefFile))
+		abs, err := filepath.Abs(ExpandHome(o.BriefFile))
 		if err != nil {
 			return nil, term.UsageErr("--brief-file: %v", err)
 		}
@@ -1120,7 +1120,7 @@ func (t *Tasks) Done(id, status, summary, summaryFile string) (*Task, error) {
 		return nil, term.UsageErr("--status must be one of ok, failed, blocked")
 	}
 	if summaryFile != "" {
-		data, err := os.ReadFile(expandHome(summaryFile))
+		data, err := os.ReadFile(ExpandHome(summaryFile))
 		if err != nil {
 			return nil, term.UsageErr("--summary-file: %v", err)
 		}
@@ -1462,7 +1462,7 @@ func (t *Tasks) Review(o ReviewOpts) (*Task, error) {
 	}
 	brief := t.blindBrief(x)
 	if o.BriefFile != "" {
-		data, err := os.ReadFile(expandHome(o.BriefFile))
+		data, err := os.ReadFile(ExpandHome(o.BriefFile))
 		if err != nil {
 			return nil, term.UsageErr("--brief-file: %v", err)
 		}
