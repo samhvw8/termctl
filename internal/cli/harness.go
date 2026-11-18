@@ -44,7 +44,6 @@ Talk to coding-agent panes. Put options before the target: everything after the 
   task show ID [--json]
   task send [--force] ID TEXT...
   task wait (ID | --any) [--timeout S] [--json]   returns when a task stops running or its worker shows a dialog
-  task answer, task deny                      deprecated aliases of answer and deny, for one release
   task done ID --status ok|failed|blocked (--summary TEXT | --summary-file F)   the worker reports; the session stays open
   task accept ID [--close]                    the lead's verdict; only the owner can finish a task
   task review ID --blind --harness H [--model M] [--brief-file F]   a new session that never sees the worker's report
@@ -706,12 +705,11 @@ func (a *App) lookCmd(cmd string, rest []string, o *Options) error {
 
 func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 	if len(rest) == 0 {
-		return term.UsageErr("usage: task new|ls|show|send|wait|answer|deny|done|accept|review|close")
+		return term.UsageErr("usage: task new|ls|show|send|wait|done|accept|review|close")
 	}
 	cmd, rest := rest[0], rest[1:]
 	if cmd == "answer" || cmd == "deny" {
-		fmt.Fprintf(a.Err, "harness-ops: warning: task %s is deprecated and goes away in the next release; use harness-ops %s\n", cmd, cmd)
-		return a.answer(cmd, rest, o)
+		return term.UsageErr("task %s was removed in v0.7.0; use harness-ops %s", cmd, cmd)
 	}
 	bools, vals, restAfter := []string{}, []string{}, -1
 	switch cmd {
@@ -922,7 +920,7 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 	return nil
 }
 
-// answer runs answer and deny, and their deprecated aliases task answer and task deny. TARGET is a task ID
+// answer runs answer and deny. TARGET is a task ID
 // or a pane the caller started; a pane target also selects its backend.
 func (a *App) answer(cmd string, rest []string, o *Options) error {
 	bools := []string{}

@@ -347,21 +347,21 @@ func TestTaskDialogCommands(t *testing.T) {
 		args []string
 		code int
 	}{
-		{[]string{"task", "answer", id, "2", "--expect", fp}, 6},
-		{[]string{"task", "answer", id, "1"}, 2}, // --expect is required
-		{[]string{"task", "deny", id}, 2},
-		{[]string{"task", "answer", id, "1", "--expect", "00000000"}, 7},
-		{[]string{"task", "answer", id, "x", "--expect", fp}, 2},
-		{[]string{"task", "answer", id}, 2},
+		{[]string{"answer", id, "2", "--expect", fp}, 6},
+		{[]string{"answer", id, "1"}, 2}, // --expect is required
+		{[]string{"deny", id}, 2},
+		{[]string{"answer", id, "1", "--expect", "00000000"}, 7},
+		{[]string{"answer", id, "x", "--expect", fp}, 2},
+		{[]string{"answer", id}, 2},
 	} {
 		if code, _, stderr := e.run(c.args...); code != c.code {
 			t.Fatal(c.args, code, stderr)
 		}
 	}
-	if code, out, stderr := e.run("task", "answer", id, "1", "--expect", fp); code != 0 || !strings.Contains(out, "answered dialog "+fp) || dlg.Answer != 1 {
+	if code, out, stderr := e.run("answer", id, "1", "--expect", fp); code != 0 || !strings.Contains(out, "answered dialog "+fp) || dlg.Answer != 1 {
 		t.Fatal(code, out, stderr)
 	}
-	if code, _, stderr := e.run("task", "answer", id, "1", "--expect", fp); code != 7 || !strings.Contains(stderr, "no dialog") {
+	if code, _, stderr := e.run("answer", id, "1", "--expect", fp); code != 7 || !strings.Contains(stderr, "no dialog") {
 		t.Fatal(code, stderr)
 	}
 	e.b.State[worker.ID].Dialog = &termtest.Dialog{Body: "rm -rf build", Options: []string{"Yes", "No"}, Selected: 1}
@@ -374,10 +374,10 @@ func TestTaskDialogCommands(t *testing.T) {
 	if code, out, _ := e.run("task", "ls"); code != 0 || !strings.Contains(out, "[dialog ") {
 		t.Fatal(code, out)
 	}
-	if code, out, stderr := e.run("task", "deny", id, "--expect", fp2); code != 0 || !strings.Contains(out, "pressed Esc") {
+	if code, out, stderr := e.run("deny", id, "--expect", fp2); code != 0 || !strings.Contains(out, "pressed Esc") {
 		t.Fatal(code, out, stderr)
 	}
-	if code, out, _ := e.run("--help"); code != 0 || !strings.Contains(out, "task answer") || !strings.Contains(out, "7 no dialog") || !strings.Contains(out, "watch") {
+	if code, out, _ := e.run("--help"); code != 0 || !strings.Contains(out, "\n  answer TARGET") || !strings.Contains(out, "7 no dialog") || !strings.Contains(out, "watch") {
 		t.Fatal(out)
 	}
 	if code, _, _ := e.run("task", "close", "--force", id); code != 0 {
@@ -413,9 +413,9 @@ func TestTaskReviewStartsAWatcher(t *testing.T) {
 }
 
 // answer and deny are top-level commands that take a pane you started (spawn, as pairs and live teams
-// start members) or a task ID. task answer and task deny stay as aliases for one release: the same exit
-// codes, and one deprecation line on stderr; the new names print none.
-func TestAnswerAndDenyCommandsAndTheirAliases(t *testing.T) {
+// start members) or a task ID. Their task aliases were removed in v0.7.0: they are usage errors that name
+// the new command, and press no key.
+func TestAnswerAndDenyCommands(t *testing.T) {
 	e := newEnv(t)
 	e.app.Factory = func(string, map[string]string) (term.Backend, error) { return e.b, nil }
 	code, out, stderr := e.run("spawn", "claude", "--command", "fake", "--label", "partner", "--timeout", "30")
@@ -432,30 +432,25 @@ func TestAnswerAndDenyCommandsAndTheirAliases(t *testing.T) {
 		return dlg, regexp.MustCompile(`^[0-9a-f]{8}$`).FindString(harnessFP(lines))
 	}
 	dlg, fp := ask("touch x")
-	deprecated := regexp.MustCompile(`(?m)^harness-ops: warning: task (answer|deny) is deprecated`)
-	for _, alias := range []bool{false, true} {
-		pre := []string{}
-		if alias {
-			pre = []string{"task"}
+	for _, c := range []struct {
+		args []string
+		code int
+	}{
+		{[]string{"answer", paneID, "2", "--expect", fp}, 6}, // persist guard
+		{[]string{"answer", paneID, "1"}, 2},                 // --expect is required
+		{[]string{"deny", paneID}, 2},
+		{[]string{"answer", paneID, "1", "--expect", "00000000"}, 7},
+		{[]string{"answer", "target", "1", "--expect", fp}, 2}, // a pane nobody started
+		{[]string{"answer", "me", "1", "--expect", fp}, 2},     // your own pane
+	} {
+		if code, _, stderr := e.run(c.args...); code != c.code {
+			t.Fatalf("%v: exit %d, want %d: %s", c.args, code, c.code, stderr)
 		}
-		for _, c := range []struct {
-			args []string
-			code int
-		}{
-			{[]string{"answer", paneID, "2", "--expect", fp}, 6}, // persist guard
-			{[]string{"answer", paneID, "1"}, 2},                 // --expect is required
-			{[]string{"deny", paneID}, 2},
-			{[]string{"answer", paneID, "1", "--expect", "00000000"}, 7},
-			{[]string{"answer", "target", "1", "--expect", fp}, 2}, // a pane nobody started
-			{[]string{"answer", "me", "1", "--expect", fp}, 2},     // your own pane
-		} {
-			code, _, stderr := e.run(append(pre, c.args...)...)
-			if code != c.code {
-				t.Fatalf("alias=%v %v: exit %d, want %d: %s", alias, c.args, code, c.code, stderr)
-			}
-			if n := len(deprecated.FindAllString(stderr, -1)); (alias && n != 1) || (!alias && n != 0) {
-				t.Fatalf("alias=%v %v: %d deprecation lines: %q", alias, c.args, n, stderr)
-			}
+	}
+	for _, cmd := range []string{"answer", "deny"} {
+		code, _, stderr := e.run("task", cmd, paneID, "1", "--expect", fp)
+		if code != 2 || !strings.Contains(stderr, "task "+cmd+" was removed in v0.7.0; use harness-ops "+cmd) {
+			t.Fatalf("task %s: exit %d: %s", cmd, code, stderr)
 		}
 	}
 	if dlg.Answer != 0 {
@@ -468,11 +463,7 @@ func TestAnswerAndDenyCommandsAndTheirAliases(t *testing.T) {
 	if code, out, stderr := e.run("deny", "partner", "--expect", fp); code != 0 || !strings.Contains(out, "pressed Esc") || dlg.Answer != -1 {
 		t.Fatal(code, out, stderr)
 	}
-	dlg, fp = ask("rm -rf dist")
-	if code, out, stderr := e.run("task", "deny", paneID, "--expect", fp); code != 0 || dlg.Answer != -1 || len(deprecated.FindAllString(stderr, -1)) != 1 {
-		t.Fatal(code, out, stderr)
-	}
-	if code, out, _ := e.run("--help"); code != 0 || !strings.Contains(out, "\n  answer TARGET N --expect FP") || !strings.Contains(out, "\n  deny TARGET --expect FP") {
+	if code, out, _ := e.run("--help"); code != 0 || !strings.Contains(out, "\n  answer TARGET N --expect FP") || !strings.Contains(out, "\n  deny TARGET --expect FP") || strings.Contains(out, "task answer") {
 		t.Fatal(out)
 	}
 }

@@ -52,23 +52,23 @@ func TestDialogWatchAndAnswer(t *testing.T) {
 	if code, out, _ := r.ops(lead, "watch"); code != 0 || !strings.Contains(out, "already runs") {
 		t.Fatal("a second watcher for the same owner must step aside: ", code, out)
 	}
-	if code, _, stderr := r.ops(lead, "task", "answer", id, "2", "--expect", fp); code != 0 && code != 6 {
+	if code, _, stderr := r.ops(lead, "answer", id, "2", "--expect", fp); code != 0 && code != 6 {
 		t.Fatal(code, stderr)
 	} else if code == 0 {
 		t.Fatal("an always-allow choice went through without --persist")
 	}
-	if code, _, _ := r.ops(lead, "task", "answer", id, "1", "--expect", "00000000"); code != 7 {
+	if code, _, _ := r.ops(lead, "answer", id, "1", "--expect", "00000000"); code != 7 {
 		t.Fatal(code)
 	}
-	if code, _, _ := r.ops(r.sender, "task", "answer", id, "1", "--expect", fp); code != 2 {
+	if code, _, _ := r.ops(r.sender, "answer", id, "1", "--expect", fp); code != 2 {
 		t.Fatal("only the owner answers: ", code)
 	}
-	code, out, stderr = r.ops(lead, "task", "answer", id, "3", "--expect", fp)
+	code, out, stderr = r.ops(lead, "answer", id, "3", "--expect", fp)
 	if code != 0 || !strings.Contains(out, "No, cancel") {
 		t.Fatal(code, out, stderr)
 	}
 	waitFor(t, "answer logged", func() bool { return strings.Contains(strings.Join(readLog(workerLog), "\n"), "<<ANSWER 3>>") })
-	if code, _, _ := r.ops(lead, "task", "answer", id, "1", "--expect", fp); code != 7 {
+	if code, _, _ := r.ops(lead, "answer", id, "1", "--expect", fp); code != 7 {
 		t.Fatal("no dialog left: ", code)
 	}
 
@@ -82,7 +82,7 @@ func TestDialogWatchAndAnswer(t *testing.T) {
 		t.Fatal(code, out, stderr)
 	}
 	fp = regexp.MustCompile(`fingerprint: +([0-9a-f]{8})`).FindStringSubmatch(out)[1]
-	if code, out, stderr := r.ops(lead, "task", "deny", id, "--expect", fp); code != 0 || !strings.Contains(out, "pressed Esc") {
+	if code, out, stderr := r.ops(lead, "deny", id, "--expect", fp); code != 0 || !strings.Contains(out, "pressed Esc") {
 		t.Fatal(code, out, stderr)
 	}
 	waitFor(t, "deny logged", func() bool { return strings.Contains(strings.Join(readLog(workerLog), "\n"), "<<CANCELLED>>") })
