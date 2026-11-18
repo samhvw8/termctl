@@ -72,7 +72,9 @@ func cleanEnv() []string {
 		if strings.HasPrefix(name, "ITERM") || strings.HasPrefix(name, "TMUX") || strings.HasPrefix(name, "REX_") ||
 			strings.HasPrefix(name, "HC_") || name == "TERM_SESSION_ID" || name == "TERMCTL_STATE_DIR" || name == "CLAUDE_CODE_CHILD_SESSION" ||
 			name == "CLAUDECODE" || name == "CLAUDE_CODE_ENTRYPOINT" {
-			continue
+			if name != "TMUX_TMPDIR" { // where private tmux sockets go, not a terminal: keeps them off /tmp
+				continue
+			}
 		}
 		env = append(env, kv)
 	}
