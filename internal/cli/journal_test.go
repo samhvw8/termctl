@@ -53,6 +53,39 @@ func TestJournalLogResumeNote(t *testing.T) {
 	}
 }
 
+func TestNoteTakesFileOnEitherSideOfWhat(t *testing.T) {
+	e := newEnv(t)
+	src := t.TempDir() + "/brief.md"
+	if err := os.WriteFile(src, []byte("the brief\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"note", "--file", src, "a"},
+		{"note", "b", "--file", src},
+		{"note", "c", "--file=" + src},
+	} {
+		code, out, stderr := e.run(args...)
+		if code != 0 {
+			t.Fatal(args, code, stderr)
+		}
+		data, _ := os.ReadFile(strings.TrimSpace(out))
+		if !strings.HasSuffix(string(data), "\n\nthe brief\n") {
+			t.Fatalf("%v: %q", args, data)
+		}
+	}
+	if code, _, stderr := e.run("note", "d", "--file", src, "more"); code != 2 || !strings.Contains(stderr, "not both") {
+		t.Fatal(code, stderr)
+	}
+	if code, _, stderr := e.run("note", "e", "--file"); code != 2 || !strings.Contains(stderr, "needs a value") {
+		t.Fatal(code, stderr)
+	}
+	code, out, _ := e.run("note", "f", "--", "--file", "is", "a", "flag") // after --, it is text
+	data, _ := os.ReadFile(strings.TrimSpace(out))
+	if code != 0 || !strings.HasSuffix(string(data), "\n\n--file is a flag\n") {
+		t.Fatalf("%d %q", code, data)
+	}
+}
+
 func TestResumeTaskPrintsBriefAndEveryMessage(t *testing.T) {
 	e := newEnv(t)
 	code, out, stderr := e.run("task", "new", "generic", "--title", "docs", "--brief", "write the docs", "--cwd", "/w", "--command", "fake-cmd", "--timeout", "60")

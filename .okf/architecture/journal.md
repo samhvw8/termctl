@@ -55,7 +55,7 @@ Rules:
 
 - `harness-ops log [--project DIR] [--task ID] [--pane ID] [--since 2h|3d|DATE] [-n N] [--json]`: the timeline, oldest first, the last 50 by default. One row per entry: local time, project (when not filtered by project or task), event, `from → to`, task, status, text on one line, file. Unreadable lines are counted on stderr, never hidden.
 - `harness-ops resume TASK-ID`: the task's state and last report, its brief in full, then every journal entry with its whole text; a long message's file is printed under its entry. `resume DIR` (`.` is the caller's project, the folder its pane started in, which is where its writes go; a shell that changed folder does not change it): the project's tasks that are not closed, its notes, and its last 30 entries (`-n`).
-- `harness-ops note WHAT (TEXT... | --file F | stdin)`: files a text in the caller's project folder, journals it, and prints the path. Leads write job briefs with it instead of naming files by hand.
+- `harness-ops note WHAT (TEXT... | --file F | stdin)`: files a text in the caller's project folder, journals it, and prints the path. `--file F` may come before or after WHAT; after WHAT it must be the next word, so a text that mentions `--file` stays text. Leads write job briefs with it instead of naming files by hand.
 
 # Not done
 

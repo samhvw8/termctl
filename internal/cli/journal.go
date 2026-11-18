@@ -349,9 +349,20 @@ func (a *App) noteCmd(rest, tail []string, dashed bool, o *Options) error {
 		return err
 	}
 	if len(p.pos) != 1 {
-		return term.UsageErr("usage: note WHAT (TEXT... | --file F | text on stdin)")
+		return term.UsageErr("usage: note [--file F] WHAT [TEXT... | --file F | text on stdin]")
 	}
 	what := p.pos[0]
+	// --file may also follow WHAT; only as the first word after it, so a text that mentions --file stays text.
+	if rest := p.rest; len(rest) > 0 && (rest[0] == "--file" || strings.HasPrefix(rest[0], "--file=")) {
+		q, err := parseArgs(rest, nil, []string{"--file"}, 0)
+		if err != nil {
+			return err
+		}
+		if p.vals["--file"] != "" {
+			return term.UsageErr("note: --file given twice")
+		}
+		p.vals["--file"], p.rest = q.vals["--file"], q.rest
+	}
 	words, _ := attachLiteral(p.rest, tail, dashed)
 	text := strings.Join(words, " ")
 	switch {
