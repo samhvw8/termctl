@@ -40,6 +40,9 @@ func (a *App) watch(rest []string, o *Options) error {
 	say := func(s string) { fmt.Fprintf(a.Out, "%s %s\n", time.Now().Format("15:04:05"), s) }
 	exe, _ := os.Executable()
 	check, target := restartCheck(exe), ""
+	if p := pathBinary(); p != "" && !startedFromPath(exe) {
+		say(fmt.Sprintf("started from %s, not from the harness-ops on PATH (%s): restarts only into a new build of %s", exe, p, exe))
+	}
 	err = tasks.Watch(harness.WatchOpts{Interval: interval, Log: say, Restart: func() bool { target = check(); return target != "" }})
 	if errors.Is(err, harness.ErrRestart) {
 		// Same arguments and environment: an upgraded binary must not keep serving old fingerprints and parsers.
@@ -106,18 +109,42 @@ func pathKey(path string) string {
 	return ""
 }
 
+// startedFromPath: the watcher's own executable, symlinks resolved, is the harness-ops that PATH resolves to
+// now (pathBinary). Asked once, at start.
+func startedFromPath(exe string) bool {
+	p := pathBinary()
+	if p == "" || exe == "" {
+		return false
+	}
+	real, err := filepath.Abs(exe)
+	if err != nil {
+		return false
+	}
+	if real, err = filepath.EvalSymlinks(real); err != nil {
+		return false
+	}
+	return real == p
+}
+
 // restartCheck is asked at each round start which executable the watcher should exec into, and says "" for
-// none: its own executable when that file is a new build (changedBinary), else the harness-ops that PATH
-// resolves to when that is not the build it runs (another path, inode, size or modification time) and has
-// stayed the same since the previous look. mise up installs a new version beside the old one and re-points
-// PATH to it, leaving the running file unchanged (round-6 review R5). Only stat calls, no process.
+// none: its own executable when that file is a new build (changedBinary), else, for a watcher started from
+// the harness-ops that PATH resolved to (startedFromPath), the harness-ops that PATH resolves to now when
+// that is not the build it runs (another path, inode, size or modification time) and has stayed the same
+// since the previous look. mise up installs a new version beside the old one and re-points PATH to it,
+// leaving the running file unchanged (round-6 review R5). A watcher started from another file (a go build
+// output, a worktree binary, a test binary) never follows PATH: until 2026-11-18 it moved to the installed
+// build within two rounds. Only stat calls, no process.
 func restartCheck(exe string) func() string {
 	self := changedBinary(exe)
 	running := pathKey(exe)
+	follow := startedFromPath(exe)
 	last := ""
 	return func() string {
 		if self() {
 			return exe
+		}
+		if !follow {
+			return ""
 		}
 		p := pathBinary()
 		key := ""
