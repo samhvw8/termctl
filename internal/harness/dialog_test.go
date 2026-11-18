@@ -3,6 +3,7 @@ package harness
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -1159,6 +1160,64 @@ func TestTallRequestIsReadFromSafeHistory(t *testing.T) {
 		}
 		if err != nil || dlg.Answer != 1 {
 			t.Fatalf("a request read whole is answerable: %v %d", err, dlg.Answer)
+		}
+	}
+}
+
+// agy shows only part of a long request: "⋯ (78 lines hidden)", or a line cut with "..." (real captures,
+// 2026-11-18). The hidden part is not in the fingerprint, so two requests that differ only there share it,
+// and --expect cannot tell them apart. The dialog is marked hidden: the notice says so and suggests only
+// task deny and the file workaround, task answer refuses every choice (exit 6) without a key, and task
+// deny presses Esc.
+func TestPartlyHiddenAgyRequestIsNeverApproved(t *testing.T) {
+	for _, file := range []string{"agy-tall-request-screen.txt", "agy-long-line-screen.txt", "agy-long-line-20-rows.txt"} {
+		r := newRig(t)
+		x := r.mustNew(t, nil, NewOpts{})
+		r.pane(x).Process = "agy"
+		s := &swapper{Fake: r.b, pane: x.Pane, screen: capture(t, file)}
+		s.onEscape = func() { s.screen = nil }
+		ts := swapTasks(r, s)
+		if err := ts.Watch(WatchOpts{Rounds: 1}); err != nil {
+			t.Fatal(err)
+		}
+		var notes []string // a long notice is typed as a line naming a file that holds it
+		for _, s := range r.b.Texts(r.owner.ID) {
+			if _, f, ok := strings.Cut(s, " Long message; read the file "); ok {
+				raw, err := os.ReadFile(f)
+				if err != nil {
+					t.Fatal(err)
+				}
+				s = string(raw)
+			}
+			if strings.Contains(s, "DIALOG") {
+				notes = append(notes, s)
+			}
+		}
+		if len(notes) != 1 || !strings.Contains(notes[0], hiddenNote) || strings.Contains(notes[0], "task answer "+x.ID) {
+			t.Fatalf("%s: the notice must say the request is partly hidden and suggest no answer: %q", file, notes)
+		}
+		r.reg.Update(func(d *Data) error { d.Tasks[x.ID].Dialog = nil; return nil }) // as if never told
+		w, err := ts.Wait(x.ID, false, 10)
+		if err != nil || w.Dialog == nil || !w.Dialog.Hidden {
+			t.Fatalf("%s: task wait: %+v %v", file, w, err)
+		}
+		if text := DialogText(x.ID, w.Dialog); !strings.Contains(text, "hidden:") || strings.Contains(text, "answer:") {
+			t.Fatalf("%s: %s", file, text)
+		}
+		before := len(keys(r, x))
+		for _, o := range []AnswerOpts{{N: 1}, {N: 2, Persist: true}, {N: 4}} {
+			o.Expect = w.Dialog.Fingerprint
+			_, _, err := ts.Answer(x.ID, o)
+			if !isCode(err, term.CodeGuard) || !strings.Contains(err.Error(), "only part of its request") {
+				t.Fatalf("%s: answered %d on a partly hidden request: %v", file, o.N, err)
+			}
+		}
+		if len(keys(r, x)) != before {
+			t.Fatalf("%s: a refused answer pressed keys: %q", file, keys(r, x)[before:])
+		}
+		res, _, err := ts.Answer(x.ID, AnswerOpts{Deny: true, Expect: w.Dialog.Fingerprint})
+		if err != nil || !res.Escaped || strings.Join(keys(r, x)[before:], " ") != "key:escape" {
+			t.Fatalf("%s: deny: %+v %v %q", file, res, err, keys(r, x)[before:])
 		}
 	}
 }

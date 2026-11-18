@@ -727,3 +727,98 @@ func TestDialogsRealLatency(t *testing.T) {
 	}
 	fmt.Print(report.String())
 }
+
+// TestDialogsRealHiddenAgy: a real agy asked to run an 84-line heredoc shows 3 of its lines and
+// "⋯ (N lines hidden)". The lead hears of the dialog, task answer refuses it (exit 6) whatever the choice,
+// the heredoc's file stays absent, and task deny (Esc) works. Run alone: TERMCTL_DIALOGS_ONLY=tmux-agy-hidden.
+func TestDialogsRealHiddenAgy(t *testing.T) {
+	dialogsOptIn(t)
+	const cell = "tmux-agy-hidden"
+	if !wanted(cell) {
+		t.Skip("not in TERMCTL_DIALOGS_ONLY")
+	}
+	root := dialogsRoot(t)
+	r := setupTmuxLead(t, root)
+	waitFor(t, "lead prompt", func() bool {
+		lines, _ := r.b.Capture(r.lead, 50)
+		return strings.Contains(strings.Join(lines, "\n"), "fake harness ready")
+	})
+	notices := watchNotices(r)
+	defer notices.close()
+	defer killWatchers(r.state)
+	dir := filepath.Join(root, cell)
+	os.MkdirAll(dir, 0o755)
+	out := filepath.Join(dir, "out.txt")
+	heredoc := "cat > " + out + " <<'EOF'\n"
+	for i := 1; i <= 80; i++ {
+		heredoc += fmt.Sprintf("request line %02d of 80: the quick brown fox jumps over the lazy dog\n", i)
+	}
+	os.WriteFile(filepath.Join(dir, "cmd.txt"), []byte(heredoc+"EOF\n"), 0o644)
+	cmd, err := harnessCommand("agy", dir, r.state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	brief := "Read the file " + filepath.Join(dir, "cmd.txt") + ", then run its whole content verbatim as one single shell command (it is a heredoc that writes out.txt). " +
+		"Do not run it as a script file (no bash cmd.txt, no sh), do not split or shorten it, run nothing else."
+	code, stdout, stderr := r.ops("task", "new", "agy", "--title", cell, "--brief", brief, "--cwd", dir, "--command", cmd, "--where", "tab", "--timeout", "180")
+	if code != 0 {
+		t.Fatalf("task new: exit %d: %s %s", code, stdout, stderr)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	id := lines[len(lines)-1]
+	defer r.ops("task", "close", "--force", id)
+	_, shown, _ := r.ops("task", "show", id, "--json")
+	var task struct {
+		Pane string `json:"pane"`
+	}
+	json.Unmarshal([]byte(shown), &task)
+	wp := findPane(r.b, task.Pane)
+	if wp == nil {
+		t.Fatalf("worker pane %q not found", task.Pane)
+	}
+	read := func() *harness.Dialog {
+		lines, err := r.b.Capture(wp, 200)
+		if err != nil {
+			return nil
+		}
+		return harness.Profiles["agy"].ReadDialog(lines)
+	}
+	var d *harness.Dialog
+	for end := time.Now().Add(turnWait); time.Now().Before(end) && d == nil; time.Sleep(200 * time.Millisecond) {
+		if got := read(); got != nil && got.Hidden {
+			d = got
+		} else if got != nil {
+			code, _, stderr := r.ops("task", "deny", id, "--expect", got.Fingerprint)
+			t.Logf("denied another dialog %q: exit %d %s", harness.DialogLine(id, got), code, stderr)
+		}
+	}
+	if d == nil {
+		lines, _ := r.b.Capture(wp, 60)
+		t.Fatalf("no partly hidden dialog in %v; screen:\n%s", turnWait, strings.Join(lines, "\n"))
+	}
+	t.Logf("dialog: %s", harness.DialogLine(id, d))
+	if _, ok := notices.wait(d.Fingerprint, 60*time.Second); !ok {
+		t.Fatalf("the notice of dialog %s never showed on the lead's screen", d.Fingerprint)
+	}
+	for _, args := range [][]string{{"1"}, {"2", "--persist"}} {
+		code, stdout, stderr := r.ops(append([]string{"task", "answer", id}, append(args, "--expect", d.Fingerprint)...)...)
+		t.Logf("task answer %v: exit %d %s%s", args, code, stdout, stderr)
+		if code != 6 {
+			t.Fatalf("task answer %v on a partly hidden request: want exit 6, got %d", args, code)
+		}
+	}
+	if now := read(); now == nil || now.Fingerprint != d.Fingerprint {
+		t.Fatalf("a refused answer changed the dialog: %+v", now)
+	}
+	if code, stdout, stderr := r.ops("task", "deny", id, "--expect", d.Fingerprint); code != 0 {
+		t.Fatalf("task deny: exit %d %s %s", code, stdout, stderr)
+	}
+	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(300 * time.Millisecond) {
+		if got := read(); got != nil {
+			r.ops("task", "deny", id, "--expect", got.Fingerprint)
+		}
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Fatalf("%s exists: a partly hidden request ran", out)
+	}
+}
