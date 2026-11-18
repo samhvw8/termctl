@@ -377,3 +377,32 @@ func TestSubmitWarnsWhenItCannotConfirm(t *testing.T) {
 		t.Fatal(warned)
 	}
 }
+
+// The trust screen from a real start of Claude Code on tmux (2026-11-18), and a screen that only quotes the words.
+func TestStartupPromptReadsTheRealTrustScreen(t *testing.T) {
+	trust := []string{
+		" Quick safety check: Is this a project you created or one you trust? (Like your",
+		" own code, a well-known open source project, or work from your team). If not,",
+		" take a moment to review what's in this folder first.",
+		" Claude Code'll be able to read, edit, and execute files here.",
+		" Security guide",
+		" ❯ No, exit",
+		"   Yes, I trust this folder",
+		" Enter to confirm · Esc to cancel",
+	}
+	for _, c := range []struct {
+		native string
+		lines  []string
+		want   string
+	}{
+		{"", trust, "trust this folder"},
+		{"waiting: Trust this folder?", nil, "Trust this folder?"},
+		{"waiting", nil, "waiting"},
+		{"idle", []string{"❯ ", "? for shortcuts"}, ""},
+		{"working", nil, ""},
+	} {
+		if got := startupPrompt(c.native, c.lines); got != c.want {
+			t.Errorf("startupPrompt(%q) = %q, want %q", c.native, got, c.want)
+		}
+	}
+}

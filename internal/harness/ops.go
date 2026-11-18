@@ -287,7 +287,43 @@ func nativeBusy(native string) bool {
 }
 
 // WaitIdle returns when the harness is idle: not reported working or blocked, no busy pattern, input line visible, screen stable.
+// For a profile without a calibrated input reader, the terminal's own "idle", held for the profile's stable
+// time, stands in for the input line and the stable screen: such a harness may draw an input line the
+// generic reader does not know, or a clock that never stops.
 func (o *Ops) WaitIdle(p *term.Pane, timeout float64, prof *Profile) error {
+	return o.waitIdle(p, timeout, prof, false)
+}
+
+// startAsk is how long a prompt must stay on a starting harness before the wait gives up on it.
+const startAsk = 2.0
+
+// trustPrompt is the folder-trust question Claude Code and agy ask before their first start in a folder.
+var trustPrompt = regexp.MustCompile(`(?i)\btrust (this folder|the files in this folder)\b`)
+
+// startupPrompt names what a starting harness waits on, or "": the terminal's "waiting" report (iTerm2, hc),
+// else the trust question on the screen (tmux and Rex report no status).
+func startupPrompt(native string, lines []string) string {
+	if strings.HasPrefix(native, "waiting") {
+		if d := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(native, "waiting"), ":")); d != "" {
+			return d
+		}
+		return "waiting"
+	}
+	tail := lines
+	if len(tail) > 12 {
+		tail = tail[len(tail)-12:]
+	}
+	for _, ln := range tail {
+		if trustPrompt.MatchString(ln) {
+			return "trust this folder"
+		}
+	}
+	return ""
+}
+
+// waitIdle is WaitIdle; starting adds the startup rule: a harness that asks something (a trust prompt) for
+// startAsk seconds never gets idle by itself, so the wait ends at once instead of at its timeout.
+func (o *Ops) waitIdle(p *term.Pane, timeout float64, prof *Profile, starting bool) error {
 	if prof == nil {
 		prof = ForProcess(p.Process)
 	}
@@ -298,33 +334,60 @@ func (o *Ops) WaitIdle(p *term.Pane, timeout float64, prof *Profile) error {
 	o.Clock.Sleep(settle)
 	var last []string
 	first, since := true, o.Clock.Now()
+	idleSince, askSince := -1.0, -1.0
 	for {
 		lines, err := o.Backend.Capture(p, screenLines(p))
 		if err != nil {
 			return err
 		}
+		now := o.Clock.Now()
 		view := prof.StableView(lines)
 		if first || !reflect.DeepEqual(view, last) {
-			first, last, since = false, view, o.Clock.Now()
+			first, last, since = false, view, now
 		}
 		native := o.Backend.NativeStatus(p)
-		promptOK := !prof.PromptRequired || prof.ReadInput(lines) != nil
-		if !nativeBusy(native) && promptOK && !prof.IsBusy(lines) && o.Clock.Now()-since >= prof.StableSeconds {
+		if !strings.HasPrefix(native, "idle") {
+			idleSince = -1
+		} else if idleSince < 0 {
+			idleSince = now
+		}
+		if ask := startupPrompt(native, lines); starting && ask != "" {
+			if askSince < 0 {
+				askSince = now
+			}
+			if now-askSince >= startAsk {
+				return term.Errf(term.CodeTimeout, "%s waits on a prompt at startup (%s) and cannot get idle by itself. "+
+					"It is the user's decision: ask the user to answer it in that pane, then run task new --reuse %s "+
+					"(or msg the pane, if you started it with spawn). Screen:%s", p.Address(), ask, p.Address(), screenTail(lines))
+			}
+			o.Clock.Sleep(poll)
+			continue
+		}
+		askSince = -1
+		nativeIdle := !prof.Calibrated && idleSince >= 0 && now-idleSince >= prof.StableSeconds
+		promptOK := !prof.PromptRequired || prof.ReadInput(lines) != nil || nativeIdle
+		stable := now-since >= prof.StableSeconds || nativeIdle
+		if !nativeBusy(native) && promptOK && !prof.IsBusy(lines) && stable {
 			return nil
 		}
-		if o.Clock.Now() >= deadline {
-			tail := lines
-			if len(tail) > 6 {
-				tail = tail[len(tail)-6:]
-			}
-			var b strings.Builder
-			for _, ln := range tail {
-				fmt.Fprintf(&b, "\n  | %s", term.Cut(ln, 100))
-			}
-			return term.Errf(term.CodeTimeout, "%s still not idle after %gs (native: %s). Screen:%s", p.Address(), timeout, native, b.String())
+		if now >= deadline {
+			return term.Errf(term.CodeTimeout, "%s still not idle after %gs (native: %s). Screen:%s", p.Address(), timeout, native, screenTail(lines))
 		}
 		o.Clock.Sleep(poll)
 	}
+}
+
+// screenTail is the last lines of a screen for an error message.
+func screenTail(lines []string) string {
+	tail := lines
+	if len(tail) > 6 {
+		tail = tail[len(tail)-6:]
+	}
+	var b strings.Builder
+	for _, ln := range tail {
+		fmt.Fprintf(&b, "\n  | %s", term.Cut(ln, 100))
+	}
+	return b.String()
 }
 
 var slashRe = regexp.MustCompile(`^/\S+( [^\n\r]*)?$`)
@@ -577,7 +640,7 @@ func (o *Ops) Spawn(harness, where, cwd string, opts SpawnOpts) (*term.Pane, err
 	e := o.entry("spawn", p)
 	e.Harness = harness
 	defer func() { o.Journal.Record(e) }()
-	if err := o.WaitIdle(p, opts.Timeout, prof); err != nil {
+	if err := o.waitIdle(p, opts.Timeout, prof, true); err != nil {
 		e.Error = err.Error()
 		return p, err
 	}

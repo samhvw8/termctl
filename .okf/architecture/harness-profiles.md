@@ -78,4 +78,8 @@ Checked on agy 2026-11-14: a message queued during a long reply came back on the
 
 `WaitIdle` returns when all hold: the terminal's own status is not `working`, no busy pattern is on screen, the input line is visible (where `PromptRequired`), and `StableView` has not changed for `StableSeconds`.
 
+For a profile that is not `Calibrated` (generic, codex, gemini, pi), the terminal's own `idle` (iTerm2, hc), held for `StableSeconds`, stands in for the input line and the stable screen: the generic reader may not know such a harness's input line, or the screen may hold a clock. Two `generic` tasks failed that way in November 2026 (`native: idle` after 120 s); their screens were not kept, so the cause is inferred, not reproduced. Test: `TestUncalibratedHarnessIsReadyOnASustainedNativeIdle`.
+
+At startup (`spawn`, and `task new` without `--reuse`) the wait also watches for a prompt: the terminal's `waiting` status, or the folder-trust question on the screen (tmux and Rex report no status). One that stays 2 s ends the wait at once with exit 5, naming the prompt, instead of after the 120 s timeout. Nothing answers it: trusting a folder is the user's decision. The pane stays open, so after the user answers, `task new --reuse PANE` gives it the task. Tests: `TestStartupPromptFailsFastAndThePaneCanBeReused`, `TestStartupTrustPromptOnTheScreenAlone`, `TestStartupPromptReadsTheRealTrustScreen`.
+
 A calibrated harness whose input line cannot be read is refused (exit 4). Sending blind could join a draft, and crashing beats corrupting. An uncalibrated harness warns and proceeds, because its parser is unproven.

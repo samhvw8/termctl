@@ -220,6 +220,74 @@ func TestHarnessNotReadyMarksFailedAndKeepsPaneClosable(t *testing.T) {
 	}
 }
 
+// A harness that waits on a prompt at startup (Claude Code's or agy's "trust this folder") never gets idle by
+// itself: task new fails within seconds, not after its 120 s timeout, keeps the pane, and names the way on.
+// The prompt is the user's decision, so nothing answers it. Real screen: the journal of 2026-11-18.
+func TestStartupPromptFailsFastAndThePaneCanBeReused(t *testing.T) {
+	r := newRig(t)
+	var pane *term.Pane
+	r.tasks.spawnHook = func(p *term.Pane) {
+		pane = p
+		r.b.State[p.ID].Busy = 1 << 30 // no input line while it asks
+		r.b.Natives[p.ID] = "waiting: trust this folder"
+	}
+	start := r.clock.T
+	_, err := r.new(t, nil, NewOpts{}) // the default 120 s timeout
+	wantCode(t, err, 5)
+	if !strings.Contains(err.Error(), "trust this folder") || !strings.Contains(err.Error(), "--reuse") {
+		t.Fatal(err)
+	}
+	if took := r.clock.T - start; took > 10 {
+		t.Fatalf("took %gs", took)
+	}
+	all, _ := r.tasks.Ls(false)
+	if all[0].Status != "failed" || r.data().Panes[pane.ID] == nil {
+		t.Fatalf("%+v", all[0])
+	}
+	r.b.State[pane.ID].Busy = 0 // the user answered: the harness is at its input line
+	delete(r.b.Natives, pane.ID)
+	x, err := r.new(t, nil, NewOpts{Reuse: pane.ID})
+	if err != nil || x.Pane != pane.ID || x.Status != "running" {
+		t.Fatalf("%+v %v", x, err)
+	}
+}
+
+// tmux and Rex report no status: the prompt on the screen is enough.
+func TestStartupTrustPromptOnTheScreenAlone(t *testing.T) {
+	r := newRig(t)
+	r.tasks.spawnHook = func(p *term.Pane) {
+		r.b.State[p.ID].Log = []string{" Security guide", "", " ❯ No, exit", "   Yes, I trust this folder", "", " Enter to confirm · Esc to cancel"}
+	}
+	start := r.clock.T
+	_, err := r.new(t, nil, NewOpts{})
+	wantCode(t, err, 5)
+	if !strings.Contains(err.Error(), "trust this folder") || r.clock.T-start > 10 {
+		t.Fatalf("%gs: %v", r.clock.T-start, err)
+	}
+}
+
+// A harness with no calibrated input reader may draw an input line the generic reader does not know. The
+// terminal's own idle report, held for the profile's stable time, stands in for it; a calibrated profile
+// still needs its input line.
+func TestUncalibratedHarnessIsReadyOnASustainedNativeIdle(t *testing.T) {
+	r := newRig(t)
+	r.tasks.spawnHook = func(p *term.Pane) {
+		r.b.State[p.ID].Busy = 1 << 30 // a screen with no input line the generic reader knows
+		r.b.Natives[p.ID] = "idle"
+	}
+	start := r.clock.T
+	if _, err := r.new(t, nil, NewOpts{}); err != nil || r.clock.T-start > 10 {
+		t.Fatalf("%gs: %v", r.clock.T-start, err)
+	}
+	r2 := newRig(t)
+	r2.tasks.spawnHook = func(p *term.Pane) {
+		r2.b.State[p.ID].Busy = 1 << 30
+		r2.b.Natives[p.ID] = "idle"
+	}
+	_, err := r2.new(t, nil, NewOpts{Harness: "claude", Timeout: 5})
+	wantCode(t, err, 5)
+}
+
 func TestDoneSetsStatus(t *testing.T) {
 	for reported, stored := range map[string]string{"ok": "ready", "failed": "failed", "blocked": "blocked"} {
 		r := newRig(t)
