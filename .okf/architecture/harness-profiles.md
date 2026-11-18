@@ -3,7 +3,7 @@ type: Architecture
 title: Harness profiles
 description: How harness-ops recognises a harness, reads its input line and its permission dialogs, and decides it is idle.
 tags: [architecture, harness]
-generated: { by: claude-code/opus-5.5, at: '2026-11-18T10:30:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-18T12:00:00Z' }
 ---
 
 # Profile fields
