@@ -82,8 +82,11 @@ func TestRestartFollowsTheHarnessOpsOnPath(t *testing.T) {
 
 	// After the exec, the new process does not exec the same file again, even when it runs something else
 	// (a wrapper that execs another file).
+	relink(t, link, v1)
 	t.Setenv(execedEnv, pathKey(want))
-	if got := restartCheck(v1); got() != "" || got() != "" {
+	got := restartCheck(v1) // started from PATH, so it follows PATH
+	relink(t, link, v2)
+	if got() != "" || got() != "" {
 		t.Fatal("exec'd into the same PATH build twice")
 	}
 
@@ -124,5 +127,41 @@ func TestRestartFollowsTheHarnessOpsOnPath(t *testing.T) {
 	os.Rename(v2+".new", v2)
 	if c() != "" || c() != v2 {
 		t.Fatal("a new build of the running file must restart it")
+	}
+}
+
+// A watcher started from a file that is not the harness-ops PATH resolves to (a go build output, a worktree
+// binary, a test binary) never follows PATH, however PATH changes: it would otherwise move to the installed
+// build within two rounds. It still restarts into a new build of its own file.
+func TestDevBuildWatcherNeverFollowsPath(t *testing.T) {
+	dir := t.TempDir()
+	dev, v1, v2, bin := filepath.Join(dir, "worktree", "harness-ops"), filepath.Join(dir, "v1", "harness-ops"), filepath.Join(dir, "v2", "harness-ops"), filepath.Join(dir, "bin")
+	install(t, dev, "dev build")
+	install(t, v1, "build 1")
+	install(t, v2, "build 2, longer")
+	os.MkdirAll(bin, 0o755)
+	link := filepath.Join(bin, "harness-ops")
+	relink(t, link, v1)
+	t.Setenv("PATH", bin)
+	t.Setenv(execedEnv, "")
+	if startedFromPath(dev) || !startedFromPath(v1) || !startedFromPath(link) {
+		t.Fatal("startedFromPath: only the file PATH resolves to counts, through symlinks")
+	}
+	check := restartCheck(dev)
+	for i := 0; i < 3; i++ {
+		if got := check(); got != "" {
+			t.Fatalf("a dev-build watcher followed PATH to %q", got)
+		}
+	}
+	relink(t, link, v2)
+	for i := 0; i < 3; i++ {
+		if got := check(); got != "" {
+			t.Fatalf("a dev-build watcher followed a re-pointed PATH to %q", got)
+		}
+	}
+	install(t, dev+".new", "dev build 2, longer")
+	os.Rename(dev+".new", dev)
+	if check() != "" || check() != dev {
+		t.Fatal("a new build of the dev file must restart it into itself")
 	}
 }
