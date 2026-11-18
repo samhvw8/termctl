@@ -41,7 +41,7 @@ Talk to coding-agent panes. Put options before the target: everything after the 
   task send [--force] ID TEXT...
   task wait (ID | --any) [--timeout S] [--json]   returns when a task stops running or its worker shows a dialog
   task answer ID N --expect FP [--persist]    choose N in the dialog FP on the worker; ID may be a pane you started
-  task deny ID --expect FP                    choose the dialog's "No" choice (Esc when it has none)
+  task deny ID --expect FP                    cancel the dialog with Esc; never presses Enter
   task done ID --status ok|failed|blocked (--summary TEXT | --summary-file F)   the worker reports; the session stays open
   task accept ID [--close]                    the lead's verdict; only the owner can finish a task
   task review ID --blind --harness H [--model M] [--brief-file F]   a new session that never sees the worker's report

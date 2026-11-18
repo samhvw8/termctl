@@ -61,7 +61,7 @@ func readPaneDialog(b term.Backend, p *term.Pane, prof *Profile, screen []string
 	return whole
 }
 
-// AnswerOpts are options of Answer. N is the choice; Deny picks the "No" choice instead.
+// AnswerOpts are options of Answer. N is the choice; Deny presses Esc instead and never Enter.
 type AnswerOpts struct {
 	N       int
 	Deny    bool
