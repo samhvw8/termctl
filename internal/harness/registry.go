@@ -74,7 +74,12 @@ type PaneRecord struct {
 	Owner    string            `json:"owner"`
 	OwnerRef map[string]string `json:"owner_ref,omitempty"`
 	Created  float64           `json:"created"`
-	Unknown  Unknown           `json:"-"`
+	// Dialog is the dialog on the pane when the watcher last read it, while no running task holds the pane
+	// (then the mark is the task's). AnsweredAt is when answer or deny last pressed a key on it: a screen
+	// read taken before is stale.
+	Dialog     *DialogMark `json:"dialog,omitempty"`
+	AnsweredAt float64     `json:"answered_at,omitempty"`
+	Unknown    Unknown     `json:"-"`
 }
 
 // Pending is a task result that has not reached its owner yet.
@@ -89,6 +94,7 @@ type Pending struct {
 	ClaimPid int               `json:"claim_pid,omitempty"`   // the claimer's process, on this host
 	Kind     string            `json:"kind,omitempty"`        // "" for a task result; "dialog" for a dialog notice
 	Dialog   string            `json:"fingerprint,omitempty"` // the dialog a "dialog" notice is about
+	Pane     string            `json:"pane,omitempty"`        // a "dialog" notice of a pane no running task held: Task is ""
 	Unknown  Unknown           `json:"-"`
 }
 

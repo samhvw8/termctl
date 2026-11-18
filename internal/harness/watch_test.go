@@ -513,3 +513,146 @@ func TestDialogNoticesToAnUncalibratedLeadAreHeld(t *testing.T) {
 		t.Fatalf("calibrated lead: warned %q, notes %q", warned, ownerNotes(r2))
 	}
 }
+
+// spawnedDialog starts a pane as spawn does (pairs and live teams start members so), running claude, and
+// shows a permission dialog on it.
+func spawnedDialog(t *testing.T, r *rig, ts *Tasks, label, body string) (*term.Pane, *termtest.Dialog) {
+	t.Helper()
+	p, err := ts.Spawn("claude", "tab", "/w/"+label, SpawnOpts{Command: "claude", Label: label, Timeout: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Process = "claude"
+	dlg := &termtest.Dialog{Body: body, Options: []string{"Yes", "Yes, and don't ask again", "No"}, Selected: 1}
+	r.b.State[p.ID].Dialog = dlg
+	return p, dlg
+}
+
+// The watcher reads every pane its owner started, not only running tasks' workers: a dialog on a spawned
+// pane gets a notice in the task notice's format, naming the pane (label and ID) and suggesting answer
+// and deny by its ID, once while it stays on screen. The mark lives on the pane's record; answering drops
+// it, and the same request asked again is announced again.
+func TestWatcherAnnouncesADialogOnASpawnedPane(t *testing.T) {
+	r := newRig(t)
+	r.mustNew(t, nil, NewOpts{}) // a running task keeps this watcher on
+	p, dlg := spawnedDialog(t, r, r.tasks, "partner", "touch x")
+	fp := readFP(t, r, &Task{Pane: p.ID})
+	if err := r.tasks.Watch(WatchOpts{Rounds: 3}); err != nil {
+		t.Fatal(err)
+	}
+	notes := ownerNotes(r)
+	if len(notes) != 1 {
+		t.Fatalf("want one notice, got %q", notes)
+	}
+	for _, want := range []string{"[agent-ops from partner (claude) id=" + p.ID + " folder=/w/partner]", "pane " + p.ID + " (partner) DIALOG " + fp + ": " + screenOpen,
+		"touch x", screenClose + " | answer: harness-ops answer " + p.ID + " <n> --expect " + fp, "deny: harness-ops deny " + p.ID + " --expect " + fp} {
+		if !strings.Contains(notes[0], want) {
+			t.Fatalf("notice lacks %q: %s", want, notes[0])
+		}
+	}
+	rec := r.data().Panes[p.ID]
+	if rec.Dialog == nil || rec.Dialog.Fingerprint != fp || !rec.Dialog.Notified {
+		t.Fatalf("the pane's record must carry the mark: %+v", rec.Dialog)
+	}
+	if _, _, err := r.tasks.Answer(p.ID, AnswerOpts{N: 1, Expect: fp}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := r.data().Panes[p.ID]; rec.Dialog != nil || rec.AnsweredAt == 0 {
+		t.Fatalf("an answer drops the pane's mark and stamps the answer: %+v", rec)
+	}
+	r.tasks.Watch(WatchOpts{Rounds: 1}) // the input line is back
+	dlg.Answer, dlg.Selected = 0, 1     // the same request again
+	r.tasks.Watch(WatchOpts{Rounds: 2})
+	if n := len(ownerNotes(r)); n != 2 {
+		t.Fatalf("the request asked again must be announced again: %d notices", n)
+	}
+}
+
+// Only the owner's own panes are watched: a pane another lead started, and a pane nobody started, get no
+// notice and no mark, however long they show a dialog.
+func TestWatcherIgnoresPanesItsOwnerDidNotStart(t *testing.T) {
+	r := newRig(t)
+	r.mustNew(t, nil, NewOpts{})
+	theirs, _ := spawnedDialog(t, r, r.as(r.other), "theirs", "touch theirs")
+	r.other.Process = "claude"
+	r.b.State[r.other.ID].Dialog = &termtest.Dialog{Body: "touch nobody", Options: []string{"Yes", "No"}, Selected: 1}
+	if err := r.tasks.Watch(WatchOpts{Rounds: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if notes := ownerNotes(r); len(notes) != 0 {
+		t.Fatalf("told of a pane it did not start: %q", notes)
+	}
+	if rec := r.data().Panes[theirs.ID]; rec.Dialog != nil || len(r.data().Pending) != 0 {
+		t.Fatalf("marked another owner's pane: %+v %+v", rec.Dialog, r.data().Pending)
+	}
+}
+
+// Two pane notices made in one round share an empty task and a creation time: each is still claimed,
+// delivered and removed on its own, and neither is lost or sent twice.
+func TestTwoPaneNoticesOfOneRoundAreBothDelivered(t *testing.T) {
+	r := newRig(t)
+	r.mustNew(t, nil, NewOpts{})
+	a, _ := spawnedDialog(t, r, r.tasks, "alice", "touch a")
+	b, _ := spawnedDialog(t, r, r.tasks, "bob", "touch b")
+	r.b.State[r.owner.ID].Input = "owner typing"
+	r.tasks.Watch(WatchOpts{Rounds: 1})
+	if d := r.data(); len(d.Pending) != 2 || d.Pending[0].Created != d.Pending[1].Created || d.Pending[0].Task != "" {
+		t.Fatalf("want two held pane notices of one round: %+v", d.Pending)
+	}
+	r.b.State[r.owner.ID].Input = ""
+	if n, err := r.tasks.FlushPending(); err != nil || n != 2 {
+		t.Fatal(n, err)
+	}
+	notes := strings.Join(ownerNotes(r), "\n")
+	if len(ownerNotes(r)) != 2 || !strings.Contains(notes, "pane "+a.ID) || !strings.Contains(notes, "pane "+b.ID) || len(r.data().Pending) != 0 {
+		t.Fatalf("notes %q, pending %+v", ownerNotes(r), r.data().Pending)
+	}
+}
+
+// A held pane notice whose dialog was answered before the owner was free is dropped, not delivered late;
+// a pane closed outside harness-ops loses its mark.
+func TestStalePaneNoticeIsDroppedAndAGonePaneLosesItsMark(t *testing.T) {
+	r := newRig(t)
+	r.mustNew(t, nil, NewOpts{})
+	p, dlg := spawnedDialog(t, r, r.tasks, "partner", "touch x")
+	r.b.State[r.owner.ID].Input = "owner typing"
+	r.tasks.Watch(WatchOpts{Rounds: 1})
+	dlg.Answer = 1 // answered by hand in the pane
+	r.tasks.Watch(WatchOpts{Rounds: 1})
+	r.b.State[r.owner.ID].Input = ""
+	r.tasks.FlushPending()
+	if len(ownerNotes(r)) != 0 || len(r.data().Pending) != 0 {
+		t.Fatalf("a stale pane notice was delivered: %q %+v", ownerNotes(r), r.data().Pending)
+	}
+	dlg.Answer, dlg.Selected = 0, 1
+	r.tasks.Watch(WatchOpts{Rounds: 1})
+	if r.data().Panes[p.ID].Dialog == nil {
+		t.Fatal("no mark")
+	}
+	r.b.Panes = r.b.Panes[:len(r.b.Panes)-1] // closed by hand: the record stays, the pane is gone
+	r.tasks.Watch(WatchOpts{Rounds: 1})
+	if rec := r.data().Panes[p.ID]; rec == nil || rec.Dialog != nil {
+		t.Fatalf("a gone pane keeps its mark: %+v", rec)
+	}
+}
+
+// While a running task holds a pane, its dialog is the task's (task wait returns it, task ls shows it); a
+// mark the pane's record kept from before goes.
+func TestARunningTaskTakesThePaneMark(t *testing.T) {
+	r := newRig(t)
+	x, dlg := dialogTask(t, r)
+	fp := readFP(t, r, x)
+	r.reg.Update(func(d *Data) error {
+		d.Panes[x.Pane].Dialog = &DialogMark{Fingerprint: "0ld0ld00", Notified: true}
+		return nil
+	})
+	r.tasks.Watch(WatchOpts{Rounds: 1})
+	d := r.data()
+	if d.Panes[x.Pane].Dialog != nil || d.Tasks[x.ID].Dialog == nil || d.Tasks[x.ID].Dialog.Fingerprint != fp {
+		t.Fatalf("pane mark %+v, task mark %+v", d.Panes[x.Pane].Dialog, d.Tasks[x.ID].Dialog)
+	}
+	if notes := ownerNotes(r); len(notes) != 1 || !strings.Contains(notes[0], "task "+x.ID) {
+		t.Fatalf("%q", notes)
+	}
+	_ = dlg
+}

@@ -282,6 +282,13 @@ func (t *Tasks) paneTarget(d *Data, target string) (term.Backend, *term.Pane, er
 	return t.Backend, p, err
 }
 
+func taskOf(x *Task) string {
+	if x == nil {
+		return ""
+	}
+	return x.ID
+}
+
 // Answer answers the dialog on a task's worker, or on a pane the caller started.
 func (t *Tasks) Answer(target string, opts AnswerOpts) (*Answered, *term.Pane, error) {
 	b, p, x, err := t.answerTarget(target)
@@ -289,17 +296,25 @@ func (t *Tasks) Answer(target string, opts AnswerOpts) (*Answered, *term.Pane, e
 		return nil, nil, err
 	}
 	res, err := t.ops(b, t.Sender).Answer(p, opts)
-	if x != nil && res != nil {
+	if res != nil {
 		// A key was pressed. The answered dialog's mark goes, even when the dialog is still on screen: the
 		// harness may have asked the same request again, and that one must be announced. A mark of another
 		// dialog stays: the watcher marked and announced it after this answer read its dialog. Reads taken
 		// until now are stale.
+		// The pane's own record keeps a mark when no running task holds it: the same rules apply there.
 		if uerr := t.Reg.Update(func(d *Data) error {
-			if c := d.Tasks[x.ID]; c != nil {
+			now := t.clock().Now()
+			if c := d.Tasks[taskOf(x)]; c != nil {
 				if dialogOnScreen(c, res.Dialog.Fingerprint) {
 					c.Dialog = nil
 				}
-				c.AnsweredAt = t.clock().Now()
+				c.AnsweredAt = now
+			}
+			if rec := d.Panes[p.ID]; rec != nil {
+				if rec.Dialog != nil && rec.Dialog.Fingerprint == res.Dialog.Fingerprint {
+					rec.Dialog = nil
+				}
+				rec.AnsweredAt = now
 			}
 			return nil
 		}); uerr != nil {

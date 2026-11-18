@@ -16,12 +16,14 @@ import (
 	"github.com/samhvw8/termctl/internal/term"
 )
 
-// Signal is one thing learned about a task's worker. Kind "dialog" carries the dialog on its screen;
-// "clear" means its input line is back with no dialog. Status is the program's own reason from the
-// terminal's status (the OSC 7501 msg) when it reported itself blocked; it rides along with a dialog
-// and is never a dialog on its own.
+// Signal is one thing learned about a watched pane: a running task's worker (Task set), or a pane its
+// owner started that no running task holds (Task "", the mark goes on the pane's record). Kind "dialog"
+// carries the dialog on its screen; "clear" means its input line is back with no dialog, or the pane is
+// gone. Status is the program's own reason from the terminal's status (the OSC 7501 msg) when it reported
+// itself blocked; it rides along with a dialog and is never a dialog on its own.
 type Signal struct {
 	Task   string
+	Pane   string
 	Kind   string
 	Dialog *Dialog
 	Status string
@@ -41,7 +43,8 @@ const (
 	minGap        = 0.5 // the least pause between rounds, however long a round took
 )
 
-// worker is a task's live pane, resolved once per round.
+// worker is a watched live pane, resolved once per round: a running task's worker, or (task nil) a pane
+// the owner started that no running task holds.
 type worker struct {
 	task *Task
 	b    term.Backend
@@ -83,6 +86,62 @@ func (t *Tasks) workers(tasks []*Task) []worker {
 		out = append(out, worker{task: x, b: b, p: p, prof: prof})
 	}
 	return out
+}
+
+// paneWorkers resolves the panes the owner started (spawn or task new) on its server that no running task
+// holds, and whose harness has a dialog reader: a dialog there is marked on the pane's record. gone lists
+// the recorded panes whose server answered without them that still carry a mark, so the mark can go.
+func (t *Tasks) paneWorkers(d *Data, owner string, ref map[string]string) (out []worker, gone []string) {
+	memo := t.memo == nil
+	if memo {
+		t.startMemo()
+		defer t.stopMemo()
+	}
+	ids := make([]string, 0, len(d.Panes))
+	for id := range d.Panes {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		rec := d.Panes[id]
+		if rec.Owner != owner || id == owner || !sameServer(rec.OwnerRef, ref) || paneHeld(d, id) {
+			continue
+		}
+		b, p, err := t.paneByID(id, rec.Ref)
+		if err != nil { // unknown is not gone
+			continue
+		}
+		if p == nil {
+			if rec.Dialog != nil {
+				gone = append(gone, id)
+			}
+			continue
+		}
+		prof := ForProcess(p.Process)
+		if prof.ReadDialog == nil {
+			continue
+		}
+		out = append(out, worker{b: b, p: p, prof: prof})
+	}
+	return out, gone
+}
+
+// paneHeld: a running task holds the pane, so a dialog on it is that task's.
+func paneHeld(d *Data, pane string) bool {
+	for _, x := range d.Tasks {
+		if x.Pane == pane && x.Status == "running" && !x.Closed {
+			return true
+		}
+	}
+	return false
+}
+
+// taskID is the worker's task, or "" for a pane no running task holds.
+func (w worker) taskID() string {
+	if w.task == nil {
+		return ""
+	}
+	return w.task.ID
 }
 
 // programStatuses asks each backend with a StatusReader once for the status of its workers' panes (tmux
@@ -159,13 +218,13 @@ func (t *Tasks) read(ws []worker, status map[string]term.ProgramStatus) []Signal
 		switch {
 		case screens[i] == nil:
 		case dialogs[i] != nil:
-			sig := Signal{Task: w.task.ID, Kind: "dialog", Dialog: dialogs[i], At: ats[i]}
+			sig := Signal{Task: w.taskID(), Pane: w.p.ID, Kind: "dialog", Dialog: dialogs[i], At: ats[i]}
 			if st := status[w.p.ID]; st.Blocked() {
 				sig.Status = st.Msg
 			}
 			out = append(out, sig)
 		case w.prof.ReadInput(screens[i]) != nil:
-			out = append(out, Signal{Task: w.task.ID, Kind: "clear", At: ats[i]})
+			out = append(out, Signal{Task: w.taskID(), Pane: w.p.ID, Kind: "clear", At: ats[i]})
 		}
 	}
 	return out
@@ -239,6 +298,53 @@ func dialogOnScreen(x *Task, fp string) bool {
 	return x != nil && x.Status == "running" && !x.Closed && x.Dialog != nil && x.Dialog.Fingerprint == fp
 }
 
+// paneDialogOnScreen: the pane's record still marks dialog fp, and no running task holds the pane (the
+// mark is the task's then).
+func paneDialogOnScreen(d *Data, pane, fp string) bool {
+	rec := d.Panes[pane]
+	return rec != nil && rec.Dialog != nil && rec.Dialog.Fingerprint == fp && !paneHeld(d, pane)
+}
+
+// noticeOnScreen: the dialog a dialog notice is about is still marked on screen, on the task's worker or
+// on the pane's record.
+func noticeOnScreen(d *Data, p *Pending) bool {
+	if p.Task == "" && p.Pane != "" {
+		return paneDialogOnScreen(d, p.Pane, p.Dialog)
+	}
+	return dialogOnScreen(d.Tasks[p.Task], p.Dialog)
+}
+
+// signalMarked: the dialog of a signal is already the mark of its task or pane.
+func signalMarked(d *Data, s Signal) bool {
+	if s.Task == "" {
+		return paneDialogOnScreen(d, s.Pane, s.Dialog.Fingerprint)
+	}
+	return dialogOnScreen(d.Tasks[s.Task], s.Dialog.Fingerprint)
+}
+
+// paneName names a pane in a notice: its label, set by the owner at spawn, else its ID. Never its title,
+// which the program in the pane sets.
+func paneName(id string, rec *PaneRecord) string {
+	if rec.Label != "" {
+		return rec.Label
+	}
+	return id
+}
+
+func paneTag(id string, rec *PaneRecord) string {
+	return fmt.Sprintf("[agent-ops from %s (%s) id=%s folder=%s]", paneName(id, rec), rec.Harness, id, rec.Cwd)
+}
+
+// paneNotice is the owner's notice of a dialog on a pane it started that no running task holds. The
+// commands it suggests name the pane by its ID, which answer looks up on the server its record names.
+func paneNotice(id string, rec *PaneRecord, s Signal) string {
+	name := id
+	if rec.Label != "" {
+		name += " (" + rec.Label + ")"
+	}
+	return fmt.Sprintf("pane %s %s", name, dialogLine(id, s.Dialog, s.Status))
+}
+
 func dialogTag(x *Task) string {
 	return fmt.Sprintf("[agent-ops from %s (%s) id=%s folder=%s]", x.ID, x.Harness, x.Pane, x.Cwd)
 }
@@ -258,9 +364,16 @@ func (t *Tasks) apply(sigs []Signal, notify bool) error {
 	return t.Reg.Update(func(d *Data) error {
 		now := t.clock().Now()
 		for _, s := range sigs {
+			if s.Task == "" {
+				t.applyPane(d, s, notify, now)
+				continue
+			}
 			x := d.Tasks[s.Task]
 			if x == nil || !open(x.Status) || (s.At > 0 && s.At < x.AnsweredAt) {
 				continue
+			}
+			if rec := d.Panes[x.Pane]; rec != nil && rec.Dialog != nil && x.Status == "running" {
+				rec.Dialog = nil // a running task holds the pane now: the mark is the task's
 			}
 			switch s.Kind {
 			case "clear":
@@ -278,6 +391,31 @@ func (t *Tasks) apply(sigs []Signal, notify bool) error {
 		}
 		return nil
 	})
+}
+
+// applyPane records a signal of a pane no running task holds on the pane's record, as apply does on a task.
+func (t *Tasks) applyPane(d *Data, s Signal, notify bool, now float64) {
+	rec := d.Panes[s.Pane]
+	if rec == nil || paneHeld(d, s.Pane) || (s.At > 0 && s.At < rec.AnsweredAt) {
+		return
+	}
+	switch s.Kind {
+	case "clear":
+		rec.Dialog = nil
+	case "dialog":
+		if rec.Dialog == nil || rec.Dialog.Fingerprint != s.Dialog.Fingerprint {
+			rec.Dialog = &DialogMark{Fingerprint: s.Dialog.Fingerprint, Question: s.Dialog.Question, Since: now}
+		}
+		if notify && !rec.Dialog.Notified {
+			rec.Dialog.Notified = true
+			ref := rec.OwnerRef
+			if ref == nil { // a record from before owner_ref: the watcher serves its owner on its own server
+				ref = t.SenderRef
+			}
+			d.Pending = append(d.Pending, &Pending{Pane: s.Pane, Owner: rec.Owner, OwnerRef: ref, Tag: paneTag(s.Pane, rec),
+				Text: paneNotice(s.Pane, rec, s), Created: now, Kind: "dialog", Dialog: s.Dialog.Fingerprint})
+		}
+	}
 }
 
 // runningTasks lists the owner's running tasks. Only these can show a live dialog: a ready, failed or
@@ -502,10 +640,15 @@ func (t *Tasks) Watch(o WatchOpts) error {
 			say("a task came while stopping; watching again")
 			continue
 		}
-		w.ws = t.workers(running)
+		panes, gone := t.paneWorkers(d, owner.ID, t.SenderRef)
+		w.ws = append(t.workers(running), panes...)
 		status := programStatuses(w.ws, w.statusErr)
 		w.remember(status)
-		w.handle(d, t.read(w.ws, status))
+		sigs := t.read(w.ws, status)
+		for _, id := range gone {
+			sigs = append(sigs, Signal{Pane: id, Kind: "clear"})
+		}
+		w.handle(d, sigs)
 		t.stopMemo()
 		if o.Rounds > 0 && round >= o.Rounds {
 			return nil
@@ -542,8 +685,12 @@ func (w *watchState) remember(status map[string]term.ProgramStatus) {
 // handle logs new dialogs, records the signals and delivers what is pending.
 func (w *watchState) handle(d *Data, sigs []Signal) {
 	for _, s := range sigs {
-		if s.Kind == "dialog" && !dialogOnScreen(d.Tasks[s.Task], s.Dialog.Fingerprint) {
-			w.say(fmt.Sprintf("task %s: dialog %s: %s", s.Task, s.Dialog.Fingerprint, s.Dialog.Question))
+		if s.Kind == "dialog" && !signalMarked(d, s) {
+			what := "task " + s.Task
+			if s.Task == "" {
+				what = "pane " + s.Pane
+			}
+			w.say(fmt.Sprintf("%s: dialog %s: %s", what, s.Dialog.Fingerprint, s.Dialog.Question))
 		}
 	}
 	if err := w.t.apply(sigs, true); err != nil {

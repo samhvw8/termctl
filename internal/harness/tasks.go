@@ -1116,7 +1116,7 @@ func (t *Tasks) FlushPending() (int, error) {
 				untold(d, p)
 				continue
 			}
-			if p.Kind == "dialog" && !dialogOnScreen(d.Tasks[p.Task], p.Dialog) {
+			if p.Kind == "dialog" && !noticeOnScreen(d, p) {
 				continue // answered or gone before its notice got through: telling the owner now would mislead
 			}
 			if p.Claimed == 0 || now-p.Claimed > claimTTL || claimerDead(p.ClaimPid) {
@@ -1147,7 +1147,7 @@ func (t *Tasks) FlushPending() (int, error) {
 		}
 		if err := t.Reg.Update(func(d *Data) error {
 			for i, q := range d.Pending {
-				if q.Task == p.Task && q.Created == p.Created {
+				if q.Task == p.Task && q.Pane == p.Pane && q.Created == p.Created {
 					if outcome == "retry" || outcome == "held" {
 						q.Claimed, q.ClaimPid = 0, 0
 					} else {
@@ -1177,12 +1177,12 @@ func (t *Tasks) dropStaleDialogNotice(p Pending) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if dialogOnScreen(d.Tasks[p.Task], p.Dialog) {
+	if noticeOnScreen(d, &p) {
 		return false, nil
 	}
 	return true, t.Reg.Update(func(d *Data) error {
 		for i, q := range d.Pending {
-			if q.Task == p.Task && q.Created == p.Created {
+			if q.Task == p.Task && q.Pane == p.Pane && q.Created == p.Created {
 				d.Pending = append(d.Pending[:i], d.Pending[i+1:]...)
 				break
 			}
@@ -1194,15 +1194,28 @@ func (t *Tasks) dropStaleDialogNotice(p Pending) (bool, error) {
 // untold clears the mark's notified flag when a dialog notice is dropped before it reached the owner,
 // so the watcher announces the dialog again while it stays on screen. One task wait returned stays told.
 func untold(d *Data, p *Pending) {
-	if x := d.Tasks[p.Task]; p.Kind == "dialog" && dialogOnScreen(x, p.Dialog) && !x.Dialog.Returned {
+	if p.Kind != "dialog" || !noticeOnScreen(d, p) {
+		return
+	}
+	if p.Task == "" {
+		d.Panes[p.Pane].Dialog.Notified = false
+	} else if x := d.Tasks[p.Task]; !x.Dialog.Returned {
 		x.Dialog.Notified = false
 	}
+}
+
+// about names what a notice is about, for warnings.
+func (p Pending) about() string {
+	if p.Task == "" && p.Pane != "" {
+		return "pane " + p.Pane
+	}
+	return "task " + p.Task
 }
 
 func (t *Tasks) deliver(p Pending) string {
 	b, pane, err := t.paneByID(p.Owner, p.OwnerRef)
 	if err != nil {
-		Warn(fmt.Sprintf("could not notify the owner of task %s: %v", p.Task, err))
+		Warn(fmt.Sprintf("could not notify the owner of %s: %v", p.about(), err))
 		return "retry"
 	}
 	if pane == nil {
@@ -1214,7 +1227,7 @@ func (t *Tasks) deliver(p Pending) string {
 	if _, err := t.ops(b, nil).Msg(pane, p.Text, MsgOpts{Tag: p.Tag}); err != nil {
 		var te *term.Error
 		if !errors.As(err, &te) || te.Code != term.CodeDraft {
-			Warn(fmt.Sprintf("could not notify the owner of task %s: %v", p.Task, err))
+			Warn(fmt.Sprintf("could not notify the owner of %s: %v", p.about(), err))
 		}
 		return "retry"
 	}
