@@ -598,7 +598,8 @@ func (b *HcBackend) SendKey(p *Pane, key string) error {
 	return err
 }
 
-// Capture reads only the visible screen when the request fits it, because history reads can scroll a full-screen app.
+// Capture reads only the visible screen when the request fits it, because history reads can scroll a
+// full-screen app (see HistoryIsSafe).
 func (b *HcBackend) Capture(p *Pane, lines int) ([]string, error) {
 	rows := p.Rows
 	if rows == 0 {
@@ -617,6 +618,22 @@ func (b *HcBackend) Capture(p *Pane, lines int) ([]string, error) {
 		return nil, err
 	}
 	return TrimScreen(strings.Split(out, "\n"), lines), nil
+}
+
+// hcNoScroll are the states in which hc reads only the screen of a full-screen app instead of scrolling it.
+var hcNoScroll = map[string]bool{"working": true, "blocked": true, "error": true}
+
+// HistoryIsSafe says whether hc read --lines would leave the program undisturbed now. hc reads a
+// main-screen program's history from its own copy, but it reads a full-screen app (the alternate screen)
+// that enables mouse reporting by sending it mouse-wheel input and stitching the screens together, unless
+// the program reports working, blocked or error (measured on hc 0.1.19: "how": "stitched", wheel events on
+// the program's input; "how": "screen", "why": "blocked" and nothing sent while blocked). Which screen a
+// program is on cannot be read without reading, so the history is safe only while the program reports one
+// of those states, as Claude Code does ("blocked") during a permission dialog. A program that leaves that
+// state in the milliseconds between this check and the read can still be scrolled.
+func (b *HcBackend) HistoryIsSafe(p *Pane) bool {
+	t, err := b.get(p.Native)
+	return err == nil && t.Status != nil && hcNoScroll[strings.ToLower(t.Status.State)]
 }
 
 // Close ends the program and removes the terminal, so finished terminals do not pile up. Already gone is success.
