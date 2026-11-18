@@ -1,0 +1,20 @@
+Expanded Tool Permission Editor
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Full Command:
+    cat >
+    /private/tmp/claude-501/-Users-xuser-workspace-tools-termctl/9daaef32-a7d4-447f-bebe-5064749663d6/scratchpad/A/agy/o
+    <<'EOF'
+    request line 01 of 80: the quick brown fox jumps over the lazy dog
+    request line 02 of 80: the quick brown fox jumps over the lazy dog
+  (1–5 of 84 lines)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Requested Permission (Editable): [↓ 79]
+  > cat >
+    /private/tmp/claude-501/-Users-xuser-workspace-tools-termctl/9daaef32-a7d4-447f-bebe-5064749663d6/scratchpad/A
+    /agy/out.txt <<'EOF'
+    request line 01 of 80: the quick brown fox jumps over the lazy dog
+
+  enter confirm · esc back · pgup/pgdown scroll Full Command
+esc to cancel                                                                  accept-edits · Gemini 4 Hydrogen · medium

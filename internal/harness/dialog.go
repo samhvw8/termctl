@@ -38,6 +38,9 @@ type Dialog struct {
 	// shows more than once, or two full-width rules show, so the worker's own text may pose as choices. It has no Question or Options: Body is the whole dialog as
 	// shown, from the rule to the footer. task answer refuses it; task deny (Esc) works.
 	Ambiguous bool `json:"ambiguous,omitempty"`
+	// Hidden: the harness drew only part of the request (agy: "⋯ (78 lines hidden)", or a long line cut
+	// with "..."), so the fingerprint does not cover the hidden part. task answer refuses it; task deny works.
+	Hidden bool `json:"hidden,omitempty"`
 }
 
 // Option returns choice n, or nil.
@@ -74,6 +77,9 @@ type dialogSpec struct {
 	wrapped bool
 	// indented: an option's wrapped text is indented under its first line's text. agy wraps to column 0.
 	indented bool
+	// hidden: a request line that says the harness left part of the request out, such as agy's
+	// "⋯ (78 lines hidden)" or a line it cut with "...". A dialog showing one is Hidden.
+	hidden *regexp.Regexp
 }
 
 var (
@@ -93,7 +99,12 @@ var (
 	// other is reported as Unrecognized, never dropped: a dialog nobody hears of stalls the worker silently.
 	agyDialog = dialogSpec{footer: regexp.MustCompile(`^↑/↓ Navigate`),
 		question: regexp.MustCompile(`(?i)^(run this command|allow\b.*|.*\b(permission|access)\b.*)\?$`),
-		asks:     regexp.MustCompile(`(?i)requesting permission`)}
+		asks:     regexp.MustCompile(`(?i)requesting permission`),
+		// Antigravity CLI 1.5.10 shows 3 lines of a long command and "⋯ (78 lines hidden)", and cuts a long
+		// line after 12 rows (5 in a 20-row pane) with "..." (testdata/agy-*). Any request line that starts
+		// with ⋯ or ends with an ellipsis counts, so a command that merely ends in "..." is refused too: a
+		// refusal costs a workaround, a missed marker an approval of text nobody read.
+		hidden: regexp.MustCompile(`^⋯|(\.\.\.|…)$`)}
 )
 
 func claudeReadDialog(lines []string) *Dialog { return readDialog(lines, claudeDialog, false) }
@@ -234,6 +245,9 @@ func readDialog(lines []string, spec dialogSpec, scrollback bool) *Dialog {
 		if t == "" || dashRuleRe.MatchString(t) || (spec.skip != nil && spec.skip.MatchString(t)) {
 			continue
 		}
+		if spec.hidden != nil && spec.hidden.MatchString(t) {
+			d.Hidden = true
+		}
 		body = append([]string{t}, body...)
 	}
 	d.Body = strings.Join(body, "\n")
@@ -332,6 +346,11 @@ func AnswerCommand(target string, d *Dialog) string {
 // ambiguousNote says what an Ambiguous dialog is. It suggests no answer command.
 const ambiguousNote = "This dialog is ambiguous: lines shaped like its choices or its rule cannot be told from the worker's own text (choices out of sequence, a selection mark off the choices or more than one, or a second full-width rule). task answer refuses it: read the pane and answer there by hand, or deny it"
 
+// hiddenNote says what a Hidden dialog is and how to get the request approved anyway. It suggests no answer
+// command. Expanding the request in the harness is not used (agy's ctrl+g, checked on 1.5.10): it shows 3
+// lines per PageDown and clips a word wider than the pane, and ctrl+g that misses the dialog opens $EDITOR.
+const hiddenNote = "The harness shows only part of this request (a \"⋯ (N lines hidden)\" line, or a line cut with ...): the fingerprint does not cover the hidden part, so task answer refuses it. Deny it, have the worker write the command to a file and run that file (bash <file>), read the file while that short dialog waits, then answer it"
+
 // unrecognizedNote says what an Unrecognized dialog is. It suggests no --persist command.
 const unrecognizedNote = "This is not a known permission dialog (a picker, or a question not seen before): every choice but No or cancel is marked [persist]; read the pane before choosing, or deny it"
 
@@ -390,6 +409,10 @@ func dialogLine(target string, d *Dialog, status string) string {
 	screen := fmt.Sprintf("question: %s | request: %s | choices: %s", squash(d.Question), noticeText(target, d.Body), strings.Join(opts, " "))
 	if r := squash(status); r != "" {
 		screen += " | the harness reports: " + term.Cut(r, 200)
+	}
+	if d.Hidden {
+		return fmt.Sprintf("DIALOG %s: %s %s %s | deny: harness-ops task deny %s --expect %s. %s",
+			d.Fingerprint, screenOpen, untrusted(screen), screenClose, target, d.Fingerprint, hiddenNote)
 	}
 	tail := fmt.Sprintf("answer: %s; deny: harness-ops task deny %s --expect %s", AnswerCommand(target, d), target, d.Fingerprint)
 	if persist {
@@ -454,6 +477,11 @@ func DialogText(target string, d *Dialog) string {
 	}
 	if d.Unrecognized {
 		fmt.Fprintf(&b, "unrecognized: %s\n", unrecognizedNote)
+	}
+	if d.Hidden {
+		fmt.Fprintf(&b, "hidden:      %s\n", hiddenNote)
+		fmt.Fprintf(&b, "deny:        harness-ops task deny %s --expect %s\n", target, d.Fingerprint)
+		return b.String()
 	}
 	fmt.Fprintf(&b, "answer:      %s   (a [persist] choice also needs --persist)\n", AnswerCommand(target, d))
 	fmt.Fprintf(&b, "deny:        harness-ops task deny %s --expect %s\n", target, d.Fingerprint)

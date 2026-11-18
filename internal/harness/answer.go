@@ -103,6 +103,9 @@ func (o *Ops) Answer(p *term.Pane, opts AnswerOpts) (*Answered, error) {
 	if d.Ambiguous && !opts.Deny {
 		return nil, term.Errf(term.CodeGuard, "the dialog on %s is ambiguous: lines shaped like its choices are out of sequence or more than one is selected, so which choice is which cannot be told. Read the pane and answer there by hand, or deny it", p.Address())
 	}
+	if d.Hidden && !opts.Deny {
+		return nil, term.Errf(term.CodeGuard, "the dialog on %s shows only part of its request (the harness hid lines or cut a line): fingerprint %s does not cover the hidden part, so it cannot be approved. Deny it (task deny), have the worker write the command to a file and run that file, read the file while that short dialog waits, and answer it", p.Address(), d.Fingerprint)
+	}
 	if d.Truncated && !opts.Deny {
 		return nil, term.Errf(term.CodeGuard, "the request in the dialog on %s is longer than the screen: its start is not read, so fingerprint %s does not cover it. Read the pane and answer there by hand, or deny it", p.Address(), d.Fingerprint)
 	}

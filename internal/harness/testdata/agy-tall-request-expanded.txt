@@ -1,0 +1,40 @@
+Expanded Tool Permission Editor
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Full Command:
+    cat >
+    /private/tmp/claude-501/-Users-xuser-workspace-tools-termctl/9daaef32-a7d4-447f-bebe-5064749663d6/scratchpad/A/agy/o
+    <<'EOF'
+    request line 01 of 80: the quick brown fox jumps over the lazy dog
+    request line 02 of 80: the quick brown fox jumps over the lazy dog
+    request line 03 of 80: the quick brown fox jumps over the lazy dog
+    request line 04 of 80: the quick brown fox jumps over the lazy dog
+    request line 05 of 80: the quick brown fox jumps over the lazy dog
+    request line 06 of 80: the quick brown fox jumps over the lazy dog
+    request line 07 of 80: the quick brown fox jumps over the lazy dog
+    request line 08 of 80: the quick brown fox jumps over the lazy dog
+    request line 09 of 80: the quick brown fox jumps over the lazy dog
+    request line 10 of 80: the quick brown fox jumps over the lazy dog
+    request line 11 of 80: the quick brown fox jumps over the lazy dog
+    request line 12 of 80: the quick brown fox jumps over the lazy dog
+    request line 13 of 80: the quick brown fox jumps over the lazy dog
+    request line 14 of 80: the quick brown fox jumps over the lazy dog
+    request line 15 of 80: the quick brown fox jumps over the lazy dog
+    request line 16 of 80: the quick brown fox jumps over the lazy dog
+    request line 17 of 80: the quick brown fox jumps over the lazy dog
+    request line 18 of 80: the quick brown fox jumps over the lazy dog
+  (1–21 of 84 lines)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Requested Permission (Editable): [↓ 75]
+  > cat >
+    /private/tmp/claude-501/-Users-xuser-workspace-tools-termctl/9daaef32-a7d4-447f-bebe-5064749663d6/scratchpad/A
+    /agy/out.txt <<'EOF'
+    request line 01 of 80: the quick brown fox jumps over the lazy dog
+    request line 02 of 80: the quick brown fox jumps over the lazy dog
+    request line 03 of 80: the quick brown fox jumps over the lazy dog
+    request line 04 of 80: the quick brown fox jumps over the lazy dog
+    request line 05 of 80: the quick brown fox jumps over the lazy dog
+
+  enter confirm · esc back · pgup/pgdown scroll Full Command
+esc to cancel                                                                  accept-edits · Gemini 4 Hydrogen · medium

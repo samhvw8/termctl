@@ -573,7 +573,8 @@ func TestClaudeTallRequestFromITerm2RexAndHcHistory(t *testing.T) {
 // 120x40 and 120x20 tmux panes (2026-11-18). agy draws on the alternate screen (no scrollback) and never
 // draws a request taller than the pane: it shows 3 lines of a long command and "⋯ (78 lines hidden)", or
 // cuts a long line after 12 rows (5 in 20 rows) with "...", so its rule stays on screen. The hidden part is
-// not read, so neither the body nor the fingerprint covers it.
+// not read, so neither the body nor the fingerprint covers it: the dialog is marked Hidden, and task answer
+// refuses it. A short request is not Hidden.
 func TestAgyTallRequestFitsThePane(t *testing.T) {
 	if Profiles["agy"].ReadScrollbackDialog != nil {
 		t.Fatal("agy keeps no scrollback to read")
@@ -584,10 +585,39 @@ func TestAgyTallRequestFitsThePane(t *testing.T) {
 		{"agy-long-line-20-rows.txt", "79e520e2", "word069..."},
 	} {
 		d := Profiles["agy"].ReadDialog(capture(t, c.file))
-		if d == nil || d.Truncated || d.Ambiguous || d.Unrecognized || d.Question != "Run this command?" || d.Fingerprint != c.fp ||
+		if d == nil || d.Truncated || d.Ambiguous || d.Unrecognized || !d.Hidden || d.Question != "Run this command?" || d.Fingerprint != c.fp ||
 			!strings.HasPrefix(d.Body, "Requesting permission for:\n") || !strings.HasSuffix(d.Body, c.tail) ||
 			!reflect.DeepEqual(persistMarks(d), []bool{false, true, true, false}) {
 			t.Fatalf("%s: %+v", c.file, d)
 		}
+	}
+}
+
+// ctrl+g on a real agy 1.5.10 dialog (2026-11-18, 120x40 and 120x20 tmux panes) opens an "Expanded Tool
+// Permission Editor": a Full Command view that shows 21 lines (5 in 20 rows) and scrolls 3 lines per PageDown,
+// clips a word wider than the pane (the path ends ".../agy/o"), and an editable allow pattern whose Enter
+// rewrites choices 2 and 3. It is no dialog to answer and no input line to type into, so a key sent by
+// task answer never lands on it: the re-read before each key finds no dialog. ctrl+g on the input line
+// opens $EDITOR (nvim) in the pane: neither a dialog nor an input line either.
+func TestAgyExpandedRequestIsNoDialog(t *testing.T) {
+	p := Profiles["agy"]
+	for _, file := range []string{"agy-tall-request-expanded.txt", "agy-tall-request-expanded-20-rows.txt", "agy-long-line-expanded.txt", "agy-ctrl-g-on-input-line.txt"} {
+		lines := capture(t, file)
+		if d := p.ReadDialog(lines); d != nil {
+			t.Fatalf("%s: read as a dialog: %+v", file, d)
+		}
+		if in := p.ReadInput(lines); in != nil {
+			t.Fatalf("%s: read as an input line: %q", file, *in)
+		}
+	}
+	// Enter in the editor confirmed the allow pattern: back at the dialog, choices 2 and 3 name the long
+	// pattern, cut with "...". The request is still partly hidden, and the print changed with the choices.
+	d := p.ReadDialog(capture(t, "agy-tall-request-allow-pattern-confirmed.txt"))
+	if d == nil || !d.Hidden || d.Ambiguous || d.Truncated || !reflect.DeepEqual(persistMarks(d), []bool{false, true, true, false}) ||
+		!strings.Contains(d.Options[1].Text, "start with 'cat > /private/") {
+		t.Fatalf("after the allow pattern was confirmed: %+v", d)
+	}
+	if d := p.ReadDialog(agyRunCommandDialog); d == nil || d.Hidden {
+		t.Fatalf("a request shown whole is not hidden: %+v", d)
 	}
 }
