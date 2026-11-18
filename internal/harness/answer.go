@@ -242,27 +242,44 @@ func (t *Tasks) answerTarget(target string) (term.Backend, *term.Pane, *Task, er
 		}
 		return b, p, x, nil
 	}
-	panes, err := t.Backend.ListPanes()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	p, err := term.Resolve(panes, target)
+	b, p, err := t.paneTarget(d, target)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	if p.IsSelf || t.isSelf(p.ID) {
 		return nil, nil, nil, term.TargetErr("refusing to answer a dialog on your own pane")
 	}
-	rec := d.Panes[p.ID]
-	if rec == nil || rec.Owner != t.Sender.ID || !sameServer(rec.Ref, t.Backend.ServerRef()) {
+	if !t.ownsRecord(d.Panes[p.ID], b.ServerRef()) {
 		return nil, nil, nil, term.TargetErr("%s is not a pane you started with spawn or task new; its dialogs are not yours to answer", p.Address())
 	}
 	for _, x := range d.Tasks { // the pane of a task: the answer must reach its dialog mark too
-		if x.Pane == p.ID && open(x.Status) && x.Owner == t.Sender.ID && sameServer(x.Ref, t.Backend.ServerRef()) {
-			return t.Backend, p, x, nil
+		if x.Pane == p.ID && open(x.Status) && x.Owner == t.Sender.ID && sameServer(x.Ref, b.ServerRef()) {
+			return b, p, x, nil
 		}
 	}
-	return t.Backend, p, nil, nil
+	return b, p, nil, nil
+}
+
+// paneTarget resolves a pane target. A pane ID with a record (the form a notice names) is looked up on
+// the server its record names, as a task's pane is, so a pane on a private tmux socket is found without -L;
+// any other target is resolved among the panes of the caller's backend.
+func (t *Tasks) paneTarget(d *Data, target string) (term.Backend, *term.Pane, error) {
+	if rec := d.Panes[target]; rec != nil {
+		b, p, err := t.paneByID(target, rec.Ref)
+		if err != nil {
+			return nil, nil, err
+		}
+		if p == nil {
+			return nil, nil, term.TargetErr("pane %s is gone", target)
+		}
+		return b, p, nil
+	}
+	panes, err := t.Backend.ListPanes()
+	if err != nil {
+		return nil, nil, err
+	}
+	p, err := term.Resolve(panes, target)
+	return t.Backend, p, err
 }
 
 // Answer answers the dialog on a task's worker, or on a pane the caller started.

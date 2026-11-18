@@ -88,7 +88,7 @@ Each round also delivers held-back results. The watcher stops when the owner pan
 | Case | Exit |
 |---|---|
 | `--expect` is missing | 2 |
-| The caller is not the task's owner (the same pane ID on the same server), or the target is a pane the caller did not start (`PaneRecord` owner), or its own pane | 2 |
+| The caller is not the task's owner (the same pane ID on the same server), or the target is a pane the caller did not start (`PaneRecord` owner, on the owner's server), or its own pane | 2 |
 | The harness has no calibrated dialog reader, or N is not an option | 2 |
 | No dialog on screen, or `--expect` names another fingerprint | 7 |
 | Option N grants more than this request and `--persist` is not given, or the dialog is `truncated`, `hidden` (agy shows only part of the request) or `ambiguous` ([harness profiles](/architecture/harness-profiles.md#dialogs)); `task deny` still works on all three | 6 |

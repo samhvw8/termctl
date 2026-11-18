@@ -63,15 +63,18 @@ type DialogMark struct {
 	Unknown     Unknown `json:"-"`
 }
 
-// PaneRecord marks a pane as created by harness-ops, so close may act on it.
+// PaneRecord marks a pane as created by harness-ops (spawn or task new), so close may act on it, and
+// its owner may answer its dialogs. Ref is the pane's server; OwnerRef the owner pane's server, since the
+// same pane ID on another server is another pane (empty in records from before 2026-11-18: any server).
 type PaneRecord struct {
-	Harness string            `json:"harness"`
-	Label   string            `json:"label"`
-	Cwd     string            `json:"cwd"`
-	Ref     map[string]string `json:"ref"`
-	Owner   string            `json:"owner"`
-	Created float64           `json:"created"`
-	Unknown Unknown           `json:"-"`
+	Harness  string            `json:"harness"`
+	Label    string            `json:"label"`
+	Cwd      string            `json:"cwd"`
+	Ref      map[string]string `json:"ref"`
+	Owner    string            `json:"owner"`
+	OwnerRef map[string]string `json:"owner_ref,omitempty"`
+	Created  float64           `json:"created"`
+	Unknown  Unknown           `json:"-"`
 }
 
 // Pending is a task result that has not reached its owner yet.

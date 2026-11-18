@@ -1221,3 +1221,67 @@ func TestPartlyHiddenAgyRequestIsNeverApproved(t *testing.T) {
 		}
 	}
 }
+
+// A pane the lead started with spawn (pairs and live teams start members so, not with task new) is the
+// lead's to answer and deny by its pane ID, with every guard of a task's worker. A pane started by
+// another owner, by the same pane ID on another server, or by nobody is refused, and no key is pressed.
+func TestAnswerAndDenyASpawnedPane(t *testing.T) {
+	r := newRig(t)
+	lead := r.as(r.owner)
+	lead.SenderRef = map[string]string{"pid": "111"}
+	p, err := lead.Spawn("claude", "tab", "/w", SpawnOpts{Command: "claude", Label: "partner", Timeout: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := r.data().Panes[p.ID]; rec == nil || rec.Owner != r.owner.ID || rec.OwnerRef["pid"] != "111" {
+		t.Fatalf("the spawn's record must name its owner and the owner's server: %+v", rec)
+	}
+	p.Process = "claude"
+	dlg := &termtest.Dialog{Body: "touch x", Options: []string{"Yes", "Yes, and don't ask again for touch commands", "No"}, Selected: 1}
+	r.b.State[p.ID].Dialog = dlg
+	d, err := lead.ops(r.b, r.owner).ReadDialog(p)
+	if err != nil || d == nil {
+		t.Fatal(d, err)
+	}
+	pressed := func() []string {
+		var out []string
+		for _, k := range r.b.Typed(p.ID) {
+			if strings.HasPrefix(k, "key:") {
+				out = append(out, k)
+			}
+		}
+		return out
+	}
+	before := len(pressed())
+	elsewhere := r.as(r.owner) // the same pane ID on another server is another owner
+	elsewhere.SenderRef = map[string]string{"pid": "222"}
+	for _, who := range []*Tasks{r.as(r.other), elsewhere} {
+		_, _, err := who.Answer(p.ID, AnswerOpts{N: 1, Expect: d.Fingerprint})
+		if !isCode(err, term.CodeUsage) || !strings.Contains(err.Error(), "not a pane you started") {
+			t.Fatalf("another owner answered: %v", err)
+		}
+		if _, _, err := who.Answer(p.ID, AnswerOpts{Deny: true, Expect: d.Fingerprint}); !isCode(err, term.CodeUsage) {
+			t.Fatalf("another owner denied: %v", err)
+		}
+	}
+	_, _, err = lead.Answer(p.ID, AnswerOpts{N: 2, Expect: d.Fingerprint})
+	wantCode(t, err, term.CodeGuard) // the persist guard holds for a pane too
+	_, _, err = lead.Answer(p.ID, AnswerOpts{N: 1, Expect: "deadbeef"})
+	wantCode(t, err, term.CodeDialog)
+	if got := pressed()[before:]; len(got) != 0 || dlg.Answer != 0 {
+		t.Fatalf("a refused answer pressed %q", got)
+	}
+	if res, _, err := lead.Answer(p.ID, AnswerOpts{N: 1, Expect: d.Fingerprint}); err != nil || res.Chosen.N != 1 || dlg.Answer != 1 {
+		t.Fatal(err, res, dlg.Answer)
+	}
+	dlg2 := &termtest.Dialog{Body: "rm -rf build", Options: []string{"Yes", "No"}, Selected: 1}
+	r.b.State[p.ID].Dialog = dlg2
+	d2, _ := lead.ops(r.b, r.owner).ReadDialog(p)
+	mark := len(pressed())
+	if res, _, err := lead.Answer("partner", AnswerOpts{Deny: true, Expect: d2.Fingerprint}); err != nil || !res.Escaped || dlg2.Answer != -1 {
+		t.Fatal(err, res, dlg2.Answer)
+	}
+	if got := strings.Join(pressed()[mark:], " "); got != "key:escape" {
+		t.Fatalf("deny on a spawned pane pressed %q", got)
+	}
+}

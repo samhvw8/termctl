@@ -620,7 +620,14 @@ func (t *Tasks) record(d *Data, p *term.Pane, harness, label, cwd string, ref ma
 	if t.Sender != nil {
 		owner = t.Sender.ID
 	}
-	d.Panes[p.ID] = &PaneRecord{Harness: harness, Label: label, Cwd: cwd, Ref: ref, Owner: owner, Created: t.clock().Now()}
+	d.Panes[p.ID] = &PaneRecord{Harness: harness, Label: label, Cwd: cwd, Ref: ref, Owner: owner, OwnerRef: t.SenderRef, Created: t.clock().Now()}
+}
+
+// ownsRecord: the caller started the pane the record is of: the record names the caller's pane on the
+// caller's server, and the pane's server (paneRef) is the one recorded, so a record from before a terminal
+// server restart (a reused pane ID) counts for nothing.
+func (t *Tasks) ownsRecord(rec *PaneRecord, paneRef map[string]string) bool {
+	return rec != nil && t.Sender != nil && rec.Owner == t.Sender.ID && sameServer(rec.OwnerRef, t.callerRef()) && sameServer(rec.Ref, paneRef)
 }
 
 // Spawn starts a harness and records the pane, so close may act on it later.
@@ -642,7 +649,7 @@ func (t *Tasks) Mine(panes []*term.Pane) ([]*term.Pane, error) {
 	}
 	var out []*term.Pane
 	for _, p := range panes {
-		if rec := d.Panes[p.ID]; rec != nil && t.Sender != nil && rec.Owner == t.Sender.ID {
+		if t.ownsRecord(d.Panes[p.ID], t.Backend.ServerRef()) {
 			out = append(out, p)
 		}
 	}
