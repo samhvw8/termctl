@@ -141,7 +141,7 @@ func (r *rig) opsBin(bin, pane string, args ...string) (int, string, string) {
 	r.t.Helper()
 	cmd := exec.Command(bin, append([]string{"--backend", "tmux", "-L", socket}, args...)...)
 	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, "ITERM_SESSION_ID=") && !strings.HasPrefix(kv, "REX_") && !strings.HasPrefix(kv, "TMUX") {
+		if !strings.HasPrefix(kv, "ITERM_SESSION_ID=") && !strings.HasPrefix(kv, "REX_") && (!strings.HasPrefix(kv, "TMUX") || strings.HasPrefix(kv, "TMUX_TMPDIR=")) {
 			cmd.Env = append(cmd.Env, kv)
 		}
 	}
