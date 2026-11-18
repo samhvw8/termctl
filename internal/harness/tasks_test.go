@@ -1464,3 +1464,47 @@ func TestInboxFilesNeverCollide(t *testing.T) {
 		}
 	}
 }
+
+// A claim records its deliverer's pid (the state directory is local, so pids are of this host). A claim
+// whose deliverer is dead is taken at once; one whose deliverer lives is kept up to claimTTL. Before, a
+// deliverer that crashed held its notice for 10 minutes (round-6 review R3).
+func TestClaimOfADeadDelivererIsTakenAtOnce(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	st := r.b.State[r.owner.ID]
+	st.Input = "owner typing"
+	r.done(t, x, "ok", "finished")
+	st.Input = ""
+	dead := exec.Command("true")
+	if err := dead.Run(); err != nil {
+		t.Fatal(err)
+	}
+	live := exec.Command("sleep", "60")
+	if err := live.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { live.Process.Kill(); live.Wait() })
+	claim := func(pid int) {
+		r.reg.Update(func(d *Data) error {
+			d.Pending[0].Claimed, d.Pending[0].ClaimPid = r.clock.Now(), pid
+			return nil
+		})
+	}
+	claim(live.Process.Pid)
+	r.clock.T += 60
+	if n, _ := r.tasks.FlushPending(); n != 0 || len(r.b.Texts(r.owner.ID)) != 0 {
+		t.Fatal("took the claim of a live deliverer")
+	}
+	claim(dead.Process.Pid)
+	slow := &slowSend{Fake: r.b, clock: r.clock}
+	r.tasks.Backend = slow
+	r.tasks.Factory = func(string, map[string]string) (term.Backend, error) { return slow, nil }
+	slow.during = func() {
+		if p := r.data().Pending; len(p) != 1 || p[0].ClaimPid != os.Getpid() {
+			t.Errorf("a claim must record its deliverer's pid: %+v", p)
+		}
+	}
+	if n, _ := r.tasks.FlushPending(); n != 1 || len(r.b.Texts(r.owner.ID)) != 1 {
+		t.Fatalf("the claim of a dead deliverer was not taken: %d", n)
+	}
+}

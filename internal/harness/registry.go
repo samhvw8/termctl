@@ -83,6 +83,7 @@ type Pending struct {
 	Text     string            `json:"text"`
 	Created  float64           `json:"created"`
 	Claimed  float64           `json:"claimed"`
+	ClaimPid int               `json:"claim_pid,omitempty"`   // the claimer's process, on this host
 	Kind     string            `json:"kind,omitempty"`        // "" for a task result; "dialog" for a dialog notice
 	Dialog   string            `json:"fingerprint,omitempty"` // the dialog a "dialog" notice is about
 	Unknown  Unknown           `json:"-"`

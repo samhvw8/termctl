@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/samhvw8/termctl/internal/term"
 )
@@ -1065,6 +1066,13 @@ func deliveryBound() float64 {
 	return calls*call + send + enterDelay + float64(submitRetries+1)*submitSettle
 }
 
+// claimerDead: the process that claimed a notice is gone, so its claim is taken at once instead of after
+// claimTTL. The state directory is local, so the pid is of this host. A claim with no pid (an older binary's)
+// waits out claimTTL, and so does one whose process may live (any answer but "no such process").
+func claimerDead(pid int) bool {
+	return pid > 0 && errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
+}
+
 // FlushPending delivers held-back results. A claim under the lock stops two processes delivering the same one.
 func (t *Tasks) FlushPending() (int, error) {
 	d, err := t.Reg.Read()
@@ -1086,8 +1094,8 @@ func (t *Tasks) FlushPending() (int, error) {
 			if p.Kind == "dialog" && !dialogOnScreen(d.Tasks[p.Task], p.Dialog) {
 				continue // answered or gone before its notice got through: telling the owner now would mislead
 			}
-			if p.Claimed == 0 || now-p.Claimed > claimTTL {
-				p.Claimed = now
+			if p.Claimed == 0 || now-p.Claimed > claimTTL || claimerDead(p.ClaimPid) {
+				p.Claimed, p.ClaimPid = now, os.Getpid()
 				claimed = append(claimed, *p)
 			}
 			keep = append(keep, p)
@@ -1116,7 +1124,7 @@ func (t *Tasks) FlushPending() (int, error) {
 			for i, q := range d.Pending {
 				if q.Task == p.Task && q.Created == p.Created {
 					if outcome == "retry" {
-						q.Claimed = 0
+						q.Claimed, q.ClaimPid = 0, 0
 					} else {
 						if x := d.Tasks[p.Task]; x != nil && p.Kind == "" {
 							x.Notify = outcome
