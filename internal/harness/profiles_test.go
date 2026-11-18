@@ -481,6 +481,94 @@ func TestClaudeTallRequestOnTmux(t *testing.T) {
 	}
 }
 
+// historyStub serves a real history read to readPaneDialog: the scrollback above the screen and the screen.
+type historyStub struct {
+	term.Backend
+	history []string
+	safe    bool
+	asked   []int
+}
+
+func (s *historyStub) Capture(p *term.Pane, lines int) ([]string, error) {
+	s.asked = append(s.asked, lines)
+	if len(s.history) > lines {
+		return s.history[len(s.history)-lines:], nil
+	}
+	return s.history, nil
+}
+
+func (s *historyStub) HistoryIsSafe(*term.Pane) bool { return s.safe }
+
+// Real Claude Code 2.1.327 asked for the same 82-line heredoc as on tmux in a scratch iTerm2 3.7.6 tab
+// (145x80) and on a private Rex 0.1.0-preview.19 server (80x24), and for a 200-line one on a private hc
+// 0.1.19 core (200x120), on 2026-11-18. Each terminal's history read (iTerm2 trailing_lines, rex capture,
+// hc read --lines) held the whole dialog as tmux's does: one full-width rule, then every line indented. The
+// second captures are the request asked again after the first was denied. readPaneDialog takes the whole
+// read on a safe history, and keeps the truncated screen read when the history is not safe, does not reach
+// the rule (a scrollback limit shorter than the request) or ends with another dialog.
+func TestClaudeTallRequestFromITerm2RexAndHcHistory(t *testing.T) {
+	p := Profiles["claude"]
+	for _, c := range []struct {
+		backend, title, first, last string
+		screenFP, fp, secondFP      string
+		persist                     []bool
+	}{
+		{"iterm2", "Write 80 fox lines to out.txt via heredoc", "request line 01 of 80", "request line 80 of 80: the quick brown fox jumps over the lazy dog\nEOF",
+			"a68b836d", "09c49810", "09c49810", []bool{false, true, true, false}},
+		{"rex", "below\nRun heredoc from cmd.txt to write out.txt", "request line 01 of 80", "request line 80 of 80: the quick brown fox jumps over the lazy dog\nEOF",
+			"68d7efaa", "174225cf", "e511c37e", []bool{false, true, true, false}},
+		{"hc", "Run cmd200.txt heredoc verbatim to write out200.txt", "request line 001 of 200", "request line 200 of 200: the quick brown fox jumps over the lazy dog\nEOF\nParser aborted (timeout, resource limit, or over-length)",
+			"d66f0c6d", "f2c24e32", "", []bool{false, true, false}},
+	} {
+		screenLines := capture(t, "claude-tall-request-"+c.backend+"-screen.txt")
+		history := capture(t, "claude-tall-request-"+c.backend+"-history.txt")
+		pane := &term.Pane{ID: c.backend + ":w", Rows: len(screenLines)}
+		screen := p.ReadDialog(screenLines)
+		if screen == nil || !screen.Truncated || screen.Ambiguous || screen.Fingerprint != c.screenFP || !reflect.DeepEqual(persistMarks(screen), c.persist) {
+			t.Fatalf("%s screen: %+v", c.backend, screen)
+		}
+		if !strings.HasSuffix(strings.Join(history, "\n"), strings.Join(screenLines, "\n")) {
+			t.Fatalf("%s: the history read does not end with the screen read", c.backend)
+		}
+		stub := &historyStub{history: history, safe: true}
+		d := readPaneDialog(stub, pane, p, screenLines)
+		if d == nil || d.Truncated || d.Ambiguous || d.Question != "Do you want to proceed?" || d.Fingerprint != c.fp ||
+			!strings.HasPrefix(d.Body, "Bash command\n"+c.title+"\ncat > ") || !strings.Contains(d.Body, "\n"+c.first) ||
+			!strings.HasSuffix(d.Body, c.last) || !reflect.DeepEqual(persistMarks(d), c.persist) || !reflect.DeepEqual(stub.asked, []int{historyLines}) {
+			t.Fatalf("%s history: %+v asked %v", c.backend, d, stub.asked)
+		}
+		if d := readPaneDialog(&historyStub{history: history}, pane, p, screenLines); d.Fingerprint != c.screenFP || !d.Truncated {
+			t.Fatalf("%s: an unsafe history was read: %+v", c.backend, d)
+		}
+		// A scrollback limit that dropped the rule: the read stays truncated, and answer refuses it.
+		rule := -1
+		for i, ln := range history {
+			if strings.HasPrefix(ln, "────") {
+				rule = i
+			}
+		}
+		if d := readPaneDialog(&historyStub{history: history[rule+1:], safe: true}, pane, p, screenLines); d.Fingerprint != c.screenFP || !d.Truncated {
+			t.Fatalf("%s: a history without the rule: %+v", c.backend, d)
+		}
+		if c.secondFP == "" {
+			continue
+		}
+		second := capture(t, "claude-second-tall-request-"+c.backend+"-history.txt")
+		if d := readPaneDialog(&historyStub{history: second, safe: true}, pane, p, screenLines); d.Fingerprint != c.secondFP || d.Truncated || d.Ambiguous {
+			t.Fatalf("%s second: %+v", c.backend, d)
+		}
+		if d := p.ReadDialog(second); d == nil || !d.Ambiguous {
+			t.Fatalf("%s: read as a screen, a history with a past dialog's rule shows two rules: %+v", c.backend, d)
+		}
+	}
+	// A history that ends with another dialog than the screen's is not taken.
+	screenLines := capture(t, "claude-tall-request-iterm2-screen.txt")
+	other := &historyStub{history: capture(t, "claude-tall-request-rex-history.txt"), safe: true}
+	if d := readPaneDialog(other, &term.Pane{ID: "iterm2:w", Rows: len(screenLines)}, p, screenLines); d.Fingerprint != "a68b836d" || !d.Truncated {
+		t.Fatalf("another dialog's history was taken: %+v", d)
+	}
+}
+
 // Real Antigravity CLI 1.5.10 asked for the same 82-line heredoc and for a 4800-character one-line echo, in
 // 120x40 and 120x20 tmux panes (2026-11-18). agy draws on the alternate screen (no scrollback) and never
 // draws a request taller than the pane: it shows 3 lines of a long command and "⋯ (78 lines hidden)", or

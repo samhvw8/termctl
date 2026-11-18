@@ -1,0 +1,342 @@
+ ▐▛███▛█   Claude Code v2.1.327
+▝▜██████▀  Haiku 5.5 · Claude Ultra
+ ▝▝   ▝▝   /private/tmp/claude-501/-Users-xuser-workspace-tools-termctl/9daaef32-a7d4-447f-bebe-5064749663d6/scratchpad/B/hc/claude
+
+⚠ Code Mode (experimental) is on · this session can be resumed only with Code Mode on
+ ▐▛███▛█   Claude Code v2.1.327
+▝▜██████▀  Haiku 5.5 · Claude Ultra
+ ▝▝   ▝▝   /private/tmp/claude-501/-Users-xuser-workspace-tools-termctl/9daaef32-a7d4-447f-bebe-5064749663d6/scratchpad/B/hc/claude
+
+⚠ Code Mode (experimental) is on · this session can be resumed only with Code Mode on
+
+❯ Read the file /private/tmp/claude-501/-Users-xuser-workspace-tools-termctl/9daaef32-a7d4-447f-bebe-5064749663d6/scratchpad/B/hc/claude/cmd.txt, then run its whole content verbatim as one single
+  Bash shell command (it is a heredoc that writes out.txt). Do not run it as a script file (no bash cmd.txt, no sh), do not split or shorten it, run nothing else.
+
+⏺ Read(/private/tmp/claude-501/-Users-xuser-workspace-tools-termctl/9daaef32-a7d4-447f-bebe-5064749663d6/scratchpad/B/hc/claude/cmd.txt)
+  ⎿  Read 83 lines
+  ⎿  Interrupted · What should Claude do instead?
+
+⏺ Bash(cat > /private/tmp/claude-501/-Users-xuser-workspace-tools-termctl/9daaef32-a7d4-447f-bebe-5064749663d6/scratchpad/B/hc/claude/out.txt <<'EOF'
+      request line 01 of 80: the quick brown fox jumps over the lazy dog
+      request line 02 of 80: the quick brown fox jumps over the lazy dog
+      request line 03 of 80: the quick brown fox jumps over the lazy dog
+      request line 04 of 80: the quick brown fox jumps over the lazy dog
+      request line 05 of 80: the quick brown fox jumps over the lazy dog
+      request line 06 of 80: the quick brown fox jumps over the lazy dog
+      request line 07 of 80: the quick brown fox jumps over the lazy dog
+      request line 08 of 80: the quick brown fox jumps over the lazy dog
+      request line 09 of 80: the quick brown fox jumps over the lazy dog
+      request line 10 of 80: the quick brown fox jumps over the lazy dog
+      request line 11 of 80: the quick brown fox jumps over the lazy dog
+      request line 12 of 80: the quick brown fox jumps over the lazy dog
+      request line 13 of 80: the quick brown fox jumps over the lazy dog
+      request line 14 of 80: the quick brown fox jumps over the lazy dog
+      request line 15 of 80: the quick brown fox jumps over the lazy dog
+      request line 16 of 80: the quick brown fox jumps over the lazy dog
+      request line 17 of 80: the quick brown fox jumps over the lazy dog
+      request line 18 of 80: the quick brown fox jumps over the lazy dog
+      request line 19 of 80: the quick brown fox jumps over the lazy dog
+      request line 20 of 80: the quick brown fox jumps over the lazy dog
+      request line 21 of 80: the quick brown fox jumps over the lazy dog
+      request line 22 of 80: the quick brown fox jumps over the lazy dog
+      request line 23 of 80: the quick brown fox jumps over the lazy dog
+      request line 24 of 80: the quick brown fox jumps over the lazy dog
+      request line 25 of 80: the quick brown fox jumps over the lazy dog
+      request line 26 of 80: the quick brown fox jumps over the lazy dog
+      request line 27 of 80: the quick brown fox jumps over the lazy dog
+      request line 28 of 80: the quick brown fox jumps over the lazy dog
+      request line 29 of 80: the quick brown fox jumps over the lazy dog
+      request line 30 of 80: the quick brown fox jumps over the lazy dog
+      request line 31 of 80: the quick brown fox jumps over the lazy dog
+      request line 32 of 80: the quick brown fox jumps over the lazy dog
+      request line 33 of 80: the quick brown fox jumps over the lazy dog
+      request line 34 of 80: the quick brown fox jumps over the lazy dog
+      request line 35 of 80: the quick brown fox jumps over the lazy dog
+      request line 36 of 80: the quick brown fox jumps over the lazy dog
+      request line 37 of 80: the quick brown fox jumps over the lazy dog
+      request line 38 of 80: the quick brown fox jumps over the lazy dog
+      request line 39 of 80: the quick brown fox jumps over the lazy dog
+      request line 40 of 80: the quick brown fox jumps over the lazy dog
+      request line 41 of 80: the quick brown fox jumps over the lazy dog
+      request line 42 of 80: the quick brown fox jumps over the lazy dog
+      request line 43 of 80: the quick brown fox jumps over the lazy dog
+      request line 44 of 80: the quick brown fox jumps over the lazy dog
+      request line 45 of 80: the quick brown fox jumps over the lazy dog
+      request line 46 of 80: the quick brown fox jumps over the lazy dog
+      request line 47 of 80: the quick brown fox jumps over the lazy dog
+      request line 48 of 80: the quick brown fox jumps over the lazy dog
+      request line 49 of 80: the quick brown fox jumps over the lazy dog
+      request line 50 of 80: the quick brown fox jumps over the lazy dog
+      request line 51 of 80: the quick brown fox jumps over the lazy dog
+      request line 52 of 80: the quick brown fox jumps over the lazy dog
+      request line 53 of 80: the quick brown fox jumps over the lazy dog
+      request line 54 of 80: the quick brown fox jumps over the lazy dog
+      request line 55 of 80: the quick brown fox jumps over the lazy dog
+      request line 56 of 80: the quick brown fox jumps over the lazy dog
+      request line 57 of 80: the quick brown fox jumps over the lazy dog
+      request line 58 of 80: the quick brown fox jumps over the lazy dog
+      request line 59 of 80: the quick brown fox jumps over the lazy dog
+      request line 60 of 80: the quick brown fox jumps over the lazy dog
+      request line 61 of 80: the quick brown fox jumps over the lazy dog
+      request line 62 of 80: the quick brown fox jumps over the lazy dog
+      request line 63 of 80: the quick brown fox jumps over the lazy dog
+      request line 64 of 80: the quick brown fox jumps over the lazy dog
+      request line 65 of 80: the quick brown fox jumps over the lazy dog
+      request line 66 of 80: the quick brown fox jumps over the lazy dog
+      request line 67 of 80: the quick brown fox jumps over the lazy dog
+      request line 68 of 80: the quick brown fox jumps over the lazy dog
+      request line 69 of 80: the quick brown fox jumps over the lazy dog
+      request line 70 of 80: the quick brown fox jumps over the lazy dog
+      request line 71 of 80: the quick brown fox jumps over the lazy dog
+      request line 72 of 80: the quick brown fox jumps over the lazy dog
+      request line 73 of 80: the quick brown fox jumps over the lazy dog
+      request line 74 of 80: the quick brown fox jumps over the lazy dog
+      request line 75 of 80: the quick brown fox jumps over the lazy dog
+      request line 76 of 80: the quick brown fox jumps over the lazy dog
+      request line 77 of 80: the quick brown fox jumps over the lazy dog
+      request line 78 of 80: the quick brown fox jumps over the lazy dog
+      request line 79 of 80: the quick brown fox jumps over the lazy dog
+      request line 80 of 80: the quick brown fox jumps over the lazy dog
+      EOF
+      )
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ Read the file /private/tmp/claude-501/-Users-xuser-workspace-tools-termctl/9daaef32-a7d4-447f-bebe-5064749663d6/scratchpad/B/hc/claude/cmd200.txt, then run its whole content verbatim as one single
+  Bash shell command (it is a heredoc that writes out200.txt). Do not run it as a script file, do not split or shorten it, run nothing else.
+
+⏺ Read(/private/tmp/claude-501/-Users-xuser-workspace-tools-termctl/9daaef32-a7d4-447f-bebe-5064749663d6/scratchpad/B/hc/claude/cmd200.txt)
+  ⎿  Read 203 lines
+
+  Bash(cat > /private/tmp/claude-501/-Users-xuser-workspace-tools-termctl/9daaef32-a7d4-447f-bebe-5064749663d6/scratchpad/B/hc/claude/out200.txt <<'EOF'
+  request line 001 of 200: the quick brown fox jumps over the lazy dog
+  request line 002 of 200: the quick brown fox jumps over the lazy dog
+  request line 003 of 200: the quick brown fox jumps over the lazy dog
+  request line 004 of 200: the quick brown fox jumps over the lazy dog
+  request line 005 of 200: the quick brown fox jumps over the lazy dog
+  request line 006 of 200: the quick brown fox jumps over the lazy dog
+  request line 007 of 200: the quick brown fox jumps over the lazy dog
+  request line 008 of 200: the quick brown fox jumps over the lazy dog
+  request line 009 of 200: the quick brown fox jumps over the lazy dog
+  request line 010 of 200: the quick brown fox jumps over the lazy dog
+  request line 011 of 200: the quick brown fox jumps over the lazy dog
+  request line 012 of 200: the quick brown fox jumps over the lazy dog
+  request line 013 of 200: t…)
+  ⎿  Running…
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+ Tip: auto mode handles these prompts for you — choose "switch to auto mode" below
+ Run cmd200.txt heredoc verbatim to write out200.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ │ cat > /private/tmp/claude-501/-Users-xuser-workspace-tools-termctl/9daaef32-a7d4-447f-bebe-5064749663d6/scratchpad/B/hc/claude/out200.txt <<'EOF'
+ │ request line 001 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 002 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 003 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 004 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 005 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 006 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 007 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 008 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 009 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 010 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 011 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 012 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 013 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 014 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 015 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 016 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 017 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 018 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 019 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 020 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 021 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 022 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 023 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 024 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 025 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 026 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 027 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 028 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 029 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 030 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 031 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 032 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 033 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 034 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 035 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 036 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 037 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 038 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 039 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 040 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 041 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 042 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 043 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 044 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 045 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 046 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 047 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 048 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 049 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 050 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 051 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 052 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 053 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 054 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 055 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 056 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 057 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 058 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 059 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 060 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 061 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 062 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 063 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 064 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 065 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 066 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 067 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 068 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 069 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 070 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 071 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 072 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 073 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 074 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 075 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 076 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 077 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 078 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 079 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 080 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 081 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 082 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 083 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 084 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 085 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 086 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 087 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 088 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 089 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 090 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 091 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 092 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 093 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 094 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 095 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 096 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 097 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 098 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 099 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 100 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 101 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 102 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 103 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 104 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 105 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 106 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 107 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 108 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 109 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 110 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 111 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 112 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 113 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 114 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 115 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 116 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 117 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 118 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 119 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 120 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 121 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 122 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 123 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 124 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 125 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 126 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 127 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 128 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 129 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 130 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 131 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 132 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 133 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 134 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 135 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 136 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 137 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 138 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 139 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 140 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 141 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 142 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 143 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 144 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 145 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 146 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 147 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 148 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 149 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 150 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 151 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 152 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 153 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 154 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 155 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 156 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 157 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 158 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 159 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 160 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 161 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 162 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 163 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 164 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 165 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 166 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 167 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 168 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 169 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 170 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 171 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 172 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 173 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 174 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 175 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 176 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 177 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 178 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 179 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 180 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 181 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 182 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 183 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 184 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 185 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 186 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 187 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 188 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 189 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 190 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 191 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 192 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 193 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 194 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 195 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 196 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 197 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 198 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 199 of 200: the quick brown fox jumps over the lazy dog
+ │ request line 200 of 200: the quick brown fox jumps over the lazy dog
+ │ EOF
+ │
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Parser aborted (timeout, resource limit, or over-length)
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and switch to auto mode · auto mode handles these prompts for you
+   3. No
+
+ Esc to cancel · Tab to amend
