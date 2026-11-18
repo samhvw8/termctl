@@ -130,11 +130,14 @@ type FreeStatus interface {
 	StatusIsFree() bool
 }
 
-// SafeHistory marks a backend whose Capture of more lines than the screen reads the scrollback above it
-// without disturbing the program: tmux's capture-pane -S reads its buffer. hc is not one (a history read can
-// scroll a full-screen app), and iTerm2 and Rex read the screen only.
+// SafeHistory marks a backend whose Capture of more lines than the screen (Pane.Rows) reads the scrollback
+// above the screen. HistoryIsSafe says whether that read leaves the program in p undisturbed right now.
+// tmux (capture-pane -S), iTerm2 (GetBufferRequest trailing_lines) and Rex (rex capture) read the
+// terminal's own copy of the screen and scrollback, whatever the program, so they always answer true. hc
+// reads a full-screen app's history by scrolling it with mouse-wheel input, except while the program
+// reports working, blocked or error, so it answers per pane from that report.
 type SafeHistory interface {
-	HistoryIsSafe() bool
+	HistoryIsSafe(p *Pane) bool
 }
 
 // Submitter is for a backend that cannot type without pressing Enter (hc). A backend that has it

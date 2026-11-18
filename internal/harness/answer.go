@@ -39,7 +39,7 @@ func readPaneDialog(b term.Backend, p *term.Pane, prof *Profile, screen []string
 	if d == nil || !d.Truncated || d.Ambiguous || prof.ReadScrollbackDialog == nil {
 		return d
 	}
-	if h, ok := b.(term.SafeHistory); !ok || !h.HistoryIsSafe() {
+	if h, ok := b.(term.SafeHistory); !ok || !h.HistoryIsSafe(p) {
 		return d
 	}
 	lines, err := b.Capture(p, historyLines)
