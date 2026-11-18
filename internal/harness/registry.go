@@ -1,11 +1,14 @@
 package harness
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"syscall"
 	"testing"
@@ -46,6 +49,7 @@ type Task struct {
 	// Unreachable is when the task's server first failed to answer, 0 while it answers. A server that
 	// stays unreachable past unreachableTTL is gone, and the task is lost.
 	Unreachable float64 `json:"unreachable,omitempty"`
+	Unknown     Unknown `json:"-"`
 }
 
 // DialogMark is the dialog on a worker's screen. It is dropped when the worker's input line is seen again
@@ -56,6 +60,7 @@ type DialogMark struct {
 	Since       float64 `json:"since"`
 	Notified    bool    `json:"notified,omitempty"` // the owner was sent a notice of it (watch)
 	Returned    bool    `json:"returned,omitempty"` // task wait has returned it once
+	Unknown     Unknown `json:"-"`
 }
 
 // PaneRecord marks a pane as created by harness-ops, so close may act on it.
@@ -66,6 +71,7 @@ type PaneRecord struct {
 	Ref     map[string]string `json:"ref"`
 	Owner   string            `json:"owner"`
 	Created float64           `json:"created"`
+	Unknown Unknown           `json:"-"`
 }
 
 // Pending is a task result that has not reached its owner yet.
@@ -79,6 +85,7 @@ type Pending struct {
 	Claimed  float64           `json:"claimed"`
 	Kind     string            `json:"kind,omitempty"`        // "" for a task result; "dialog" for a dialog notice
 	Dialog   string            `json:"fingerprint,omitempty"` // the dialog a "dialog" notice is about
+	Unknown  Unknown           `json:"-"`
 }
 
 // Data is the whole registry file.
@@ -87,6 +94,135 @@ type Data struct {
 	Tasks   map[string]*Task       `json:"tasks"`
 	Panes   map[string]*PaneRecord `json:"panes"`
 	Pending []*Pending             `json:"pending"`
+	Unknown Unknown                `json:"-"`
+}
+
+// Unknown holds the fields of a registry record that this binary does not know, as they were read. They
+// are written back unchanged, so a newer binary's fields survive a rewrite by an older one: a version
+// number does not protect them, since every version from 2 on is read (round-6 review R1).
+type Unknown map[string]json.RawMessage
+
+func (x *Data) UnmarshalJSON(b []byte) (err error) {
+	type plain Data
+	x.Unknown, err = decodeKeeping(b, (*plain)(x))
+	return err
+}
+
+func (x Data) MarshalJSON() ([]byte, error) {
+	type plain Data
+	return encodeKeeping(plain(x), x.Unknown)
+}
+
+func (x *Task) UnmarshalJSON(b []byte) (err error) {
+	type plain Task
+	x.Unknown, err = decodeKeeping(b, (*plain)(x))
+	return err
+}
+
+func (x Task) MarshalJSON() ([]byte, error) {
+	type plain Task
+	return encodeKeeping(plain(x), x.Unknown)
+}
+
+func (x *DialogMark) UnmarshalJSON(b []byte) (err error) {
+	type plain DialogMark
+	x.Unknown, err = decodeKeeping(b, (*plain)(x))
+	return err
+}
+
+func (x DialogMark) MarshalJSON() ([]byte, error) {
+	type plain DialogMark
+	return encodeKeeping(plain(x), x.Unknown)
+}
+
+func (x *PaneRecord) UnmarshalJSON(b []byte) (err error) {
+	type plain PaneRecord
+	x.Unknown, err = decodeKeeping(b, (*plain)(x))
+	return err
+}
+
+func (x PaneRecord) MarshalJSON() ([]byte, error) {
+	type plain PaneRecord
+	return encodeKeeping(plain(x), x.Unknown)
+}
+
+func (x *Pending) UnmarshalJSON(b []byte) (err error) {
+	type plain Pending
+	x.Unknown, err = decodeKeeping(b, (*plain)(x))
+	return err
+}
+
+func (x Pending) MarshalJSON() ([]byte, error) {
+	type plain Pending
+	return encodeKeeping(plain(x), x.Unknown)
+}
+
+// decodeKeeping decodes an object into a struct (a type without its own UnmarshalJSON) and returns the
+// fields no struct field takes. encoding/json matches keys without regard to case, so this does too.
+func decodeKeeping[T any](b []byte, into *T) (Unknown, error) {
+	if err := json.Unmarshal(b, into); err != nil {
+		return nil, err
+	}
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(b, &all); err != nil {
+		return nil, err
+	}
+	known := jsonKeys(reflect.TypeFor[T]())
+	var out Unknown
+	for k, v := range all {
+		if !known[strings.ToLower(k)] {
+			if out == nil {
+				out = Unknown{}
+			}
+			out[k] = v
+		}
+	}
+	return out, nil
+}
+
+// jsonKeys are the lower-cased JSON names of a struct's fields.
+func jsonKeys(t reflect.Type) map[string]bool {
+	keys := map[string]bool{}
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		tag := f.Tag.Get("json")
+		if tag == "-" || !f.IsExported() {
+			continue
+		}
+		name, _, _ := strings.Cut(tag, ",")
+		if name == "" {
+			name = f.Name
+		}
+		keys[strings.ToLower(name)] = true
+	}
+	return keys
+}
+
+// encodeKeeping encodes v (a type without its own MarshalJSON) and appends the unknown fields, in key
+// order, after the known ones.
+func encodeKeeping(v any, extra Unknown) ([]byte, error) {
+	b, err := json.Marshal(v)
+	if err != nil || len(extra) == 0 {
+		return b, err
+	}
+	keys := make([]string, 0, len(extra))
+	for k := range extra {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var out bytes.Buffer
+	out.Write(b[:len(b)-1]) // without the closing brace
+	for _, k := range keys {
+		if out.Len() > 1 {
+			out.WriteByte(',')
+		}
+		name, _ := json.Marshal(k)
+		out.Write(name)
+		out.WriteByte(':')
+		out.Write(extra[k])
+	}
+	out.WriteByte('}')
+	return out.Bytes(), nil
 }
 
 const registryVersion = 2

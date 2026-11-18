@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
@@ -270,5 +271,66 @@ func TestRegistryLockHasADeadline(t *testing.T) {
 	syscall.Flock(int(held.Fd()), syscall.LOCK_UN)
 	if err := reg.Update(func(*Data) error { return nil }); err != nil {
 		t.Fatal("a freed lock:", err)
+	}
+}
+
+// A registry written by a newer binary keeps the fields this one does not know: they are read, kept and
+// written back unchanged at every level, so an older binary's rewrite never drops a newer one's data
+// (round-6 review R1).
+func TestUnknownRegistryFieldsSurviveARewrite(t *testing.T) {
+	r := NewRegistry(t.TempDir())
+	code := 3
+	if err := r.Update(func(d *Data) error {
+		d.Tasks["a"] = &Task{ID: "a", Title: "x", Pane: "%1", Status: "running", ExitCode: &code,
+			Dialog: &DialogMark{Fingerprint: "f", Question: "q", Since: 1}}
+		d.Panes["%1"] = &PaneRecord{Harness: "claude", Label: "a"}
+		d.Pending = append(d.Pending, &Pending{Task: "a", Owner: "%0", Text: "t", Created: 1})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	raw, _ := os.ReadFile(r.Path)
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	future := map[string]any{"n": 1.5, "list": []any{"x", 2.0}, "obj": map[string]any{"k": "v"}}
+	doc["future_top"] = future
+	task := doc["tasks"].(map[string]any)["a"].(map[string]any)
+	task["future_task"] = future
+	task["dialog"].(map[string]any)["future_dialog"] = "d"
+	doc["panes"].(map[string]any)["%1"].(map[string]any)["future_pane"] = true
+	doc["pending"].([]any)[0].(map[string]any)["future_pending"] = 7.0
+	raw, _ = json.Marshal(doc)
+	if err := os.WriteFile(r.Path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reread := func() map[string]any {
+		var got map[string]any
+		raw, _ := os.ReadFile(r.Path)
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if err := r.Update(func(d *Data) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got := reread(); !reflect.DeepEqual(got, doc) {
+		t.Fatalf("a rewrite changed the registry:\nwant %v\ngot  %v", doc, got)
+	}
+	// A real change keeps them too, and a known field still wins over nothing.
+	if err := r.Update(func(d *Data) error {
+		d.Tasks["a"].Title = "y"
+		d.Pending[0].Claimed = 2
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := reread()
+	task["title"] = "y"
+	doc["pending"].([]any)[0].(map[string]any)["claimed"] = 2.0
+	if !reflect.DeepEqual(got, doc) {
+		t.Fatalf("an update dropped or changed unknown fields:\nwant %v\ngot  %v", doc, got)
 	}
 }
