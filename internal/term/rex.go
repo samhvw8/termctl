@@ -491,6 +491,9 @@ func (b *RexBackend) SendKey(p *Pane, key string) error {
 	return err
 }
 
+// Capture keeps the last lines of rex capture, which prints the block's scrollback and then its screen
+// (Rex keeps about 64 MiB of scrollback). The server reads its own copy of the block: the program sees
+// nothing, a full-screen app too. So a request for more lines than Pane.Rows reaches into the scrollback.
 func (b *RexBackend) Capture(p *Pane, lines int) ([]string, error) {
 	out, err := b.call("capture", "-b", p.Native, "--trim")
 	if err != nil {
@@ -498,6 +501,9 @@ func (b *RexBackend) Capture(p *Pane, lines int) ([]string, error) {
 	}
 	return TrimScreen(strings.Split(out, "\n"), lines), nil
 }
+
+// HistoryIsSafe: rex capture reads the server's copy of the block (see Capture).
+func (b *RexBackend) HistoryIsSafe(*Pane) bool { return true }
 
 func (b *RexBackend) Close(p *Pane) error {
 	_, err := b.call("block", "close", p.Native)
