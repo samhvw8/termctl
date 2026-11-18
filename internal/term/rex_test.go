@@ -448,3 +448,32 @@ func TestRexMoveAndSwap(t *testing.T) {
 		t.Fatal("rex moves, breaks out, arranges and splits a given block")
 	}
 }
+
+// rex capture prints the block's scrollback and then its screen, read from the server's copy (the program
+// sees nothing; checked on a private Rex 0.1.0-preview.19 server, 2026-11-18). So a read of more lines than
+// the pane's rows reaches into the scrollback, and the history is safe.
+func TestRexCaptureReadsTheScrollback(t *testing.T) {
+	var buf []string
+	for i := 1; i <= 30; i++ {
+		buf = append(buf, fmt.Sprintf("line %02d", i))
+	}
+	s := &rexStub{replies: []rexReply{{out: strings.Join(buf, "\n") + "\n"}, {out: strings.Join(buf, "\n") + "\n"}}}
+	b := newRexStub(s)
+	p := &Pane{ID: "rex:abcd1234", Backend: "rex", Native: "abcd1234", Rows: 24}
+	screen, err := b.Capture(p, p.Rows)
+	if err != nil || len(screen) != 24 || screen[0] != "line 07" || screen[23] != "line 30" {
+		t.Fatalf("screen: %q %v", screen, err)
+	}
+	all, err := b.Capture(p, 2000)
+	if err != nil || len(all) != 30 || all[0] != "line 01" {
+		t.Fatalf("history: %q %v", all, err)
+	}
+	for _, c := range s.cmds(t) {
+		if !reflect.DeepEqual(c, []string{"capture", "-b", "abcd1234", "--trim"}) {
+			t.Fatalf("%q", c)
+		}
+	}
+	if !b.HistoryIsSafe(p) {
+		t.Fatal("rex capture reads the server's copy: the history is safe")
+	}
+}
