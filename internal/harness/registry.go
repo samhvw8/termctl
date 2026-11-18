@@ -43,7 +43,7 @@ type Task struct {
 	ReviewOf string            `json:"review_of,omitempty"` // the task this one reviews
 	Blind    bool              `json:"blind,omitempty"`     // a reviewer that must not see the worker's report
 	Dialog   *DialogMark       `json:"dialog,omitempty"`    // the dialog on the worker's screen when last read
-	// AnsweredAt is when task answer or deny last pressed a key on the worker's dialog. A screen read
+	// AnsweredAt is when answer or deny last pressed a key on the worker's dialog. A screen read
 	// taken before it is stale, and is dropped.
 	AnsweredAt float64 `json:"answered_at,omitempty"`
 	// Unreachable is when the task's server first failed to answer, 0 while it answers. A server that

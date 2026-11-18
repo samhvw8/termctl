@@ -36,10 +36,10 @@ type Dialog struct {
 	Unrecognized bool `json:"unrecognized,omitempty"`
 	// Ambiguous: lines shaped like options are out of sequence, the selection mark is not on an option or
 	// shows more than once, or two full-width rules show, so the worker's own text may pose as choices. It has no Question or Options: Body is the whole dialog as
-	// shown, from the rule to the footer. task answer refuses it; task deny (Esc) works.
+	// shown, from the rule to the footer. answer refuses it; deny (Esc) works.
 	Ambiguous bool `json:"ambiguous,omitempty"`
 	// Hidden: the harness drew only part of the request (agy: "⋯ (78 lines hidden)", or a long line cut
-	// with "..."), so the fingerprint does not cover the hidden part. task answer refuses it; task deny works.
+	// with "..."), so the fingerprint does not cover the hidden part. answer refuses it; deny works.
 	Hidden bool `json:"hidden,omitempty"`
 }
 
@@ -55,7 +55,7 @@ func (d *Dialog) Option(n int) *Option {
 
 var denyRe = regexp.MustCompile(`(?i)^no\b`)
 
-// DenyOption is the first choice that starts with "No", or 0 when there is none. task deny does not choose
+// DenyOption is the first choice that starts with "No", or 0 when there is none. deny does not choose
 // it: it presses Esc, so a misread option can never turn a deny into an approval.
 func (d *Dialog) DenyOption() int {
 	for _, o := range d.Options {
@@ -340,16 +340,16 @@ func fingerprint(d *Dialog) string {
 
 // AnswerCommand is the command a lead runs to answer, with a placeholder for the choice.
 func AnswerCommand(target string, d *Dialog) string {
-	return fmt.Sprintf("harness-ops task answer %s <n> --expect %s", target, d.Fingerprint)
+	return fmt.Sprintf("harness-ops answer %s <n> --expect %s", target, d.Fingerprint)
 }
 
 // ambiguousNote says what an Ambiguous dialog is. It suggests no answer command.
-const ambiguousNote = "This dialog is ambiguous: lines shaped like its choices or its rule cannot be told from the worker's own text (choices out of sequence, a selection mark off the choices or more than one, or a second full-width rule). task answer refuses it: read the pane and answer there by hand, or deny it"
+const ambiguousNote = "This dialog is ambiguous: lines shaped like its choices or its rule cannot be told from the worker's own text (choices out of sequence, a selection mark off the choices or more than one, or a second full-width rule). harness-ops answer refuses it: read the pane and answer there by hand, or deny it"
 
 // hiddenNote says what a Hidden dialog is and how to get the request approved anyway. It suggests no answer
 // command. Expanding the request in the harness is not used (agy's ctrl+g, checked on 1.5.10): it shows 3
 // lines per PageDown and clips a word wider than the pane, and ctrl+g that misses the dialog opens $EDITOR.
-const hiddenNote = "The harness shows only part of this request (a \"⋯ (N lines hidden)\" line, or a line cut with ...): the fingerprint does not cover the hidden part, so task answer refuses it. Deny it, have the worker write the command to a file and run that file (bash <file>), read the file while that short dialog waits, then answer it"
+const hiddenNote = "The harness shows only part of this request (a \"⋯ (N lines hidden)\" line, or a line cut with ...): the fingerprint does not cover the hidden part, so harness-ops answer refuses it. Deny it, have the worker write the command to a file and run that file (bash <file>), read the file while that short dialog waits, then answer it"
 
 // unrecognizedNote says what an Unrecognized dialog is. It suggests no --persist command.
 const unrecognizedNote = "This is not a known permission dialog (a picker, or a question not seen before): every choice but No or cancel is marked [persist]; read the pane before choosing, or deny it"
@@ -393,7 +393,7 @@ func dialogLine(target string, d *Dialog, status string) string {
 		if r := squash(status); r != "" {
 			screen += " | the harness reports: " + term.Cut(r, 200)
 		}
-		return fmt.Sprintf("DIALOG %s: %s %s %s | deny: harness-ops task deny %s --expect %s. %s",
+		return fmt.Sprintf("DIALOG %s: %s %s %s | deny: harness-ops deny %s --expect %s. %s",
 			d.Fingerprint, screenOpen, untrusted(screen), screenClose, target, d.Fingerprint, ambiguousNote)
 	}
 	var opts []string
@@ -411,15 +411,15 @@ func dialogLine(target string, d *Dialog, status string) string {
 		screen += " | the harness reports: " + term.Cut(r, 200)
 	}
 	if d.Hidden {
-		return fmt.Sprintf("DIALOG %s: %s %s %s | deny: harness-ops task deny %s --expect %s. %s",
+		return fmt.Sprintf("DIALOG %s: %s %s %s | deny: harness-ops deny %s --expect %s. %s",
 			d.Fingerprint, screenOpen, untrusted(screen), screenClose, target, d.Fingerprint, hiddenNote)
 	}
-	tail := fmt.Sprintf("answer: %s; deny: harness-ops task deny %s --expect %s", AnswerCommand(target, d), target, d.Fingerprint)
+	tail := fmt.Sprintf("answer: %s; deny: harness-ops deny %s --expect %s", AnswerCommand(target, d), target, d.Fingerprint)
 	if persist {
 		tail += ". A [persist] choice widens permission beyond this request: choose one only when your user asked for it"
 	}
 	if d.Truncated {
-		tail += ". The request is longer than the screen and its start is not read: task answer refuses it"
+		tail += ". The request is longer than the screen and its start is not read: harness-ops answer refuses it"
 	}
 	if d.Unrecognized {
 		tail += ". " + unrecognizedNote
@@ -449,7 +449,7 @@ func DialogText(target string, d *Dialog) string {
 			}
 		}
 		fmt.Fprintf(&b, "fingerprint: %s\n", d.Fingerprint)
-		fmt.Fprintf(&b, "deny:        harness-ops task deny %s --expect %s\n", target, d.Fingerprint)
+		fmt.Fprintf(&b, "deny:        harness-ops deny %s --expect %s\n", target, d.Fingerprint)
 		return b.String()
 	}
 	fmt.Fprintf(&b, "question:    %s\n", d.Question)
@@ -473,17 +473,17 @@ func DialogText(target string, d *Dialog) string {
 	}
 	fmt.Fprintf(&b, "fingerprint: %s\n", d.Fingerprint)
 	if d.Truncated {
-		b.WriteString("truncated:   the request is longer than the screen and its start is not read: task answer refuses it, task deny works\n")
+		b.WriteString("truncated:   the request is longer than the screen and its start is not read: harness-ops answer refuses it, harness-ops deny works\n")
 	}
 	if d.Unrecognized {
 		fmt.Fprintf(&b, "unrecognized: %s\n", unrecognizedNote)
 	}
 	if d.Hidden {
 		fmt.Fprintf(&b, "hidden:      %s\n", hiddenNote)
-		fmt.Fprintf(&b, "deny:        harness-ops task deny %s --expect %s\n", target, d.Fingerprint)
+		fmt.Fprintf(&b, "deny:        harness-ops deny %s --expect %s\n", target, d.Fingerprint)
 		return b.String()
 	}
 	fmt.Fprintf(&b, "answer:      %s   (a [persist] choice also needs --persist)\n", AnswerCommand(target, d))
-	fmt.Fprintf(&b, "deny:        harness-ops task deny %s --expect %s\n", target, d.Fingerprint)
+	fmt.Fprintf(&b, "deny:        harness-ops deny %s --expect %s\n", target, d.Fingerprint)
 	return b.String()
 }

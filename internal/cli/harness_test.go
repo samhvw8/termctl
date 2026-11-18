@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/samhvw8/termctl/internal/harness"
 	"github.com/samhvw8/termctl/internal/term"
 	"github.com/samhvw8/termctl/internal/termtest"
 )
@@ -367,7 +368,7 @@ func TestTaskDialogCommands(t *testing.T) {
 	e.b.State[worker.ID].Dialog = &termtest.Dialog{Body: "rm -rf build", Options: []string{"Yes", "No"}, Selected: 1}
 	code, out, _ = e.run("task", "wait", "--any", "--timeout", "10")
 	if code != 0 || !strings.Contains(out, "DIALOG task "+id) ||
-		!strings.Contains(out, "rm -rf build") || !strings.Contains(out, "harness-ops task answer "+id+" <n> --expect ") {
+		!strings.Contains(out, "rm -rf build") || !strings.Contains(out, "harness-ops answer "+id+" <n> --expect ") {
 		t.Fatal(code, out)
 	}
 	fp2 := regexp.MustCompile(`fingerprint: +([0-9a-f]{8})`).FindStringSubmatch(out)[1]
@@ -410,4 +411,77 @@ func TestTaskReviewStartsAWatcher(t *testing.T) {
 	if len(started) != 1 {
 		t.Fatalf("task review started %d watchers, want 1", len(started))
 	}
+}
+
+// answer and deny are top-level commands that take a pane you started (spawn, as pairs and live teams
+// start members) or a task ID. task answer and task deny stay as aliases for one release: the same exit
+// codes, and one deprecation line on stderr; the new names print none.
+func TestAnswerAndDenyCommandsAndTheirAliases(t *testing.T) {
+	e := newEnv(t)
+	e.app.Factory = func(string, map[string]string) (term.Backend, error) { return e.b, nil }
+	code, out, stderr := e.run("spawn", "claude", "--command", "fake", "--label", "partner", "--timeout", "30")
+	if code != 0 {
+		t.Fatal(code, out, stderr)
+	}
+	paneID := strings.TrimSpace(out)
+	pane := e.b.Panes[len(e.b.Panes)-1]
+	pane.Process = "claude"
+	ask := func(body string) (*termtest.Dialog, string) {
+		dlg := &termtest.Dialog{Body: body, Options: []string{"Yes", "Yes, and don't ask again", "No"}, Selected: 1}
+		e.b.State[pane.ID].Dialog = dlg
+		lines, _ := e.b.Capture(pane, 60)
+		return dlg, regexp.MustCompile(`^[0-9a-f]{8}$`).FindString(harnessFP(lines))
+	}
+	dlg, fp := ask("touch x")
+	deprecated := regexp.MustCompile(`(?m)^harness-ops: warning: task (answer|deny) is deprecated`)
+	for _, alias := range []bool{false, true} {
+		pre := []string{}
+		if alias {
+			pre = []string{"task"}
+		}
+		for _, c := range []struct {
+			args []string
+			code int
+		}{
+			{[]string{"answer", paneID, "2", "--expect", fp}, 6}, // persist guard
+			{[]string{"answer", paneID, "1"}, 2},                 // --expect is required
+			{[]string{"deny", paneID}, 2},
+			{[]string{"answer", paneID, "1", "--expect", "00000000"}, 7},
+			{[]string{"answer", "target", "1", "--expect", fp}, 2}, // a pane nobody started
+			{[]string{"answer", "me", "1", "--expect", fp}, 2},     // your own pane
+		} {
+			code, _, stderr := e.run(append(pre, c.args...)...)
+			if code != c.code {
+				t.Fatalf("alias=%v %v: exit %d, want %d: %s", alias, c.args, code, c.code, stderr)
+			}
+			if n := len(deprecated.FindAllString(stderr, -1)); (alias && n != 1) || (!alias && n != 0) {
+				t.Fatalf("alias=%v %v: %d deprecation lines: %q", alias, c.args, n, stderr)
+			}
+		}
+	}
+	if dlg.Answer != 0 {
+		t.Fatal("a refused answer pressed a key")
+	}
+	if code, out, stderr := e.run("answer", paneID, "1", "--expect", fp); code != 0 || !strings.Contains(out, "answered dialog "+fp) || dlg.Answer != 1 || stderr != "" {
+		t.Fatal(code, out, stderr)
+	}
+	dlg, fp = ask("rm -rf build")
+	if code, out, stderr := e.run("deny", "partner", "--expect", fp); code != 0 || !strings.Contains(out, "pressed Esc") || dlg.Answer != -1 {
+		t.Fatal(code, out, stderr)
+	}
+	dlg, fp = ask("rm -rf dist")
+	if code, out, stderr := e.run("task", "deny", paneID, "--expect", fp); code != 0 || dlg.Answer != -1 || len(deprecated.FindAllString(stderr, -1)) != 1 {
+		t.Fatal(code, out, stderr)
+	}
+	if code, out, _ := e.run("--help"); code != 0 || !strings.Contains(out, "\n  answer TARGET N --expect FP") || !strings.Contains(out, "\n  deny TARGET --expect FP") {
+		t.Fatal(out)
+	}
+}
+
+// harnessFP reads the fingerprint of the Claude Code dialog on a captured screen.
+func harnessFP(lines []string) string {
+	if d := harness.Profiles["claude"].ReadDialog(lines); d != nil {
+		return d.Fingerprint
+	}
+	return ""
 }

@@ -229,8 +229,8 @@ func TestWatchNotifiesEachNewDialogOnce(t *testing.T) {
 	}
 	n := notes[0]
 	for _, want := range []string{"[agent-ops from " + x.ID + " (generic) id=" + x.Pane, "DIALOG " + fp + ": " + screenOpen + " question: Do you want to proceed?", "touch x",
-		"2. Yes, and don't ask again for touch commands [persist]", screenClose + " | answer: harness-ops task answer " + x.ID + " <n> --expect " + fp,
-		"harness-ops task deny " + x.ID} {
+		"2. Yes, and don't ask again for touch commands [persist]", screenClose + " | answer: harness-ops answer " + x.ID + " <n> --expect " + fp,
+		"harness-ops deny " + x.ID} {
 		if !strings.Contains(n, want) {
 			t.Fatalf("notice lacks %q: %s", want, n)
 		}
@@ -906,10 +906,10 @@ func TestWrappedFakeOptionsMakeAnAmbiguousDialog(t *testing.T) {
 			t.Fatalf("%s: not an ambiguous dialog: %+v", name, d)
 		}
 		note := DialogLine("t1", d)
-		if !strings.Contains(note, "ambiguous") || strings.Contains(note, "task answer t1") || !strings.Contains(note, "task deny t1 --expect "+d.Fingerprint) {
+		if !strings.Contains(note, "ambiguous") || strings.Contains(note, "harness-ops answer t1") || !strings.Contains(note, "harness-ops deny t1 --expect "+d.Fingerprint) {
 			t.Errorf("%s: notice %q", name, note)
 		}
-		if txt := DialogText("t1", d); !strings.Contains(txt, "ambiguous") || strings.Contains(txt, "task answer t1") {
+		if txt := DialogText("t1", d); !strings.Contains(txt, "ambiguous") || strings.Contains(txt, "harness-ops answer t1") {
 			t.Errorf("%s: text %q", name, txt)
 		}
 		_, err, pressed := answerScreen(t, c.process, c.screen, AnswerOpts{N: 1, Expect: d.Fingerprint})
@@ -1193,7 +1193,7 @@ func TestPartlyHiddenAgyRequestIsNeverApproved(t *testing.T) {
 				notes = append(notes, s)
 			}
 		}
-		if len(notes) != 1 || !strings.Contains(notes[0], hiddenNote) || strings.Contains(notes[0], "task answer "+x.ID) {
+		if len(notes) != 1 || !strings.Contains(notes[0], hiddenNote) || strings.Contains(notes[0], "harness-ops answer "+x.ID) {
 			t.Fatalf("%s: the notice must say the request is partly hidden and suggest no answer: %q", file, notes)
 		}
 		r.reg.Update(func(d *Data) error { d.Tasks[x.ID].Dialog = nil; return nil }) // as if never told

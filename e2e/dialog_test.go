@@ -44,7 +44,7 @@ func TestDialogWatchAndAnswer(t *testing.T) {
 	t.Log(note)
 	m := dialogFP.FindStringSubmatch(note)
 	if m == nil || !strings.HasPrefix(note, "[agent-ops from "+id+" ") || !strings.Contains(note, "Run this command?") ||
-		!strings.Contains(note, "touch fake-file") || !strings.Contains(note, "[persist]") || !strings.Contains(note, "task answer "+id) {
+		!strings.Contains(note, "touch fake-file") || !strings.Contains(note, "[persist]") || !strings.Contains(note, "harness-ops answer "+id) {
 		t.Fatal(note)
 	}
 	fp := m[1]

@@ -35,18 +35,20 @@ Talk to coding-agent panes. Put options before the target: everything after the 
                                               L: even, rows, columns, tiled, main-left, main-top
   name LABEL                                  label the current pane
   whoami
+  answer TARGET N --expect FP [--persist]     choose N in the dialog FP on a pane you started (spawn or task new) or a task's worker;
+                                              TARGET: the pane, or the task ID. A [persist] choice also needs --persist
+  deny TARGET --expect FP                     cancel the dialog FP with Esc; never presses Enter
   task new HARNESS --title T (--brief TEXT | --brief-file F) [--cwd D] [--where W] [--reuse TARGET] [--command CMD] [--max N] [--timeout S]
   task ls [--all] [--json]
   task show ID [--json]
   task send [--force] ID TEXT...
   task wait (ID | --any) [--timeout S] [--json]   returns when a task stops running or its worker shows a dialog
-  task answer ID N --expect FP [--persist]    choose N in the dialog FP on the worker; ID may be a pane you started
-  task deny ID --expect FP                    cancel the dialog with Esc; never presses Enter
+  task answer, task deny                      deprecated aliases of answer and deny, for one release
   task done ID --status ok|failed|blocked (--summary TEXT | --summary-file F)   the worker reports; the session stays open
   task accept ID [--close]                    the lead's verdict; only the owner can finish a task
   task review ID --blind --harness H [--model M] [--brief-file F]   a new session that never sees the worker's report
   task close [--force] ID                     refused until the task is accepted, unless --force
-  watch [--interval S]                        tell you of each new dialog on your tasks' workers; task new starts one
+  watch [--interval S]                        tell you of each new dialog on the panes you started; task new starts one
   state clean                                 remove the throwaway directory in TERMCTL_STATE_DIR; refuses the live one
 
 --where auto (the default for spawn and task new): a new agent splits the largest pane in your tab, whatever
@@ -280,6 +282,8 @@ func (a *App) harness(argv []string) error {
 		return a.selfCmd(cmd, rest, o)
 	case "watch":
 		return a.watch(rest, o)
+	case "answer", "deny":
+		return a.answer(cmd, rest, o)
 	case "move", "pull", "swap", "arrange":
 		return a.harnessLayout(cmd, rest, o)
 	case "which", "read", "capture":
@@ -646,6 +650,10 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 		return term.UsageErr("usage: task new|ls|show|send|wait|answer|deny|done|accept|review|close")
 	}
 	cmd, rest := rest[0], rest[1:]
+	if cmd == "answer" || cmd == "deny" {
+		fmt.Fprintf(a.Err, "harness-ops: warning: task %s is deprecated and goes away in the next release; use harness-ops %s\n", cmd, cmd)
+		return a.answer(cmd, rest, o)
+	}
 	bools, vals, restAfter := []string{}, []string{}, -1
 	switch cmd {
 	case "new":
@@ -658,10 +666,6 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 		bools, restAfter = []string{"--force"}, 1
 	case "wait":
 		bools, vals = []string{"--any", "--json"}, []string{"--timeout"}
-	case "answer":
-		bools, vals = []string{"--persist"}, []string{"--expect"}
-	case "deny":
-		vals = []string{"--expect"}
 	case "done":
 		vals = []string{"--status", "--summary", "--summary-file"}
 	case "close":
@@ -682,11 +686,7 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 	if err := applyOptions(p, o); err != nil {
 		return err
 	}
-	hint := p.vals["--reuse"]
-	if (cmd == "answer" || cmd == "deny") && len(p.pos) > 0 {
-		hint = p.pos[0] // a pane target selects its backend
-	}
-	b, err := a.OpenBackend(o, hint)
+	b, err := a.OpenBackend(o, p.vals["--reuse"])
 	if err != nil {
 		return err
 	}
@@ -787,28 +787,6 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 			return err
 		}
 		a.printWaited(w, p.bools["--json"])
-	case "answer", "deny":
-		want := 1
-		if cmd == "answer" {
-			want = 2
-		}
-		if len(p.pos) != want {
-			return term.UsageErr("usage: task answer ID N --expect FP [--persist] | task deny ID --expect FP")
-		}
-		if p.vals["--expect"] == "" {
-			return term.UsageErr("task %s needs --expect FP, the fingerprint of the dialog you read (from the notice or task wait): a key must never land on a dialog you have not seen", cmd)
-		}
-		opts := harness.AnswerOpts{Deny: cmd == "deny", Expect: p.vals["--expect"], Persist: p.bools["--persist"]}
-		if cmd == "answer" {
-			if opts.N, err = strconv.Atoi(p.pos[1]); err != nil || opts.N < 1 {
-				return term.UsageErr("task answer: the choice must be a number from the dialog, got %q", p.pos[1])
-			}
-		}
-		res, _, err := tasks.Answer(p.pos[0], opts)
-		if res != nil {
-			a.printAnswered(p.pos[0], res)
-		}
-		return err
 	case "done":
 		id, err := arg()
 		if err != nil {
@@ -883,4 +861,46 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 		fmt.Fprintf(a.Out, "closed task %s%s\n", t.ID, suffix)
 	}
 	return nil
+}
+
+// answer runs answer and deny, and their deprecated aliases task answer and task deny. TARGET is a task ID
+// or a pane the caller started; a pane target also selects its backend.
+func (a *App) answer(cmd string, rest []string, o *Options) error {
+	bools := []string{}
+	want := 1
+	if cmd == "answer" {
+		bools, want = []string{"--persist"}, 2
+	}
+	p, err := parseArgs(rest, bools, []string{"--expect"}, -1)
+	if err != nil {
+		return err
+	}
+	if err := applyOptions(p, o); err != nil {
+		return err
+	}
+	if len(p.pos) != want {
+		return term.UsageErr("usage: answer TARGET N --expect FP [--persist] | deny TARGET --expect FP")
+	}
+	if p.vals["--expect"] == "" {
+		return term.UsageErr("%s needs --expect FP, the fingerprint of the dialog you read (from the notice or task wait): a key must never land on a dialog you have not seen", cmd)
+	}
+	opts := harness.AnswerOpts{Deny: cmd == "deny", Expect: p.vals["--expect"], Persist: p.bools["--persist"]}
+	if cmd == "answer" {
+		if opts.N, err = strconv.Atoi(p.pos[1]); err != nil || opts.N < 1 {
+			return term.UsageErr("answer: the choice must be a number from the dialog, got %q", p.pos[1])
+		}
+	}
+	b, err := a.OpenBackend(o, p.pos[0])
+	if err != nil {
+		return err
+	}
+	tasks, err := a.openTasks(o, b)
+	if err != nil {
+		return err
+	}
+	res, _, err := tasks.Answer(p.pos[0], opts)
+	if res != nil {
+		a.printAnswered(p.pos[0], res)
+	}
+	return err
 }
