@@ -113,6 +113,17 @@ By task ID, both need an open task: running, ready or blocked. A `failed` task i
 
 # Verified on real harnesses
 
+On 2026-11-18, after v0.5.0's pane dialogs (top-level `answer` and `deny`, the watcher on every pane its owner started), the whole real run (`TERMCTL_DIALOGS_TEST=1 go test -count=1 -timeout 60m -run TestDialogsReal -v ./e2e/`): `TestDialogsRealMatrix` 16/16 cells pass, `TestDialogsRealHiddenAgy` passes. The new spawn cells start real Claude Code on haiku with `spawn --prompt` (no task): the notice reached the lead, `answer <pane> 1` made the file, a `msg` brought the second dialog, whose notice reached the lead, and `deny <pane>` left its file absent. Notice ms (yes / no):
+
+| Cell | Result | Notice ms (yes / no) |
+|---|---|---|
+| iterm2-claude / -agy / -claude-spawn / -claude-tall | pass | 2484 / 840, 1062 / 930, 1121 / 1013, 2230 |
+| tmux-claude / -agy / -claude-spawn / -claude-tall | pass | 3015 / 2295, 2611 / 1862, 892 / 2882, 759 |
+| rex-claude / -agy / -claude-spawn / -claude-tall | pass | 1004 / 1358, 171 / 1258, 2027 / 2627, 1253 |
+| hc-claude / -agy / -claude-spawn / -claude-tall | pass | 2846 / 179, 3368 / 2342, 1157 / 1194, 2671 |
+
+`TestDialogsRealLatency` (6 workers at once) failed in that run: iTerm2 1/6 workers pass, tmux 5/6. Four workers failed at `task new` with exit 4 (the brief typed but not submitted while 6 harnesses started at once: 3 agy on iTerm2, 1 Claude Code on tmux), one Claude Code worker asked nothing in 5 minutes, and one answer saw the dialog still on screen after Enter (exit 1). Those paths are `task new`'s submit and `answer`'s check, which v0.5.0 does not change; the failed `task new` cells left three agy tabs open, which the test now closes. No `it2` process ran under the watcher. A rerun on tmux right after (`TERMCTL_DIALOGS_ONLY=latency-tmux`) passed 6/6 workers, 12 notices, p95 3040 ms; iTerm2 was not rerun.
+
 On 2026-11-18, after `task deny` moved to Esc and the reader's rule and option fixes (reviews A1, A2), `TestDialogsRealMatrix` on tmux (`TERMCTL_DIALOGS_ONLY=tmux`): both cells pass. `task answer 1` made `<cell>-yes` appear; `task deny` (Esc) on the second dialog left `<cell>-no` absent on real Claude Code on haiku and on agy on `gemini-4-hydrogen-medium`. Claude's extra `task done` dialog after the answer was also denied with Esc. Notice ms (yes / no): tmux-claude 2421 / 2197, tmux-agy 2969 / 387. iTerm2, Rex and hc were not re-run.
 
 On 2026-11-17, `mise run test:dialogs` (`e2e/dialogs_real_test.go`): a lead running the fake harness gives a task to a real worker, Claude Code 2.1.326 on haiku (`--permission-mode default --setting-sources project --strict-mcp-config`) or agy 1.5.10 (`--mode accept-edits`, its terminal sandbox off for the session), told to run `touch <cell>-yes`. The notice must show on the lead's screen; `task answer 1 --expect <fp>` must make the file appear; a second `touch <cell>-no` denied with `task deny` must leave it absent for 10 s. Other dialogs (haiku asks to run `harness-ops task done`) are denied and counted.
