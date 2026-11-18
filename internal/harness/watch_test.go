@@ -805,3 +805,28 @@ func TestHeldPaneNoticeShowsInOpenDialogs(t *testing.T) {
 		t.Fatalf("open dialogs %v (%v), want %s on %s", open, err, fp, p.ID)
 	}
 }
+
+// A member at work beside a running task is remembered: when the last task ends, the watcher still waits
+// quietRounds idle rounds before it stops, as it would with no task. It stopped at the first idle look.
+func TestAPaneAtWorkBesideATaskKeepsTheQuietRounds(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	p, err := r.tasks.Spawn("claude", "tab", "/w", SpawnOpts{Command: "claude", Label: "member", Timeout: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Process = "claude"
+	r.b.Statuses = map[string]term.ProgramStatus{p.ID: {State: "working"}}
+	rounds := 0
+	r.tasks.Watch(WatchOpts{Restart: func() bool {
+		rounds++
+		if rounds == 4 { // the task reports and the member goes idle at once
+			r.done(t, x, "ok", "done")
+			r.b.Statuses = map[string]term.ProgramStatus{p.ID: {State: "idle"}}
+		}
+		return rounds > 100
+	}})
+	if want := 3 + quietRounds; rounds != want {
+		t.Fatalf("stopped after %d rounds, want %d: 3 with the task, then %d quiet", rounds, want, quietRounds)
+	}
+}

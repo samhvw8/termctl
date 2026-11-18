@@ -638,8 +638,12 @@ func (t *Tasks) Watch(o WatchOpts) error {
 				sigs = append(sigs, Signal{Pane: id, Kind: "clear"})
 			}
 			w.handle(d, sigs)
+			atWork := panesAtWork(sigs)
+			if atWork { // also while tasks run: a member at work beside them must not stop the watcher with the last task
+				w.quiet, w.worked = 0, true
+			}
 			if len(running) == 0 {
-				idle = w.quietRound(sigs, t.keepOn(nil, owner.ID))
+				idle = w.quietRound(atWork || t.keepOn(nil, owner.ID))
 			}
 		}
 		t.stopMemo()
@@ -703,17 +707,21 @@ const (
 	quietRounds = 3
 )
 
-// quietRound counts a round with no running task and says whether the watcher may stop: no pane of the
-// owner's is working or blocked (its program status where the terminal keeps one, else its screen: a busy
-// pattern, or a dialog), nothing else keeps it on (keep), and, once a pane was seen at work, quietRounds
-// such rounds have passed in a row.
-func (w *watchState) quietRound(sigs []Signal, keep bool) bool {
-	busy := keep
+// panesAtWork: a pane of the owner's that no running task holds is working or blocked: by its program
+// status where the terminal keeps one, else by its screen (a busy pattern), and always with a dialog on it.
+func panesAtWork(sigs []Signal) bool {
 	for _, s := range sigs {
 		if s.Task == "" && (s.Kind == "dialog" || s.Working) {
-			busy = true
+			return true
 		}
 	}
+	return false
+}
+
+// quietRound counts a round with no running task and says whether the watcher may stop: nothing keeps it
+// on (busy: a pane at work, a held notice, work given less than workGrace ago), and, once a pane was seen
+// at work, quietRounds such rounds have passed in a row.
+func (w *watchState) quietRound(busy bool) bool {
 	if busy {
 		w.quiet, w.worked = 0, true
 		return false
