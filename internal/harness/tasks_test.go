@@ -22,7 +22,7 @@ type rig struct {
 }
 
 func newRig(t *testing.T) *rig {
-	owner := termtest.MakePane(9, "owner", "", "~/w/o", "")
+	owner := termtest.MakePane(9, "owner", "", "~/w/o", "omp") // a calibrated lead: dialog notices are typed to it
 	other := termtest.MakePane(1, "", "other", "~/w/x", "")
 	b := termtest.New([]*term.Pane{other, owner}, owner)
 	dir := t.TempDir()

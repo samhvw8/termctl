@@ -449,6 +449,9 @@ func (t *Tasks) Watch(o WatchOpts) error {
 		say("could not cut this log: " + err.Error())
 	}
 	say(fmt.Sprintf("watching the tasks of %s (pid %d)", owner.Address(), os.Getpid()))
+	if note := uncalibratedLead(owner); note != "" {
+		say(note)
+	}
 	w := &watchState{t: t, say: say, seen: map[string]term.ProgramStatus{}}
 	for round := 1; ; round++ {
 		start := t.clock().Now()

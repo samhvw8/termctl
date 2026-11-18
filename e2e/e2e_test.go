@@ -36,6 +36,10 @@ func TestMain(m *testing.M) {
 	if out, err := exec.Command("go", "build", "-o", filepath.Join(dir, "agy", "agy"), "../internal/termtest/fakeharness").CombinedOutput(); err != nil {
 		panic(string(out))
 	}
+	// And under the name omp: a lead whose input line is calibrated, so dialog notices are typed to it.
+	if out, err := exec.Command("go", "build", "-o", filepath.Join(dir, "omp", "omp"), "../internal/termtest/fakeharness").CombinedOutput(); err != nil {
+		panic(string(out))
+	}
 	// A child process that forgets its own setting must still miss the live registry.
 	state, err := os.MkdirTemp("", "termctl-e2e-state")
 	if err != nil {
@@ -84,6 +88,20 @@ type rig struct {
 }
 
 func fakeCmd(log string) string { return filepath.Join(binDir, "fakeharness") + " " + log }
+
+// ompCmd runs the fake as omp: a lead with a calibrated input line, the only kind the watcher types
+// dialog notices to.
+func ompCmd(log string) string { return filepath.Join(binDir, "omp", "omp") + " " + log }
+
+// lead opens a pane running the fake as omp, and returns it and its log.
+func (r *rig) lead() (string, string) {
+	r.t.Helper()
+	log := filepath.Join(r.tmp, "lead.log")
+	p := tmux(r.t, "new-window", "-d", "-P", "-F", "#{pane_id}", "-n", "lead", "--", ompCmd(log))
+	tmux(r.t, "set-option", "-p", "-t", p, "@termctl_label", "lead")
+	waitFor(r.t, "lead prompt", func() bool { return strings.Contains(tmux(r.t, "capture-pane", "-p", "-t", p), "╰─") })
+	return p, log
+}
 
 func promptShown(t *testing.T, pane string) bool {
 	for _, f := range strings.Fields(tmux(t, "capture-pane", "-p", "-t", pane)) {

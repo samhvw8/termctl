@@ -107,7 +107,7 @@ func (r *leadRig) ops(args ...string) (int, string, string) {
 	return code, stdout.String(), stderr.String()
 }
 
-func leadCmd(log string) string { return "env FAKE_ECHO=full " + fakeCmd(log) }
+func leadCmd(log string) string { return "env FAKE_ECHO=full " + ompCmd(log) } // a calibrated lead: dialog notices are typed to it
 
 func findPane(b term.Backend, id string) *term.Pane {
 	panes, err := b.ListPanes()

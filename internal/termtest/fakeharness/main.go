@@ -7,6 +7,8 @@
 // the request as msg. With FAKE_TRAP_INT=1 it logs and survives Ctrl-C. With FAKE_ECHO=full
 // it echoes each line whole ("got: <line>"), not cut to 40 characters, and takes lines of any length.
 //
+// Run under the name "omp" it prompts with omp's "╰─ ", so its pane reads as a calibrated lead.
+//
 // "/dialog" draws an Antigravity CLI permission dialog (as captured from agy 1.5.10) and reads keys
 // unbuffered: up and down move the selection, Enter answers and logs "<<ANSWER n>>", a lone Esc cancels
 // and logs "<<CANCELLED>>". Run under the
@@ -20,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +43,10 @@ func reportBlocked(msg string) {
 
 func main() {
 	logPath := os.Args[1]
+	prompt := "> "
+	if filepath.Base(os.Args[0]) == "omp" {
+		prompt = "╰─ "
+	}
 	delay := 1.5
 	if v, err := strconv.ParseFloat(os.Getenv("FAKE_CLEAR_DELAY"), 64); err == nil {
 		delay = v
@@ -55,7 +62,7 @@ func main() {
 			for range c {
 				fmt.Fprintln(f, "<<SIGINT>>")
 				f.Sync()
-				fmt.Print("<<INTERRUPTED>>\n> ")
+				fmt.Print("<<INTERRUPTED>>\n" + prompt)
 			}
 		}()
 	}
@@ -64,7 +71,7 @@ func main() {
 	in := bufio.NewReaderSize(os.Stdin, 1<<16)
 	status := "idle"
 	for {
-		fmt.Print("> ")
+		fmt.Print(prompt)
 		report(status)
 		status = "idle"
 		line, err := in.ReadString('\n')

@@ -460,3 +460,56 @@ func TestRoundsKeepTheirCadenceWhenAStatusPollAnnounces(t *testing.T) {
 		t.Fatalf("round 2 started %.2f s after round 1, want 3", took)
 	}
 }
+
+// A lead whose harness has no calibrated input reader (codex, gemini, opencode, generic) is never typed a
+// dialog notice: typed blind, its letters could land in the lead's own menus. The notice is held, the
+// dialog stays marked for task ls and is returned by task wait, and task new and task send warn once.
+// Task results are still typed, as before (round-6 review F13/R4).
+func TestDialogNoticesToAnUncalibratedLeadAreHeld(t *testing.T) {
+	var warned []string
+	old := Warn
+	Warn = func(m string) { warned = append(warned, m) }
+	defer func() { Warn = old }()
+	r := newRig(t)
+	r.owner.Process = "python3"
+	x, _ := dialogTask(t, r)
+	if len(warned) != 1 || !strings.Contains(warned[0], "dialog notices") || !strings.Contains(warned[0], "task wait") {
+		t.Fatalf("task new must warn once: %q", warned)
+	}
+	if err := r.tasks.Watch(WatchOpts{Rounds: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if notes := ownerNotes(r); len(notes) != 0 {
+		t.Fatalf("a dialog notice was typed to an uncalibrated lead: %q", notes)
+	}
+	d := r.data()
+	if len(d.Pending) != 1 || d.Pending[0].Kind != "dialog" || d.Pending[0].Claimed != 0 || d.Tasks[x.ID].Dialog == nil {
+		t.Fatalf("the notice must stay held and the dialog marked: %+v %+v", d.Pending, d.Tasks[x.ID].Dialog)
+	}
+	w, err := r.tasks.Wait(x.ID, false, 5)
+	if err != nil || w == nil || w.Dialog == nil {
+		t.Fatalf("task wait must return the held dialog: %+v %v", w, err)
+	}
+	r.b.State[x.Pane].Dialog = nil
+	warned = nil
+	if err := r.tasks.Send(x.ID, "more", false); err != nil {
+		t.Fatal(err)
+	}
+	if len(warned) != 1 || !strings.Contains(warned[0], "dialog notices") {
+		t.Fatalf("task send must warn once: %q", warned)
+	}
+	if _, err := r.as(r.pane(x)).Done(x.ID, "ok", "finished", ""); err != nil {
+		t.Fatal(err)
+	}
+	if !termtest.Contains(r.b.Texts(r.owner.ID), "RE: task "+x.ID) {
+		t.Fatalf("a task result still reaches an uncalibrated lead: %q", r.b.Texts(r.owner.ID))
+	}
+	// A calibrated lead is told, and not warned.
+	warned = nil
+	r2 := newRig(t)
+	dialogTask(t, r2)
+	r2.tasks.Watch(WatchOpts{Rounds: 1})
+	if len(warned) != 0 || len(ownerNotes(r2)) != 1 {
+		t.Fatalf("calibrated lead: warned %q, notes %q", warned, ownerNotes(r2))
+	}
+}

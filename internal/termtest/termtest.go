@@ -250,6 +250,9 @@ func (f *Fake) capture(p *term.Pane) []string {
 		}
 		return append(screen, d.lines()...)
 	}
+	if p.Process == "omp" { // omp's input line, with what is typed on it
+		return append(screen, "╰─ "+st.Input)
+	}
 	if p.Process == "fakeagent" || p.Process == "claude" { // spawned panes pass every profile's input-line check
 		rule := strings.Repeat("─", 40)
 		screen = append(screen, rule, "❯", rule, "╰─")

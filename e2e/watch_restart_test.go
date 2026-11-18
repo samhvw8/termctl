@@ -33,11 +33,12 @@ var watchingPID = regexp.MustCompile(`watching the tasks of \S+ \(pid (\d+)\)`)
 // it goes on serving the owner, so an upgraded binary never serves old parsers and fingerprints.
 func TestWatcherRestartsIntoANewBuild(t *testing.T) {
 	r := newRig(t)
+	lead, leadLog := r.lead()
 	bin := filepath.Join(r.tmp, "bin", "harness-ops")
 	os.MkdirAll(filepath.Dir(bin), 0o755)
 	copyFile(t, filepath.Join(binDir, "harness-ops"), bin)
 	workerLog := filepath.Join(r.tmp, "agy.log")
-	code, out, stderr := r.opsBin(bin, r.harness, "task", "new", "generic", "--title", "restart", "--brief", "x", "--cwd", r.tmp,
+	code, out, stderr := r.opsBin(bin, lead, "task", "new", "generic", "--title", "restart", "--brief", "x", "--cwd", r.tmp,
 		"--command", filepath.Join(binDir, "agy", "agy")+" "+workerLog, "--timeout", "30")
 	if code != 0 {
 		t.Fatal(out, stderr)
@@ -66,17 +67,17 @@ func TestWatcherRestartsIntoANewBuild(t *testing.T) {
 
 	// The restarted watcher still serves the owner.
 	waitFor(t, "brief", func() bool { return len(readLog(workerLog)) > 0 })
-	_, shown, _ := r.ops(r.harness, "task", "show", id, "--json")
+	_, shown, _ := r.ops(lead, "task", "show", id, "--json")
 	worker := strings.SplitN(regexp.MustCompile(`"pane": "([^"]+)"`).FindStringSubmatch(shown)[1], ":", 2)[1]
 	waitFor(t, "worker reads as agy", func() bool {
-		_, out, _ := r.ops(r.harness, "which", "tmux:"+worker)
+		_, out, _ := r.ops(lead, "which", "tmux:"+worker)
 		return strings.Contains(out, " agy ")
 	})
 	tmux(t, "send-keys", "-t", worker, "/dialog", "Enter")
 	waitFor(t, "dialog notice after the restart", func() bool {
-		return strings.Contains(strings.Join(readLog(r.log), "\n"), "DIALOG")
+		return strings.Contains(strings.Join(readLog(leadLog), "\n"), "DIALOG")
 	})
-	if code, _, stderr := r.ops(r.harness, "task", "close", "--force", id); code != 0 {
+	if code, _, stderr := r.ops(lead, "task", "close", "--force", id); code != 0 {
 		t.Fatal(stderr)
 	}
 	waitFor(t, "watcher stops", func() bool { return strings.Contains(watchLog(), "no running task and no held notice left") })

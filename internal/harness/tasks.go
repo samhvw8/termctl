@@ -458,6 +458,22 @@ func (t *Tasks) fail(id string, cause error) {
 	}
 }
 
+// uncalibratedLead is the note for a lead whose harness has no calibrated input reader, or "": the watcher
+// types it no dialog notice (its letters could land in the lead's own menus), and task wait returns them.
+func uncalibratedLead(lead *term.Pane) string {
+	if lead == nil || ForProcess(lead.Process).Calibrated {
+		return ""
+	}
+	return fmt.Sprintf("%s runs %s, whose input line is not calibrated: dialog notices are not typed to it; task wait returns its workers' dialogs",
+		lead.Address(), HarnessName(lead))
+}
+
+func (t *Tasks) warnUncalibratedLead() {
+	if note := uncalibratedLead(t.Sender); note != "" {
+		Warn(note)
+	}
+}
+
 // New starts a task: it reserves a slot, spawns or reuses a pane, and submits the brief.
 func (t *Tasks) New(o NewOpts) (*Task, error) {
 	if (o.Brief == "") == (o.BriefFile == "") {
@@ -529,6 +545,7 @@ func (t *Tasks) New(o NewOpts) (*Task, error) {
 		t.fail(id, err)
 		return nil, err
 	}
+	t.warnUncalibratedLead()
 	d, err := t.Reg.Read()
 	if err != nil {
 		return nil, err
@@ -807,6 +824,7 @@ func (t *Tasks) Send(id, text string, force bool) error {
 	if _, err := t.ops(b, t.Sender).Msg(p, fmt.Sprintf("task %s: %s (%s)", x.ID, text, footer(x.ID)), MsgOpts{Force: force}); err != nil {
 		return err
 	}
+	t.warnUncalibratedLead()
 	if x.Status == "running" {
 		return nil
 	}
@@ -1123,7 +1141,7 @@ func (t *Tasks) FlushPending() (int, error) {
 		if err := t.Reg.Update(func(d *Data) error {
 			for i, q := range d.Pending {
 				if q.Task == p.Task && q.Created == p.Created {
-					if outcome == "retry" {
+					if outcome == "retry" || outcome == "held" {
 						q.Claimed, q.ClaimPid = 0, 0
 					} else {
 						if x := d.Tasks[p.Task]; x != nil && p.Kind == "" {
@@ -1182,6 +1200,9 @@ func (t *Tasks) deliver(p Pending) string {
 	}
 	if pane == nil {
 		return "owner-gone"
+	}
+	if p.Kind == "dialog" && !ForProcess(pane.Process).Calibrated {
+		return "held" // typed blind, its letters could land in the lead's own menus: task wait returns it
 	}
 	if _, err := t.ops(b, nil).Msg(pane, p.Text, MsgOpts{Tag: p.Tag}); err != nil {
 		var te *term.Error
