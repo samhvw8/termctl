@@ -269,7 +269,7 @@ func (b *TmuxBackend) Capture(p *Pane, lines int) ([]string, error) {
 }
 
 // HistoryIsSafe: capture-pane -S reads the pane's history buffer; the program sees nothing.
-func (b *TmuxBackend) HistoryIsSafe() bool { return true }
+func (b *TmuxBackend) HistoryIsSafe(*Pane) bool { return true }
 
 func (b *TmuxBackend) Close(p *Pane) error {
 	_, err := b.run("kill-pane", "-t", p.Native)

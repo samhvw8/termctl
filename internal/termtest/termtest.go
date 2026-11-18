@@ -91,7 +91,7 @@ type Fake struct {
 }
 
 // HistoryIsSafe makes the fake a term.SafeHistory when History is set.
-func (f *Fake) HistoryIsSafe() bool { return f.History }
+func (f *Fake) HistoryIsSafe(*term.Pane) bool { return f.History }
 
 // StatusIsFree makes the fake a term.FreeStatus unless CostlyStatus is set.
 func (f *Fake) StatusIsFree() bool { return !f.CostlyStatus }
