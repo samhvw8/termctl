@@ -485,3 +485,58 @@ func harnessFP(lines []string) string {
 	}
 	return ""
 }
+
+// spawn with a prompt and msg (or send) to a pane you started start a watcher where work starts, and
+// record the work; a spawn without a prompt, and a msg to a pane you did not start, start none. A lead
+// whose harness is not typed dialog notices is warned on spawn and on msg to its own panes.
+func TestSpawnWithAPromptAndMsgToYourPaneStartAWatcher(t *testing.T) {
+	e := newEnv(t)
+	e.app.Factory = func(string, map[string]string) (term.Backend, error) { return e.b, nil }
+	var started []string
+	e.app.StartWatcher = func(_ *Options, log string) error { started = append(started, log); return nil }
+	if code, out, stderr := e.run("spawn", "claude", "--command", "fake", "--label", "quiet", "--timeout", "30"); code != 0 || len(started) != 0 {
+		t.Fatal(code, out, stderr, started)
+	}
+	code, out, stderr := e.run("spawn", "claude", "--command", "fake", "--label", "partner", "--prompt", "review the plan", "--timeout", "30")
+	if code != 0 || len(started) != 1 {
+		t.Fatal(code, out, stderr, started)
+	}
+	partner := strings.TrimSpace(out)
+	worked := func() float64 {
+		d, err := harness.NewRegistry("").Read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d.Panes[partner].Worked
+	}
+	if worked() == 0 {
+		t.Fatal("the spawn's prompt was not recorded as work")
+	}
+	for _, cmd := range []string{"msg", "send"} {
+		if code, _, stderr := e.run(cmd, "partner", "your turn"); code != 0 {
+			t.Fatal(cmd, code, stderr)
+		}
+	}
+	if len(started) != 3 {
+		t.Fatalf("msg and send to your pane must start a watcher: %d starts", len(started))
+	}
+	if code, _, stderr := e.run("msg", "target", "hello"); code != 0 || len(started) != 3 {
+		t.Fatal("a msg to a pane you did not start started a watcher", code, stderr, len(started))
+	}
+	e.b.Me.Process = "python3" // a lead whose input line is not calibrated
+	var warned string
+	old := harness.Warn
+	harness.Warn = func(m string) { warned += m + "\n" }
+	defer func() { harness.Warn = old }()
+	note := "dialog notices are not typed to it"
+	if e.run("msg", "partner", "again"); strings.Count(warned, note) != 1 || !strings.Contains(warned, "ls --mine") {
+		t.Fatalf("msg to your pane must warn once: %q", warned)
+	}
+	warned = ""
+	if e.run("msg", "target", "hi"); strings.Contains(warned, note) {
+		t.Fatalf("msg to another pane warned: %q", warned)
+	}
+	if e.run("spawn", "claude", "--command", "fake", "--timeout", "30"); strings.Count(warned, note) != 1 {
+		t.Fatalf("spawn must warn once: %q", warned)
+	}
+}

@@ -656,3 +656,130 @@ func TestARunningTaskTakesThePaneMark(t *testing.T) {
 	}
 	_ = dlg
 }
+
+// spawnWorking starts a pane as spawn --prompt does: a claude pane the owner gave work.
+func spawnWorking(t *testing.T, r *rig, label string) *term.Pane {
+	t.Helper()
+	p, err := r.tasks.Spawn("claude", "tab", "/w", SpawnOpts{Command: "claude", Label: label, Timeout: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Process = "claude"
+	if owned, err := r.tasks.GaveWork(r.b, p); !owned || err != nil {
+		t.Fatal(owned, err)
+	}
+	return p
+}
+
+// A watcher started for a spawned pane's work (no task) stays on while the pane works, by its program status
+// where the terminal keeps one or by its screen, and stops once the pane has looked idle quietRounds rounds
+// in a row after workGrace: it is not kept on merely because the pane is open.
+func TestWatcherLivesWhileASpawnedPaneWorks(t *testing.T) {
+	for _, viaStatus := range []bool{true, false} {
+		r := newRig(t)
+		p := spawnWorking(t, r, "partner")
+		work := func(on bool) {
+			switch {
+			case viaStatus && on:
+				r.b.Statuses = map[string]term.ProgramStatus{p.ID: {State: "working"}}
+			case viaStatus:
+				r.b.Statuses = map[string]term.ProgramStatus{p.ID: {State: "idle"}}
+			case on:
+				r.b.State[p.ID].Log = []string{"✻ Thinking… (esc to interrupt)"}
+			default:
+				r.b.State[p.ID].Log = []string{"done"}
+			}
+		}
+		work(true)
+		const busyRounds = 8 // longer than workGrace: the pane's own state keeps the watcher on
+		rounds := 0
+		err := r.tasks.Watch(WatchOpts{Restart: func() bool {
+			rounds++
+			if rounds == busyRounds+1 {
+				work(false)
+			}
+			return rounds > 100
+		}})
+		if err != nil || rounds != busyRounds+quietRounds {
+			t.Fatalf("status=%v: stopped after %d rounds (err %v), want %d: %d at work, then %d idle", viaStatus, rounds, err, busyRounds+quietRounds, busyRounds, quietRounds)
+		}
+	}
+	// An idle spawned pane nobody gave work does not start or keep a watcher.
+	r := newRig(t)
+	p, _ := r.tasks.Spawn("claude", "tab", "/w", SpawnOpts{Command: "claude", Timeout: 60})
+	p.Process = "claude"
+	rounds := 0
+	r.tasks.Watch(WatchOpts{Restart: func() bool { rounds++; return rounds > 100 }})
+	if rounds != 1 {
+		t.Fatalf("an idle pane kept the watcher %d rounds", rounds)
+	}
+}
+
+// Work just given counts for workGrace even before the pane looks busy (a harness takes a moment), and a
+// dialog on the pane keeps the watcher on until it is answered: blocked is at work.
+func TestWorkGraceAndAnOpenDialogKeepTheWatcherOn(t *testing.T) {
+	r := newRig(t)
+	p := spawnWorking(t, r, "partner") // idle screen from the start
+	rounds := 0
+	r.tasks.Watch(WatchOpts{Restart: func() bool { rounds++; return rounds > 100 }})
+	if want := int(workGrace/WatchInterval) + quietRounds; rounds != want {
+		t.Fatalf("stopped after %d rounds, want %d: grace, then quiet rounds", rounds, want)
+	}
+	dlg := &termtest.Dialog{Body: "touch x", Options: []string{"Yes", "No"}, Selected: 1}
+	r.b.State[p.ID].Dialog = dlg
+	rounds = 0
+	r.tasks.Watch(WatchOpts{Restart: func() bool {
+		rounds++
+		if rounds == 30 {
+			dlg.Answer = 1
+		}
+		return rounds > 100
+	}})
+	if rounds != 29+quietRounds || len(ownerNotes(r)) != 1 {
+		t.Fatalf("rounds %d, notices %q: the open dialog must keep the watcher on until answered", rounds, ownerNotes(r))
+	}
+}
+
+// Work given to one of the owner's panes after the watcher read the registry, but before it let go of
+// its lock, found a watcher running and started none. The stopping watcher looks again once the lock is
+// free and goes on (as for a task created meanwhile).
+func TestStoppingWatcherServesWorkGivenMeanwhile(t *testing.T) {
+	r := newRig(t)
+	p, _ := r.tasks.Spawn("generic", "tab", "/w", SpawnOpts{Command: "x", Timeout: 60}) // no dialog reader: not read
+	probed := &probe{Fake: r.b, clock: r.clock}
+	ts := probeTasks(r, probed)
+	probed.onList = func(n int) {
+		if n == 1 { // the owner check, after the read that found no work
+			if owned, err := r.tasks.GaveWork(r.b, p); !owned || err != nil {
+				t.Error(owned, err)
+			}
+		}
+	}
+	var logs []string
+	rounds := 0
+	ts.Watch(WatchOpts{Log: func(s string) { logs = append(logs, s) }, Restart: func() bool { rounds++; return rounds > 100 }})
+	if !termtest.Contains(logs, "work came while stopping; watching again") || rounds < 2 {
+		t.Fatalf("rounds %d, log %q", rounds, logs)
+	}
+}
+
+// GaveWork records work only on a pane the caller started, never on another pane or its own.
+func TestGaveWorkOnlyMarksYourOwnPanes(t *testing.T) {
+	r := newRig(t)
+	p, _ := r.tasks.Spawn("claude", "tab", "/w", SpawnOpts{Command: "claude", Timeout: 60})
+	if owned, _ := r.as(r.other).GaveWork(r.b, p); owned {
+		t.Fatal("another pane's work recorded")
+	}
+	if owned, _ := r.tasks.GaveWork(r.b, r.other); owned {
+		t.Fatal("a pane nobody started counted as yours")
+	}
+	if owned, _ := r.tasks.GaveWork(r.b, r.owner); owned {
+		t.Fatal("your own pane counted as one you started")
+	}
+	if rec := r.data().Panes[p.ID]; rec.Worked != 0 {
+		t.Fatal(rec.Worked)
+	}
+	if owned, _ := r.tasks.GaveWork(r.b, p); !owned || r.data().Panes[p.ID].Worked != r.clock.T {
+		t.Fatal(owned, r.data().Panes[p.ID])
+	}
+}

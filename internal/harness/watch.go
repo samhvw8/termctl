@@ -28,6 +28,9 @@ type Signal struct {
 	Dialog *Dialog
 	Status string
 	At     float64 // when the screen was captured; 0 when unknown
+	// Working: the program is working or blocked, by its own status where the terminal keeps one, else by
+	// a busy pattern on its screen. A dialog is blocked whatever the status says.
+	Working bool
 }
 
 // Source finds signals for tasks. The screen source reads each worker's screen.
@@ -215,6 +218,12 @@ func (t *Tasks) read(ws []worker, status map[string]term.ProgramStatus) []Signal
 	}
 	var out []Signal
 	for i, w := range ws {
+		working := false
+		if st, ok := status[w.p.ID]; ok && st.State != "" {
+			working = st.State == "working" || st.Blocked()
+		} else if screens[i] != nil {
+			working = w.prof.IsBusy(screens[i])
+		}
 		switch {
 		case screens[i] == nil:
 		case dialogs[i] != nil:
@@ -224,7 +233,9 @@ func (t *Tasks) read(ws []worker, status map[string]term.ProgramStatus) []Signal
 			}
 			out = append(out, sig)
 		case w.prof.ReadInput(screens[i]) != nil:
-			out = append(out, Signal{Task: w.taskID(), Pane: w.p.ID, Kind: "clear", At: ats[i]})
+			out = append(out, Signal{Task: w.taskID(), Pane: w.p.ID, Kind: "clear", At: ats[i], Working: working})
+		default: // no dialog and no input line: a turn in progress, or a screen this reader does not know
+			out = append(out, Signal{Task: w.taskID(), Pane: w.p.ID, Kind: "busy", At: ats[i], Working: working})
 		}
 	}
 	return out
@@ -616,46 +627,99 @@ func (t *Tasks) Watch(o WatchOpts) error {
 			return nil
 		}
 		running := runningTasks(d, owner.ID, t.SenderRef)
-		if len(running) == 0 && !holdsNotice(d, owner.ID, t.SenderRef) {
-			t.stopMemo()
-			// A task created after the read above found this lock held, so it started no watcher. Look
-			// again once the lock is free, and serve what came, unless a new watcher took the lock first.
-			lock.Close()
-			if d, err = t.Reg.Read(); err != nil {
-				return err
+		panes, gone := t.paneWorkers(d, owner.ID, t.SenderRef)
+		idle := len(running) == 0 && len(panes) == 0 && len(gone) == 0 && !t.keepOn(d, owner.ID)
+		if !idle {
+			w.ws = append(t.workers(running), panes...)
+			status := programStatuses(w.ws, w.statusErr)
+			w.remember(status)
+			sigs := t.read(w.ws, status)
+			for _, id := range gone {
+				sigs = append(sigs, Signal{Pane: id, Kind: "clear"})
 			}
-			if len(runningTasks(d, owner.ID, t.SenderRef)) == 0 && !holdsNotice(d, owner.ID, t.SenderRef) {
-				say("no running task and no held notice left; stopping")
+			w.handle(d, sigs)
+			if len(running) == 0 {
+				idle = w.quietRound(sigs, t.keepOn(nil, owner.ID))
+			}
+		}
+		t.stopMemo()
+		if idle {
+			// Work given after the read above (a task new, task send, or a msg to one of the owner's panes)
+			// found this lock held, so it started no watcher. Look again once the lock is free, and serve
+			// what came, unless a new watcher took the lock first.
+			lock.Close()
+			if !t.keepOn(nil, owner.ID) {
+				say("no running task and no held notice left, and no pane of yours at work; stopping")
 				return nil
 			}
 			if lock, err = t.lockWatcher(owner.ID); err != nil {
 				if errors.Is(err, ErrWatching) {
-					say("a task came while stopping, and another watcher serves it; stopping")
+					say("work came while stopping, and another watcher serves it; stopping")
 					return nil
 				}
 				return err
 			}
 			lock.Truncate(0)
 			lock.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0)
-			say("a task came while stopping; watching again")
+			say("work came while stopping; watching again")
+			w.quiet = 0
 			continue
 		}
-		panes, gone := t.paneWorkers(d, owner.ID, t.SenderRef)
-		w.ws = append(t.workers(running), panes...)
-		status := programStatuses(w.ws, w.statusErr)
-		w.remember(status)
-		sigs := t.read(w.ws, status)
-		for _, id := range gone {
-			sigs = append(sigs, Signal{Pane: id, Kind: "clear"})
-		}
-		w.handle(d, sigs)
-		t.stopMemo()
 		if o.Rounds > 0 && round >= o.Rounds {
 			return nil
 		}
 		// Rounds start every Interval: the time a round took (lists, reads, notices) is not added on top.
 		w.between(max(o.Interval-(t.clock().Now()-start), minGap), o.StatusEvery)
 	}
+}
+
+// keepOn: work the watcher must stay for whatever the screens show: a running task, a notice still
+// waiting for the owner, or a pane of the owner's given work (spawn --prompt, msg) less than workGrace ago,
+// which may not look busy yet. d nil reads the registry; a read that fails keeps the watcher on.
+func (t *Tasks) keepOn(d *Data, owner string) bool {
+	if d == nil {
+		var err error
+		if d, err = t.Reg.Read(); err != nil {
+			return true
+		}
+	}
+	if len(runningTasks(d, owner, t.SenderRef)) > 0 || holdsNotice(d, owner, t.SenderRef) {
+		return true
+	}
+	now := t.clock().Now()
+	for id, rec := range d.Panes {
+		if rec.Owner == owner && id != owner && sameServer(rec.OwnerRef, t.SenderRef) && rec.Worked > 0 && now-rec.Worked < workGrace {
+			return true
+		}
+	}
+	return false
+}
+
+const (
+	// workGrace is how long a pane given work counts as working: a harness takes a moment to show it is busy.
+	workGrace = 15.0
+	// quietRounds is how many rounds in a row the owner's panes must look idle, once one was seen at work,
+	// before the watcher stops: one idle look can fall between two steps of a turn.
+	quietRounds = 3
+)
+
+// quietRound counts a round with no running task and says whether the watcher may stop: no pane of the
+// owner's is working or blocked (its program status where the terminal keeps one, else its screen: a busy
+// pattern, or a dialog), nothing else keeps it on (keep), and, once a pane was seen at work, quietRounds
+// such rounds have passed in a row.
+func (w *watchState) quietRound(sigs []Signal, keep bool) bool {
+	busy := keep
+	for _, s := range sigs {
+		if s.Task == "" && (s.Kind == "dialog" || s.Working) {
+			busy = true
+		}
+	}
+	if busy {
+		w.quiet, w.worked = 0, true
+		return false
+	}
+	w.quiet++
+	return !w.worked || w.quiet >= quietRounds
 }
 
 // watchState is what a watcher keeps between rounds: the workers of the last round and the status each
@@ -666,6 +730,8 @@ type watchState struct {
 	ws      []worker
 	seen    map[string]term.ProgramStatus
 	lastErr string
+	quiet   int  // rounds in a row with no running task and no pane at work
+	worked  bool // a pane of the owner's was seen at work since the watcher started
 }
 
 // statusErr logs a failed status read once, until a different one comes: the read repeats every second.

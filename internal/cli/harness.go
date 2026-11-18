@@ -124,6 +124,11 @@ func (a *App) openTasks(o *Options, b term.Backend) (*harness.Tasks, error) {
 	if err != nil {
 		return nil, err
 	}
+	return a.tasksFor(o, b, sender), nil
+}
+
+// tasksFor is openTasks for a sender already found.
+func (a *App) tasksFor(o *Options, b term.Backend, sender *term.Pane) *harness.Tasks {
 	ref := map[string]string{}
 	if sender != nil {
 		if sender.Backend == b.Name() {
@@ -132,7 +137,21 @@ func (a *App) openTasks(o *Options, b term.Backend) (*harness.Tasks, error) {
 			ref = other.ServerRef()
 		}
 	}
-	return &harness.Tasks{Reg: harness.NewRegistry(""), Backend: b, Sender: sender, SenderRef: ref, Clock: a.Clock, Inbox: a.Inbox, Factory: a.Factory}, nil
+	return &harness.Tasks{Reg: harness.NewRegistry(""), Backend: b, Sender: sender, SenderRef: ref, Clock: a.Clock, Inbox: a.Inbox, Factory: a.Factory}
+}
+
+// gaveWork is called when a msg or a spawn's prompt reached pane. A pane the caller started (a pair partner,
+// a live-team member) is recorded as given work, so a watcher counts it working, and a watcher starts when
+// none runs: the pane can stop on a dialog. Any other pane changes nothing. A failure only warns: the
+// message went through.
+func (a *App) gaveWork(o *Options, tasks *harness.Tasks, b term.Backend, pane *term.Pane) {
+	owned, err := tasks.GaveWork(b, pane)
+	if err != nil {
+		fmt.Fprintf(a.Err, "harness-ops: warning: could not record the work given to %s, so no dialog watcher may run for it: %v\n", pane.Address(), err)
+	}
+	if owned {
+		a.ensureWatcher(o, tasks)
+	}
 }
 
 func (a *App) messageText(rest []string, literal bool, flags []string) (string, error) {
@@ -320,6 +339,7 @@ func (a *App) harness(argv []string) error {
 		if err != nil {
 			return err
 		}
+		a.gaveWork(o, a.tasksFor(o, ops.Backend, ops.Sender), ops.Backend, pane)
 		if sent.Busy {
 			fmt.Fprintf(a.Out, "queued for %s (%s, %s): it is working and may hold the message until its turn ends; "+
 				"an interrupt would put it back on the input line unsent\n", term.Cut(pane.Address(), 8), harness.HarnessName(pane), orFolder(pane))
@@ -427,6 +447,11 @@ func (a *App) harness(argv []string) error {
 			return err
 		}
 		fmt.Fprintln(a.Out, pane.ID)
+		if strings.TrimSpace(p.vals["--prompt"]) != "" || p.vals["--prompt-file"] != "" {
+			a.gaveWork(o, tasks, b, pane) // work starts here: a watcher, so its dialogs reach you
+		} else {
+			tasks.WarnUncalibratedLead()
+		}
 		return nil
 	case "close":
 		p, err := parseArgs(rest, []string{"--force"}, nil, -1)

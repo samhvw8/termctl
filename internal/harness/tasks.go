@@ -464,11 +464,12 @@ func uncalibratedLead(lead *term.Pane) string {
 	if lead == nil || ForProcess(lead.Process).Calibrated {
 		return ""
 	}
-	return fmt.Sprintf("%s runs %s, whose input line is not calibrated: dialog notices are not typed to it; task wait returns its workers' dialogs",
+	return fmt.Sprintf("%s runs %s, whose input line is not calibrated: dialog notices are not typed to it; task wait returns its workers' dialogs, and ls --mine shows a dialog open on a pane it started",
 		lead.Address(), HarnessName(lead))
 }
 
-func (t *Tasks) warnUncalibratedLead() {
+// WarnUncalibratedLead warns once when the caller's harness is not typed dialog notices (round-6 review R4).
+func (t *Tasks) WarnUncalibratedLead() {
 	if note := uncalibratedLead(t.Sender); note != "" {
 		Warn(note)
 	}
@@ -545,7 +546,7 @@ func (t *Tasks) New(o NewOpts) (*Task, error) {
 		t.fail(id, err)
 		return nil, err
 	}
-	t.warnUncalibratedLead()
+	t.WarnUncalibratedLead()
 	d, err := t.Reg.Read()
 	if err != nil {
 		return nil, err
@@ -639,6 +640,34 @@ func (t *Tasks) Spawn(harness, where, cwd string, opts SpawnOpts) (*term.Pane, e
 		return t.Reg.Update(func(d *Data) error { t.record(d, p, harness, opts.Label, cwd, ref); return nil })
 	}
 	return t.ops(t.Backend, t.Sender).Spawn(harness, where, cwd, opts)
+}
+
+// GaveWork records that the caller gave work to p (spawn with a prompt, msg) when p is a pane it started:
+// a watcher then counts p working for workGrace, and its stop check after letting go of its lock sees the
+// work. It reports whether p is the caller's, and warns once, as task new does, when the caller's harness
+// is not typed dialog notices. b is the backend p is on. A pane that is not the caller's is not written.
+func (t *Tasks) GaveWork(b term.Backend, p *term.Pane) (bool, error) {
+	if t.Sender == nil || t.isSelf(p.ID) {
+		return false, nil
+	}
+	d, err := t.Reg.Read()
+	if err != nil {
+		return false, err
+	}
+	ref := b.ServerRef()
+	if !t.ownsRecord(d.Panes[p.ID], ref) {
+		return false, nil
+	}
+	if err := t.Reg.Update(func(d *Data) error {
+		if rec := d.Panes[p.ID]; t.ownsRecord(rec, ref) {
+			rec.Worked = t.clock().Now()
+		}
+		return nil
+	}); err != nil {
+		return true, err
+	}
+	t.WarnUncalibratedLead()
+	return true, nil
 }
 
 // Mine keeps the panes this caller started with spawn or task new.
@@ -831,7 +860,7 @@ func (t *Tasks) Send(id, text string, force bool) error {
 	if _, err := t.ops(b, t.Sender).Msg(p, fmt.Sprintf("task %s: %s (%s)", x.ID, text, footer(x.ID)), MsgOpts{Force: force}); err != nil {
 		return err
 	}
-	t.warnUncalibratedLead()
+	t.WarnUncalibratedLead()
 	if x.Status == "running" {
 		return nil
 	}

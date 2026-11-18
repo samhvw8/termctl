@@ -79,7 +79,10 @@ type PaneRecord struct {
 	// read taken before is stale.
 	Dialog     *DialogMark `json:"dialog,omitempty"`
 	AnsweredAt float64     `json:"answered_at,omitempty"`
-	Unknown    Unknown     `json:"-"`
+	// Worked is when the owner last gave the pane work (spawn with a prompt, msg): a watcher counts it
+	// working for workGrace, since a harness takes a moment to look busy.
+	Worked  float64 `json:"worked,omitempty"`
+	Unknown Unknown `json:"-"`
 }
 
 // Pending is a task result that has not reached its owner yet.
