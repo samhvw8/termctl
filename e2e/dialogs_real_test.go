@@ -370,6 +370,7 @@ func flow(r *leadRig, notices *noticeWatch, h, cell, root string, logf func(stri
 	brief := fmt.Sprintf("Run this exact shell command and nothing else: touch %s . Do not run any other command.", yes)
 	code, out, stderr := r.ops("task", "new", h, "--title", cell, "--brief", brief, "--cwd", dir, "--command", cmd, "--where", "tab", "--timeout", "180")
 	if code != 0 {
+		closeTasksTitled(r, cell, logf) // the pane may be open: task new fails after the spawn too
 		return fail("task new: exit %d: %s %s", code, out, stderr)
 	}
 	lines := strings.Split(strings.TrimSpace(out), "\n")
@@ -539,6 +540,7 @@ func spawnFlow(r *leadRig, notices *noticeWatch, cell, root string, logf func(st
 	prompt := fmt.Sprintf("Run this exact shell command and nothing else: touch %s . Do not run any other command.", yes)
 	code, out, stderr := r.ops("spawn", "claude", "--label", cell, "--prompt", prompt, "--cwd", dir, "--command", cmd, "--where", "tab", "--timeout", "180")
 	if code != 0 {
+		closeLabelled(r, cell, logf) // the pane may be open: spawn fails after it is made too
 		return fail("spawn: exit %d: %s %s", code, out, stderr)
 	}
 	lines := strings.Split(strings.TrimSpace(out), "\n")
@@ -703,6 +705,7 @@ func tallFlow(r *leadRig, notices *noticeWatch, cell, root string, logf func(str
 		"Do not run it as a script file (no bash cmd.txt, no sh), do not split or shorten it, run nothing else.", cmdFile, filepath.Base(out))
 	code, stdout, stderr := r.ops("task", "new", "claude", "--title", cell, "--brief", brief, "--cwd", dir, "--command", cmd, "--where", "tab", "--timeout", "180")
 	if code != 0 {
+		closeTasksTitled(r, cell, logf)
 		return fail("task new: exit %d: %s %s", code, stdout, stderr)
 	}
 	lines := strings.Split(strings.TrimSpace(stdout), "\n")
@@ -786,6 +789,38 @@ func tallFlow(r *leadRig, notices *noticeWatch, cell, root string, logf func(str
 	}
 	got, _ := os.ReadFile(out)
 	return fail("task answer 1 went through, but %s does not hold the %d lines after 90 s (%d bytes)", out, tallLines, len(got))
+}
+
+// closeTasksTitled closes the panes of the tasks titled title: a task new that failed after its spawn (a
+// brief typed but not submitted, exit 4) prints no task ID, and its worker's tab would stay open.
+func closeTasksTitled(r *leadRig, title string, logf func(string, ...any)) {
+	_, out, _ := r.ops("task", "ls", "--all", "--json")
+	var tasks []struct{ ID, Title string }
+	json.Unmarshal([]byte(out), &tasks)
+	for _, x := range tasks {
+		if x.Title == title {
+			if code, _, stderr := r.ops("task", "close", "--force", x.ID); code != 0 {
+				logf("%s: task close: %s", title, stderr)
+			}
+		}
+	}
+}
+
+// closeLabelled closes the panes the lead started with this label: a spawn that failed after making its pane.
+func closeLabelled(r *leadRig, label string, logf func(string, ...any)) {
+	_, out, _ := r.ops("ls", "--mine", "--json")
+	var panes []struct {
+		PaneID string `json:"pane_id"`
+		Label  string
+	}
+	json.Unmarshal([]byte(out), &panes)
+	for _, p := range panes {
+		if p.Label == label {
+			if code, _, stderr := r.ops("close", "--force", p.PaneID); code != 0 {
+				logf("%s: close: %s", label, stderr)
+			}
+		}
+	}
 }
 
 // taskMark is the fingerprint of the dialog the watcher marked on a task, from task show; "" for none.
@@ -1072,6 +1107,7 @@ func TestDialogsRealHiddenAgy(t *testing.T) {
 		"Do not run it as a script file (no bash cmd.txt, no sh), do not split or shorten it, run nothing else."
 	code, stdout, stderr := r.ops("task", "new", "agy", "--title", cell, "--brief", brief, "--cwd", dir, "--command", cmd, "--where", "tab", "--timeout", "180")
 	if code != 0 {
+		closeTasksTitled(r, cell, t.Logf)
 		t.Fatalf("task new: exit %d: %s %s", code, stdout, stderr)
 	}
 	lines := strings.Split(strings.TrimSpace(stdout), "\n")
