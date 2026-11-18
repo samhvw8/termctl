@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -37,10 +39,12 @@ func (a *App) watch(rest []string, o *Options) error {
 	}
 	say := func(s string) { fmt.Fprintf(a.Out, "%s %s\n", time.Now().Format("15:04:05"), s) }
 	exe, _ := os.Executable()
-	err = tasks.Watch(harness.WatchOpts{Interval: interval, Log: say, Restart: changedBinary(exe)})
+	check, target := restartCheck(exe), ""
+	err = tasks.Watch(harness.WatchOpts{Interval: interval, Log: say, Restart: func() bool { target = check(); return target != "" }})
 	if errors.Is(err, harness.ErrRestart) {
 		// Same arguments and environment: an upgraded binary must not keep serving old fingerprints and parsers.
-		err = a.reexec(exe)
+		say("restarting into " + target)
+		err = a.reexec(target)
 		say("restart failed, going on with the old executable: " + err.Error())
 		err = tasks.Watch(harness.WatchOpts{Interval: interval, Log: say})
 	}
@@ -58,7 +62,75 @@ func (a *App) reexec(exe string) error {
 	if exe == "" {
 		return errors.New("the executable's path is unknown")
 	}
-	return Exec(exe, os.Args, os.Environ())
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, execedEnv+"=") { // the first of two entries wins: drop the old one
+			env = append(env, kv)
+		}
+	}
+	if key := pathKey(exe); key != "" {
+		env = append(env, execedEnv+"="+key)
+	}
+	return Exec(exe, os.Args, env)
+}
+
+// execedEnv names the build a watcher last exec'd into, as pathKey gives it, so the new process never execs
+// the same build again: a wrapper named harness-ops that runs another file would otherwise loop.
+const execedEnv = "TERMCTL_WATCH_EXECED"
+
+// pathBinary is the harness-ops that PATH runs, with symlinks resolved (mise up re-points its "latest"
+// link), or "" when PATH has none, or it resolves to a file of another name (a mise shim is a link to mise).
+func pathBinary() string {
+	p, err := exec.LookPath("harness-ops")
+	if err != nil {
+		return ""
+	}
+	if p, err = filepath.Abs(p); err != nil {
+		return ""
+	}
+	if p, err = filepath.EvalSymlinks(p); err != nil || filepath.Base(p) != "harness-ops" {
+		return ""
+	}
+	return p
+}
+
+// pathKey names one build of a file at one path: its resolved path and binaryStamp; "" when it is missing.
+func pathKey(path string) string {
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return ""
+	}
+	if stamp := binaryStamp(real); stamp != "" {
+		return real + "|" + stamp
+	}
+	return ""
+}
+
+// restartCheck is asked at each round start which executable the watcher should exec into, and says "" for
+// none: its own executable when that file is a new build (changedBinary), else the harness-ops that PATH
+// resolves to when that is not the build it runs (another path, inode, size or modification time) and has
+// stayed the same since the previous look. mise up installs a new version beside the old one and re-points
+// PATH to it, leaving the running file unchanged (round-6 review R5). Only stat calls, no process.
+func restartCheck(exe string) func() string {
+	self := changedBinary(exe)
+	running := pathKey(exe)
+	last := ""
+	return func() string {
+		if self() {
+			return exe
+		}
+		p := pathBinary()
+		key := ""
+		if p != "" {
+			key = pathKey(p)
+		}
+		stable := key == last
+		last = key
+		if key == "" || !stable || key == running || key == os.Getenv(execedEnv) {
+			return ""
+		}
+		return p
+	}
 }
 
 // binaryStamp names one build of a file: its inode, size and modification time.

@@ -37,6 +37,12 @@ func TestWatcherRestartsIntoANewBuild(t *testing.T) {
 	bin := filepath.Join(r.tmp, "bin", "harness-ops")
 	os.MkdirAll(filepath.Dir(bin), 0o755)
 	copyFile(t, filepath.Join(binDir, "harness-ops"), bin)
+	// PATH runs it through a link, as mise's "latest" link: the watcher also follows what PATH resolves to.
+	r.pathFirst = filepath.Join(r.tmp, "path")
+	os.MkdirAll(r.pathFirst, 0o755)
+	if err := os.Symlink(bin, filepath.Join(r.pathFirst, "harness-ops")); err != nil {
+		t.Fatal(err)
+	}
 	workerLog := filepath.Join(r.tmp, "agy.log")
 	code, out, stderr := r.opsBin(bin, lead, "task", "new", "generic", "--title", "restart", "--brief", "x", "--cwd", r.tmp,
 		"--command", filepath.Join(binDir, "agy", "agy")+" "+workerLog, "--timeout", "30")
@@ -61,8 +67,27 @@ func TestWatcherRestartsIntoANewBuild(t *testing.T) {
 	log := watchLog()
 	t.Log(log)
 	ms := watchingPID.FindAllStringSubmatch(log, -1)
-	if !strings.Contains(log, "the executable changed; restarting") || ms[1][1] != pid {
+	if !strings.Contains(log, "the executable changed; restarting") || !strings.Contains(log, "restarting into "+bin) || ms[1][1] != pid {
 		t.Fatalf("want an exec in place (pid %s):\n%s", pid, log)
+	}
+
+	// mise up: a new version lands beside the old one and the PATH link is re-pointed; the file the watcher
+	// runs does not change. The watcher execs the one PATH runs now (round-6 review R5).
+	v2 := filepath.Join(r.tmp, "v2", "harness-ops")
+	os.MkdirAll(filepath.Dir(v2), 0o755)
+	copyFile(t, filepath.Join(binDir, "harness-ops"), v2)
+	link := filepath.Join(r.pathFirst, "harness-ops")
+	if err := os.Symlink(v2, link+".new"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(link+".new", link); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the watcher follows PATH", func() bool { return len(watchingPID.FindAllString(watchLog(), -1)) == 3 })
+	log = watchLog()
+	real, _ := filepath.EvalSymlinks(v2)
+	if ms := watchingPID.FindAllStringSubmatch(log, -1); !strings.Contains(log, "restarting into "+real) || ms[2][1] != pid {
+		t.Fatalf("want an exec of the PATH build in place (pid %s):\n%s", pid, log)
 	}
 
 	// The restarted watcher still serves the owner.

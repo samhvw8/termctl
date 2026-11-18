@@ -85,6 +85,7 @@ type rig struct {
 	t                                *testing.T
 	tmp, socketPath, harness, sender string
 	log                              string
+	pathFirst                        string // a folder put before binDir on harness-ops's PATH
 }
 
 func fakeCmd(log string) string { return filepath.Join(binDir, "fakeharness") + " " + log }
@@ -145,7 +146,7 @@ func (r *rig) opsBin(bin, pane string, args ...string) (int, string, string) {
 		}
 	}
 	cmd.Env = append(cmd.Env, fmt.Sprintf("TMUX=%s,1,0", r.socketPath), "TMUX_PANE="+pane, "TERMCTL_STATE_DIR="+filepath.Join(r.tmp, "state"),
-		"PATH="+binDir+":"+os.Getenv("PATH"))
+		"PATH="+strings.TrimPrefix(r.pathFirst+":", ":")+binDir+":"+os.Getenv("PATH"))
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
