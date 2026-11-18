@@ -234,6 +234,7 @@ func (b *ITerm2Backend) ListPanes() ([]*Pane, error) {
 		panes = append(panes, &Pane{
 			ID: "iterm2:" + r.id, Backend: "iterm2", Native: r.id, TTY: r.tty, Title: r.title, Label: r.label,
 			Process: name, Folder: Tilde(cwds[p.pid]), IsSelf: r.id == me, Tab: r.tab, Width: r.cols, Height: r.rows, Hidden: r.hidden,
+			Rows: r.rows, // a hidden pane has no grid size: 0, and Capture reads its screen only
 		})
 	}
 	return panes, nil
@@ -412,9 +413,21 @@ func (b *ITerm2Backend) SendKey(p *Pane, key string) error {
 	return b.sendRaw(p, data)
 }
 
+// maxTrailingLines caps a history read; iTerm2 caps it at 1,000,000 itself.
+const maxTrailingLines = 100000
+
+// Capture reads the screen, or, asked for more lines than the screen has (Pane.Rows, from the listing), the
+// last lines of the buffer: the scrollback above the screen, then the screen (trailing_lines). Both are
+// the same GetBufferRequest, which iTerm2 answers from its own copy of the screen and scrollback: the
+// program sees nothing and the view does not scroll (PTYSession handleGetBufferRequest). How far back
+// the scrollback goes is the profile's Scrollback Lines.
 func (b *ITerm2Backend) Capture(p *Pane, lines int) ([]string, error) {
+	rng := &api.LineRange{ScreenContentsOnly: proto.Bool(true)}
+	if p.Rows > 0 && lines > p.Rows {
+		rng = &api.LineRange{TrailingLines: proto.Int32(int32(min(lines, maxTrailingLines)))}
+	}
 	resp, err := b.call(&api.ClientOriginatedMessage{GetBufferRequest: &api.GetBufferRequest{
-		Session: proto.String(p.Native), LineRange: &api.LineRange{ScreenContentsOnly: proto.Bool(true)}, IncludeStyles: proto.Bool(false),
+		Session: proto.String(p.Native), LineRange: rng, IncludeStyles: proto.Bool(false),
 	}})
 	if err != nil {
 		return nil, err
@@ -429,6 +442,9 @@ func (b *ITerm2Backend) Capture(p *Pane, lines int) ([]string, error) {
 	}
 	return TrimScreen(out, lines), nil
 }
+
+// HistoryIsSafe: a history read is the same GetBufferRequest as a screen read (see Capture).
+func (b *ITerm2Backend) HistoryIsSafe(*Pane) bool { return true }
 
 func (b *ITerm2Backend) Close(p *Pane) error {
 	resp, err := b.call(&api.ClientOriginatedMessage{CloseRequest: &api.CloseRequest{

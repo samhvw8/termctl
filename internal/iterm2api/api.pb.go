@@ -2112,6 +2112,7 @@ func (x *ProfileProperty) GetJsonValue() string {
 type LineRange struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	ScreenContentsOnly *bool                  `protobuf:"varint,1,opt,name=screen_contents_only,json=screenContentsOnly" json:"screen_contents_only,omitempty"`
+	TrailingLines      *int32                 `protobuf:"varint,2,opt,name=trailing_lines,json=trailingLines" json:"trailing_lines,omitempty"` // the last N lines of the buffer: the scrollback above the screen, then the screen
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -2151,6 +2152,13 @@ func (x *LineRange) GetScreenContentsOnly() bool {
 		return *x.ScreenContentsOnly
 	}
 	return false
+}
+
+func (x *LineRange) GetTrailingLines() int32 {
+	if x != nil && x.TrailingLines != nil {
+		return *x.TrailingLines
+	}
+	return 0
 }
 
 type LineContents struct {
@@ -3188,9 +3196,10 @@ const file_internal_iterm2api_api_proto_rawDesc = "" +
 	"\x0fProfileProperty\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x1d\n" +
 	"\n" +
-	"json_value\x18\x02 \x01(\tR\tjsonValue\"=\n" +
+	"json_value\x18\x02 \x01(\tR\tjsonValue\"d\n" +
 	"\tLineRange\x120\n" +
-	"\x14screen_contents_only\x18\x01 \x01(\bR\x12screenContentsOnly\"h\n" +
+	"\x14screen_contents_only\x18\x01 \x01(\bR\x12screenContentsOnly\x12%\n" +
+	"\x0etrailing_lines\x18\x02 \x01(\x05R\rtrailingLines\"h\n" +
 	"\fLineContents\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\"D\n" +
 	"\fContinuation\x12\x19\n" +

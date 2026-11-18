@@ -231,6 +231,7 @@ message ProfileProperty {
 
 message LineRange {
   optional bool screen_contents_only = 1;
+  optional int32 trailing_lines = 2; // the last N lines of the buffer: the scrollback above the screen, then the screen
 }
 
 message LineContents {
