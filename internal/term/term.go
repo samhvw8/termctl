@@ -159,22 +159,6 @@ func CheckWhere(where string) error {
 	return UsageErr("--where must be one of %s", strings.Join(Where, ", "))
 }
 
-var keyNames = []string{"enter", "escape", "tab", "backspace", "up", "down", "left", "right"}
-var ctrlKey = regexp.MustCompile(`^ctrl-[a-z]$`)
-
-func NormalizeKey(key string) (string, error) {
-	k := strings.ToLower(strings.TrimSpace(key))
-	for _, n := range keyNames {
-		if k == n {
-			return k, nil
-		}
-	}
-	if ctrlKey.MatchString(k) {
-		return k, nil
-	}
-	return "", UsageErr("unknown key '%s'. Use one of: %s, ctrl-<letter>", key, strings.Join(keyNames, ", "))
-}
-
 // CheckText refuses line breaks: send-text never submits, and one would act as Enter.
 func CheckText(text string) error {
 	if strings.ContainsAny(text, "\r\n") {

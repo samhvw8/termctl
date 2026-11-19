@@ -15,7 +15,7 @@ sources:
 | Layer | Code | Knows |
 |---|---|---|
 | 1. `termctl` | `internal/term/`, `internal/iterm2api/`, `cmd/termctl` | Panes, text, keys, capture, labels, spawn. |
-| 2. `harness-ops` | `internal/harness/`, `internal/cli/` | Draft check, slash commands, idle waits, tagged messages, spawn with readiness. |
+| 2. `harness-ops` | `internal/harness/`, `internal/cli/` | Draft check, slash commands, idle waits, tagged messages, spawn with readiness, key presses on panes the caller started (`key`). |
 
 Layer 1 has no harness knowledge. Its one exception is `term.MainProcesses`, plain data that says which programs own a pane so its folder is reported correctly. A test keeps it in sync with the profiles.
 

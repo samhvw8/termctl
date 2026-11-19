@@ -243,7 +243,10 @@ func TestRexSendAndKeys(t *testing.T) {
 	b.SendText(rexPane(), "") // rex send refuses empty input
 	b.SendKey(rexPane(), "enter")
 	b.SendKey(rexPane(), "ctrl-u")
-	want := [][]string{{"send", "-b", "abcd1234", "--", "-starts with a dash"}, {"send-key", "-b", "abcd1234", "enter"}, {"send-key", "-b", "abcd1234", "ctrl+u"}}
+	b.SendKey(rexPane(), "PageDown")
+	b.SendKey(rexPane(), "option+m")
+	want := [][]string{{"send", "-b", "abcd1234", "--", "-starts with a dash"}, {"send-key", "-b", "abcd1234", "enter"}, {"send-key", "-b", "abcd1234", "ctrl+u"},
+		{"send-key", "-b", "abcd1234", "page_down"}, {"send-key", "-b", "abcd1234", "alt+m"}}
 	if got := s.cmds(t); !reflect.DeepEqual(got, want) {
 		t.Fatal(got)
 	}

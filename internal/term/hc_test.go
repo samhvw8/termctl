@@ -476,6 +476,14 @@ func TestHcSendKeyMapping(t *testing.T) {
 	if err := b.SendKey(hcPane(), "nonsense"); code(err) != CodeUsage {
 		t.Fatal(err)
 	}
+	b.SendKey(hcPane(), "alt+m")
+	b.SendKey(hcPane(), "f5")
+	if err := b.SendKey(hcPane(), "pageup"); code(err) != CodeUsage || len(s.calls) != 5 {
+		t.Fatal("a key hc has no name for must be refused without an hc run:", err, s.calls)
+	}
+	if !reflect.DeepEqual(s.calls[3:], [][]string{{"keys", "--json", "t1", "alt+m"}, {"keys", "--json", "t1", "f5"}}) {
+		t.Fatal(s.calls)
+	}
 }
 
 func TestHcCaptureReadsScreenWhenItFits(t *testing.T) {

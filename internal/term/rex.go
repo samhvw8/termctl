@@ -482,12 +482,32 @@ func (b *RexBackend) SendText(p *Pane, text string) error {
 	return err
 }
 
-func (b *RexBackend) SendKey(p *Pane, key string) error {
+// rexKeys are the names rex send-key parses where they differ from ours; the rest join with +
+// (ctrl+c, alt+m, shift+tab). Checked against rex 0.1.0-preview.19's parser: every name here parses.
+var rexKeys = map[string]string{"pageup": "page_up", "pagedown": "page_down"}
+
+func rexKeyName(key string) (string, error) {
 	k, err := NormalizeKey(key)
+	if err != nil {
+		return "", err
+	}
+	if name, ok := rexKeys[k]; ok {
+		return name, nil
+	}
+	return strings.ReplaceAll(k, "-", "+"), nil
+}
+
+func (b *RexBackend) CheckKey(key string) error {
+	_, err := rexKeyName(key)
+	return err
+}
+
+func (b *RexBackend) SendKey(p *Pane, key string) error {
+	name, err := rexKeyName(key)
 	if err != nil {
 		return err
 	}
-	_, err = b.call("send-key", "-b", p.Native, strings.ReplaceAll(k, "-", "+"))
+	_, err = b.call("send-key", "-b", p.Native, name)
 	return err
 }
 

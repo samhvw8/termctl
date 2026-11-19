@@ -29,6 +29,11 @@ Talk to coding-agent panes. Put options before the target: everything after the 
   spawn HARNESS [--where auto|tab|split|window] [--cwd D] [--prompt T | --prompt-file F] [--label L] [--command CMD] [--timeout S]
   close [--force] TARGET                      only panes made by spawn or task new; never your own
   interrupt [--key K] TARGET                  stop the current turn
+  key [--force] TARGET KEY...                 press keys on a pane you started (spawn or task new): a menu, a picker,
+                                              shift-tab. KEY: enter escape tab shift-tab backspace delete space up down
+                                              left right home end pageup pagedown f1-f12 ctrl-X alt-X (alt+x, meta-x,
+                                              option-x too); never a plain digit. Refused on a dialog (use answer or
+                                              deny) and on a draft (exit 4, unless --force); termctl send-key is raw
   move TARGET --to TAB                        move a pane into another tab; it keeps running, with its label and task
                                               TAB: new (a tab of its own), self, tab-of:PANE, or a tab ID from ls
   pull TARGET                                 move a pane into your tab (move --to self)
@@ -59,7 +64,7 @@ Talk to coding-agent panes. Put options before the target: everything after the 
 --where auto (the default for spawn and task new): a new agent splits the largest pane in your tab, whatever
 its folder, up to 12 panes, and evens out the sizes; then a tab of an agent you started; then a new tab beside yours.
 
-Journal: every msg, spawn, slash, interrupt, close, note and task event is one line of
+Journal: every msg, spawn, slash, interrupt, key, close, note and task event is one line of
 <state>/journal.jsonl; long messages, prompts, briefs and notes are files in <state>/projects/<project>/,
 each starting with "<project path> · <unix time> · <local time> (<zone>)". <state> is TERMCTL_STATE_DIR,
 else ~/.local/state/termctl.
@@ -499,6 +504,30 @@ func (a *App) harness(argv []string) error {
 		}
 		fmt.Fprintf(a.Out, "closed %s (%s, %s)\n", term.Cut(pane.Address(), 8), harness.HarnessName(pane), orFolder(pane))
 		return nil
+	case "key":
+		p, err := parseArgs(rest, []string{"--force"}, nil, -1)
+		if err != nil {
+			return err
+		}
+		if err := applyOptions(p, o); err != nil {
+			return err
+		}
+		if len(p.pos) < 2 {
+			return term.UsageErr("usage: key [--force] <target> <key>...")
+		}
+		b, err := a.OpenBackend(o, p.pos[0])
+		if err != nil {
+			return err
+		}
+		tasks, err := a.openTasks(o, b)
+		if err != nil {
+			return err
+		}
+		res, err := tasks.Keys(p.pos[0], p.pos[1:], p.bools["--force"])
+		if res != nil && len(res.Keys) > 0 {
+			fmt.Fprintf(a.Out, "pressed %s on %s (%s, %s)\n", strings.Join(res.Keys, " "), term.Cut(res.Pane.Address(), 8), harness.HarnessName(res.Pane), orFolder(res.Pane))
+		}
+		return err
 	case "interrupt":
 		p, err := parseArgs(rest, nil, []string{"--key"}, -1)
 		if err != nil {

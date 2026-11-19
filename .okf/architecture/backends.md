@@ -111,6 +111,32 @@ Checked on real iTerm2 3.7.6 (2026-11-16) by `TestMaximizedPaneOnITerm2` in `mis
 
 **hc.** herdr-core has no tabs or splits; the Herdr app lays out terminals (`herdr.space`/`herdr.tab` labels, and its own `herdr-app do pane.swap` command). termctl does not drive the app and cannot test it without Sam's live app, so hc refuses all four.
 
+# Keys
+
+`term.NormalizeKey` (`internal/term/keys.go`) reads a key in any case, with `-` or `+` between modifier and key (`alt+m` is `alt-m`), and `meta-` or `option-` for `alt-`. Names: `enter`, `escape`, `tab`, `shift-tab`, `backspace`, `delete`, `space`, `up`, `down`, `left`, `right`, `home`, `end`, `pageup`, `pagedown`, `f1`..`f12`, `ctrl-<letter>`, `alt-<letter or digit>`. A plain digit is refused: on Claude Code a digit answers a permission dialog at once. Anything else is a usage error that lists the names.
+
+Each backend that sends keys is a `term.KeyChecker`, and `term.CheckKeys` checks a whole list before the first key goes: `termctl send-key` and `harness-ops key` both use it. A key a backend has no exact name or bytes for is refused (exit 2, `the <backend> backend cannot send key '<key>'`); nothing is approximated.
+
+| Key | tmux (`send-keys`) | iTerm2 (bytes) | Rex (`rex send-key`) | hc (`hc keys`) |
+|---|---|---|---|---|
+| enter, escape, tab, backspace | `Enter`, `Escape`, `Tab`, `BSpace` | `\r`, ESC, `\t`, DEL | same names | `enter`, `esc`, `tab`, `backspace` |
+| up, down, left, right | `Up` ... | ESC `[A` ... | same names | same names |
+| shift-tab | `BTab` | ESC `[Z` | `shift+tab` | refused |
+| space, delete | `Space`, `DC` | ` `, ESC `[3~` | same names | refused |
+| home, end | `Home`, `End` | ESC `[H`, ESC `[F` | same names | refused |
+| pageup, pagedown | `PPage`, `NPage` | ESC `[5~`, ESC `[6~` | `page_up`, `page_down` | refused |
+| f1-f12 | `F1`..`F12` | F1-F4 ESC `O` P/Q/R/S; F5 `[15~`, F6 `[17~`, F7 `[18~`, F8 `[19~`, F9 `[20~`, F10 `[21~`, F11 `[23~`, F12 `[24~` (after ESC) | `f1`..`f12` | `f1`..`f12` |
+| ctrl-x | `C-x` | the control byte | `ctrl+x` | `ctrl+x` |
+| alt-x | `M-x` | ESC, then the character | `alt+x` | `alt+x` |
+
+Where the names come from (2026-11-19):
+
+- **tmux** encodes a key for the pane's terminal. Checked on a private server with `cat -v` (`TestTmuxComboKeysReachTheProgram`): `alt+m shift-tab F5 home` arrived as `^[m^[[Z^[[15~^[[1~` (Home is ESC `[1~` under tmux's default `TERM`).
+- **iTerm2** writes the bytes as typed input, so they are xterm's in normal cursor mode. Not checked on a live tab (`mise run test:iterm` was not run for this change).
+- **Rex** 0.1.0-preview.19: `rex send-key` parses every name above (checked with `--autostart=false` against a socket with no server: an unknown name fails with `invalid key`, exit 2, a known one reaches the connect step, exit 4). Rex encodes the key for the program's keyboard mode itself; the bytes a program gets were not checked on a live server.
+- **hc** 0.1.19 documents its names only by example: "enter, esc, tab, up, ctrl+c, alt+x, f5, a". Its parser is compiled code with no name table in its strings, and every hc command, `--help` included, starts a core, so the other names were not tried. hc gets the documented patterns (and `backspace`, `down`, `left`, `right`, which it was sent before); `shift-tab`, `space`, `delete`, `home`, `end`, `pageup` and `pagedown` are refused until a private-core run shows hc's names for them.
+- **Ghostty** sends nothing (unsupported).
+
 # Backends
 
 | Backend | Notes |

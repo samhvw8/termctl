@@ -127,6 +127,32 @@ func TestTmuxTextIsLiteral(t *testing.T) {
 	}
 }
 
+// The combos reach the program as the bytes a terminal sends: cat -v prints them in caret notation.
+func TestTmuxComboKeysReachTheProgram(t *testing.T) {
+	b := tmuxRig(t)
+	p, err := b.Spawn("tab", "cat -v", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := CheckKeys(b, []string{"alt+m", "shift-tab", "F5", "home", "enter"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range keys {
+		if err := b.SendKey(p, k); err != nil {
+			t.Fatal(k, err)
+		}
+	}
+	waitLines(t, b, p, func(l []string) bool {
+		for _, ln := range l {
+			if ln == "^[m^[[Z^[[15~^[[1~" || ln == "^[m^[[Z^[[15~^[[H" {
+				return true
+			}
+		}
+		return false
+	})
+}
+
 func TestTmuxKeys(t *testing.T) {
 	b := tmuxRig(t)
 	p, _ := b.Spawn("tab", "cat", "", "")

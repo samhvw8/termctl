@@ -101,6 +101,18 @@ Each round also delivers held-back results. The watcher stops when the owner pan
 
 By task ID, both need an open task: running, ready or blocked. A `failed` task is refused by its ID (exit 2), although its worker's session can still be open (`failed` also means closed by its owner before it finished); answer a live one through its pane address. `deny` presses Esc, which Claude Code and agy both document as cancel, and never Enter, then waits up to 3 s for the dialog to go (exit 1 if it stays). Enter takes the option that is really selected, whatever the parser read: until 2026-11-18 deny moved to the first option starting with "No" and pressed Enter, and a review (A2) showed a worker's own text wrapped onto lines of its own as `> 1. No, cancel` made the parser take a selected "Yes" for that "No", so a deny approved the request. Test: `TestDenyPressesEscNeverEnter`.
 
+## key
+
+`harness-ops key [--force] TARGET KEY...` presses keys on a harness the caller started: a menu, a picker, a mode switch such as `shift-tab`. TARGET is a task ID (the task's worker) or a pane the caller started with `spawn` or `task new`, the same ownership `answer` checks. Code: `Tasks.Keys` in `internal/harness/keys.go`. Key names and what each backend sends: [backends](/architecture/backends.md#keys). Every key is checked, by name and against the backend, before the first is pressed; the keys pressed are journaled as one `key` entry, and the command prints `pressed <keys> on <pane> (<harness>, <title>)`.
+
+| Case | Exit |
+|---|---|
+| No key, an unknown key, a plain digit, or a key the pane's backend cannot send | 2 |
+| Your own pane | 2 |
+| A pane the caller did not start, or a task it does not own: `termctl send-key` is the raw tool for any pane | 6 |
+| A permission dialog on screen (a profile with a dialog reader reads one), with or without `--force`: `answer` and `deny` check what they choose, keys would not | 7 |
+| A calibrated harness shows text on its input line, unless `--force` | 4 |
+
 # Safety rules
 
 | Rule | Exit |

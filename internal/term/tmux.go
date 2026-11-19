@@ -18,8 +18,30 @@ const (
 var tmuxFields = []string{"pane_id", "pane_tty", "pane_title", tmuxLabelOpt, "pane_current_path", "pane_current_command", "window_id", "pane_width", "pane_height"}
 
 var tmuxKeys = map[string]string{
-	"enter": "Enter", "escape": "Escape", "tab": "Tab", "backspace": "BSpace",
-	"up": "Up", "down": "Down", "left": "Left", "right": "Right",
+	"enter": "Enter", "escape": "Escape", "tab": "Tab", "shift-tab": "BTab", "backspace": "BSpace",
+	"delete": "DC", "space": "Space", "up": "Up", "down": "Down", "left": "Left", "right": "Right",
+	"home": "Home", "end": "End", "pageup": "PPage", "pagedown": "NPage",
+}
+
+// tmuxKeyName is the tmux send-keys name of a key: C-x, M-x and F1..F12 beside the table. tmux encodes
+// it for the pane's terminal (Home is ESC [1~ under TERM=screen or tmux).
+func tmuxKeyName(key string) (string, error) {
+	k, err := NormalizeKey(key)
+	if err != nil {
+		return "", err
+	}
+	if name, ok := tmuxKeys[k]; ok {
+		return name, nil
+	}
+	switch {
+	case ctrlKey.MatchString(k):
+		return "C-" + k[len("ctrl-"):], nil
+	case altKey.MatchString(k):
+		return "M-" + k[len("alt-"):], nil
+	case fnKey.MatchString(k):
+		return "F" + k[1:], nil
+	}
+	return "", cannotSendKey("tmux", k)
 }
 
 // TmuxBackend drives tmux through its CLI. SocketPath, when set, wins over Socket.
@@ -247,14 +269,15 @@ func (b *TmuxBackend) SendText(p *Pane, text string) error {
 	return err
 }
 
+func (b *TmuxBackend) CheckKey(key string) error {
+	_, err := tmuxKeyName(key)
+	return err
+}
+
 func (b *TmuxBackend) SendKey(p *Pane, key string) error {
-	k, err := NormalizeKey(key)
+	name, err := tmuxKeyName(key)
 	if err != nil {
 		return err
-	}
-	name, ok := tmuxKeys[k]
-	if !ok {
-		name = "C-" + strings.Split(k, "-")[1]
 	}
 	_, err = b.run("send-keys", "-t", p.Native, name)
 	return err

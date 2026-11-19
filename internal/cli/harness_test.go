@@ -468,6 +468,52 @@ func TestAnswerAndDenyCommands(t *testing.T) {
 	}
 }
 
+func TestKeyCommand(t *testing.T) {
+	e := newEnv(t)
+	e.app.Factory = func(string, map[string]string) (term.Backend, error) { return e.b, nil }
+	code, out, stderr := e.run("spawn", "claude", "--command", "fake", "--label", "partner", "--timeout", "30")
+	if code != 0 {
+		t.Fatal(code, out, stderr)
+	}
+	pane := e.b.Panes[len(e.b.Panes)-1]
+	pane.Process = "claude"
+	pane.Title = "partner title"
+	pressed := func() int { return len(e.b.Typed(pane.ID)) }
+	before := pressed()
+	e.b.State[pane.ID].Dialog = &termtest.Dialog{Body: "touch x", Options: []string{"Yes", "No"}, Selected: 1}
+	for _, c := range []struct {
+		args []string
+		code int
+		text string
+	}{
+		{[]string{"key", "partner"}, 2, "usage: key"},
+		{[]string{"key", "partner", "1"}, 2, "plain digit"},
+		{[]string{"key", "me", "enter"}, 2, "own pane"},
+		{[]string{"key", "target", "enter"}, 6, "termctl send-key"},
+		{[]string{"key", "partner", "down"}, 7, "answer or deny"},
+		{[]string{"key", "--force", "partner", "down"}, 7, "answer or deny"},
+	} {
+		if code, _, stderr := e.run(c.args...); code != c.code || !strings.Contains(stderr, c.text) {
+			t.Fatalf("%v: exit %d, want %d: %s", c.args, code, c.code, stderr)
+		}
+	}
+	e.b.State[pane.ID].Dialog = nil
+	pane.Process = "omp" // a calibrated input line the fake draws with its text
+	e.b.State[pane.ID].Input = "draft"
+	if code, _, stderr := e.run("key", "partner", "enter"); code != 4 || !strings.Contains(stderr, "--force") {
+		t.Fatal(code, stderr)
+	}
+	if pressed() != before {
+		t.Fatal("a refused key command pressed keys", e.b.Typed(pane.ID)[before:])
+	}
+	if code, out, stderr := e.run("key", "--force", "partner", "ctrl+u", "Shift+Tab"); code != 0 || out != "pressed ctrl-u shift-tab on "+term.Cut(pane.Address(), 8)+" (omp, partner title)\n" {
+		t.Fatal(code, out, stderr)
+	}
+	if code, out, _ := e.run("--help"); code != 0 || !strings.Contains(out, "\n  key [--force] TARGET KEY...") {
+		t.Fatal(out)
+	}
+}
+
 // harnessFP reads the fingerprint of the Claude Code dialog on a captured screen.
 func harnessFP(lines []string) string {
 	if d := harness.Profiles["claude"].ReadDialog(lines); d != nil {

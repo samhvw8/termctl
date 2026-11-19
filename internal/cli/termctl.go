@@ -20,7 +20,8 @@ Drive terminal panes through backends (iterm2, tmux, rex, hc, ghostty).
   which TARGET                    resolve a target to one pane
   spawn [--where auto|tab|split|window] [--cwd D] [--title T] [CMD...]
   send-text TARGET TEXT...        type text literally, without Enter (refused on hc)
-  send-key TARGET KEY...          press keys: enter, escape, tab, ctrl-c, ctrl-u, ...
+  send-key TARGET KEY...          press keys: enter, escape, tab, shift-tab, space, ctrl-c, alt-m, f5, pageup, ...
+                                  (all checked before the first is sent; a key the backend cannot send: exit 2)
   capture TARGET [-n LINES]       print the last lines of a pane's screen
   close TARGET                    close a pane
   move TARGET --to TAB            move a pane into another tab, beside its largest pane; it keeps running
@@ -237,7 +238,11 @@ func (a *App) termctl(argv []string) error {
 			if len(p.pos) < 2 {
 				return term.UsageErr("send-key needs at least one key")
 			}
-			for _, k := range p.pos[1:] {
+			keys, err := term.CheckKeys(b, p.pos[1:]) // every key is checked before the first is sent
+			if err != nil {
+				return err
+			}
+			for _, k := range keys {
 				if err := b.SendKey(pane, k); err != nil {
 					return err
 				}

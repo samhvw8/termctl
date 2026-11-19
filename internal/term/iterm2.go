@@ -21,9 +21,15 @@ const (
 	apiTimeout = CallTimeout // a stalled API call must fail, not hang every caller
 )
 
+// itermKeys are the bytes a key sends: iTerm2's API writes them to the session as typed input, so they are
+// what xterm sends in normal cursor mode (F1-F4 as SS3, the rest as CSI ~).
 var itermKeys = map[string]string{
-	"enter": "\r", "escape": "\x1b", "tab": "\t", "backspace": "\x7f",
+	"enter": "\r", "escape": "\x1b", "tab": "\t", "shift-tab": "\x1b[Z", "backspace": "\x7f", "space": " ",
 	"up": "\x1b[A", "down": "\x1b[B", "right": "\x1b[C", "left": "\x1b[D",
+	"home": "\x1b[H", "end": "\x1b[F", "pageup": "\x1b[5~", "pagedown": "\x1b[6~", "delete": "\x1b[3~",
+	"f1": "\x1bOP", "f2": "\x1bOQ", "f3": "\x1bOR", "f4": "\x1bOS",
+	"f5": "\x1b[15~", "f6": "\x1b[17~", "f7": "\x1b[18~", "f8": "\x1b[19~",
+	"f9": "\x1b[20~", "f10": "\x1b[21~", "f11": "\x1b[23~", "f12": "\x1b[24~",
 }
 
 // iterm2Command starts cmd in a login, interactive shell. A session that ends within seconds makes
@@ -41,7 +47,18 @@ func iterm2KeyBytes(key string) (string, error) {
 	if b, ok := itermKeys[k]; ok {
 		return b, nil
 	}
-	return string(rune(k[len(k)-1] - 'a' + 1)), nil
+	switch {
+	case ctrlKey.MatchString(k):
+		return string(rune(k[len(k)-1] - 'a' + 1)), nil
+	case altKey.MatchString(k): // alt sends ESC before the key, as iTerm2's "Option as Esc+"
+		return "\x1b" + k[len(k)-1:], nil
+	}
+	return "", cannotSendKey("iterm2", k)
+}
+
+func (b *ITerm2Backend) CheckKey(key string) error {
+	_, err := iterm2KeyBytes(key)
+	return err
 }
 
 // itermConn is the open API connection; tests stand in for it.

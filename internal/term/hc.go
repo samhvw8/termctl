@@ -51,6 +51,25 @@ const (
 
 var hcKeys = map[string]string{"escape": "esc"}
 
+// hcNoKey are keys hc keys has no documented name for: its help names enter, esc, tab, up, ctrl+c,
+// alt+x, f5 and single characters (hc 0.1.19). Each is refused rather than guessed.
+var hcNoKey = map[string]bool{"space": true, "delete": true, "home": true, "end": true,
+	"pageup": true, "pagedown": true, "shift-tab": true}
+
+func hcKeyName(key string) (string, error) {
+	k, err := NormalizeKey(key)
+	if err != nil {
+		return "", err
+	}
+	if hcNoKey[k] {
+		return "", cannotSendKey("hc", k)
+	}
+	if mapped, ok := hcKeys[k]; ok {
+		k = mapped
+	}
+	return strings.ReplaceAll(k, "-", "+"), nil
+}
+
 // NewHc builds the real backend. socketPath may be empty, for the environment's core.
 func NewHc(socketPath string) *HcBackend {
 	b := &HcBackend{SocketPath: socketPath}
@@ -586,15 +605,17 @@ func (b *HcBackend) SubmitText(p *Pane, text, from string) error {
 	return BackendErr("hc send: %s", reply.Error.Message)
 }
 
+func (b *HcBackend) CheckKey(key string) error {
+	_, err := hcKeyName(key)
+	return err
+}
+
 func (b *HcBackend) SendKey(p *Pane, key string) error {
-	k, err := NormalizeKey(key)
+	name, err := hcKeyName(key)
 	if err != nil {
 		return err
 	}
-	if mapped, ok := hcKeys[k]; ok {
-		k = mapped
-	}
-	_, err = b.call("keys", "--json", p.Native, strings.ReplaceAll(k, "-", "+"))
+	_, err = b.call("keys", "--json", p.Native, name)
 	return err
 }
 
