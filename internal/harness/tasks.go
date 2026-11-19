@@ -3,6 +3,7 @@ package harness
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -29,6 +30,7 @@ const (
 	claimTTL         = 600.0 // a claim older than this belongs to a process that died; above deliveryBound
 	reservationTTL   = 600.0 // a task with no pane after this long never got one
 	unreachableTTL   = 600.0 // a server that has not answered for this long is gone for good
+	stallAfter       = 600.0 // a running worker idle this long with no done and no progress looks stalled
 	reuseIdleTimeout = 5.0
 )
 
@@ -439,6 +441,9 @@ func (t *Tasks) reserve(owner *term.Pane, o NewOpts, pane *term.Pane) (*Task, er
 			ID: newID(), Title: o.Title, Harness: o.Harness, Ref: t.Backend.ServerRef(), Owner: owner.ID, OwnerRef: t.SenderRef,
 			Cwd: o.Cwd, Status: "running", Started: t.clock().Now(), Depth: depth, Notify: "none", Owned: pane == nil,
 			Round: 1, ReviewOf: o.ReviewOf, Blind: o.Blind, Project: ProjectOf(owner),
+		}
+		if parent != nil {
+			task.Parent = parent.ID
 		}
 		if pane != nil {
 			task.Pane = pane.ID
@@ -1157,6 +1162,7 @@ func (t *Tasks) Done(id, status, summary, summaryFile string) (*Task, error) {
 		}
 		x.Status, x.Ended, x.Summary, x.Notify = stored, t.clock().Now(), summary, "pending"
 		x.Dialog = nil // the worker is reporting, so nothing waits on screen
+		x.IdleSince, x.Stall = 0, nil
 		tid = x.ID
 		done = *x
 		tag, err := t.doneTag(x, t.Backend)
@@ -1185,6 +1191,141 @@ func (t *Tasks) Done(id, status, summary, summaryFile string) (*Task, error) {
 		}
 		t.sleep(notifyPoll)
 	}
+}
+
+// Progress records the worker's latest progress line on its running task, keeping its status and round. Only
+// the worker (the task's pane) or the owner may. It ends a stall mark and restarts the idle timer. With
+// notify it queues one notice to the owner (kind "progress") through the pending path, replacing an older
+// progress notice of the task not yet being typed, so a busy owner hears only the latest.
+func (t *Tasks) Progress(id, text string, notify bool) (*Task, error) {
+	text = OneLine(text)
+	if text == "" {
+		return nil, term.UsageErr("task progress needs --summary")
+	}
+	var out Task
+	err := t.Reg.Update(func(d *Data) error {
+		x, err := t.find(d.Tasks, id)
+		if err != nil {
+			return err
+		}
+		if t.Sender == nil || (t.Sender.ID != x.Pane && t.Sender.ID != x.Owner) {
+			return term.TargetErr("only the worker or the owner of task %s can report its progress", x.ID)
+		}
+		if x.Closed {
+			return term.UsageErr("task %s is closed", x.ID)
+		}
+		if x.Status != "running" {
+			return term.UsageErr("task %s is %s: progress is for a running task", x.ID, x.Status)
+		}
+		now := t.clock().Now()
+		x.Progress = &ProgressNote{Text: text, At: now}
+		x.IdleSince, x.Stall = 0, nil
+		if notify {
+			keep := d.Pending[:0]
+			for _, p := range d.Pending {
+				if p.Kind == "progress" && p.Task == x.ID && p.Claimed == 0 {
+					continue // not being typed: the newer line replaces it
+				}
+				keep = append(keep, p)
+			}
+			d.Pending = keep
+			tag, err := t.doneTag(x, t.Backend)
+			if err != nil {
+				return err
+			}
+			d.Pending = append(d.Pending, &Pending{Task: x.ID, Owner: x.Owner, OwnerRef: x.OwnerRef, Tag: tag, Kind: "progress",
+				Text: fmt.Sprintf("PROGRESS task %s (%s)%s: %s", x.ID, x.Title, roundNote(x.Round), text), Created: now})
+		}
+		out = *x
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	t.logTask("task.progress", &out, out.Status, text)
+	if notify {
+		if _, err := t.FlushPending(); err != nil {
+			return nil, err
+		}
+	}
+	return &out, nil
+}
+
+// TaskNode is a task with the tasks started from its worker's pane (their Parent), for task ls --tree.
+type TaskNode struct {
+	Task     *Task
+	Children []*TaskNode
+}
+
+// MarshalJSON is the task's own object with a "children" array.
+func (n *TaskNode) MarshalJSON() ([]byte, error) {
+	b, err := json.Marshal(n.Task)
+	if err != nil {
+		return nil, err
+	}
+	kids := n.Children
+	if kids == nil {
+		kids = []*TaskNode{}
+	}
+	c, err := json.Marshal(kids)
+	if err != nil {
+		return nil, err
+	}
+	out := append(b[:len(b)-1:len(b)-1], []byte(`,"children":`)...)
+	return append(append(out, c...), '}'), nil
+}
+
+// Tree is Ls with each task's descendants nested under it, following Parent across owners and projects.
+// Without all, the roots are the caller's tasks (as Ls lists them) and closed descendants are left out;
+// with all, every task, as a forest whose roots have no parent among them. A blind reviewer never sees
+// what it reviews.
+func (t *Tasks) Tree(all bool) ([]*TaskNode, error) {
+	roots, err := t.Ls(all)
+	if err != nil {
+		return nil, err
+	}
+	d, err := t.Reg.Read()
+	if err != nil {
+		return nil, err
+	}
+	hidden := t.reviewedBySender(d)
+	kids := map[string][]*Task{}
+	for _, x := range d.Tasks {
+		if x.Parent != "" && x.ID != hidden && (all || !x.Closed) {
+			kids[x.Parent] = append(kids[x.Parent], x)
+		}
+	}
+	for _, k := range kids {
+		sort.Slice(k, func(i, j int) bool { return k[i].Started < k[j].Started })
+	}
+	if all {
+		var top []*Task
+		for _, x := range roots {
+			if p := d.Tasks[x.Parent]; p == nil || p.ID == hidden {
+				top = append(top, x)
+			}
+		}
+		roots = top
+	}
+	seen := map[string]bool{}
+	var grow func(x *Task) *TaskNode
+	grow = func(x *Task) *TaskNode {
+		seen[x.ID] = true
+		n := &TaskNode{Task: x}
+		for _, c := range kids[x.ID] {
+			if !seen[c.ID] {
+				n.Children = append(n.Children, grow(c))
+			}
+		}
+		return n
+	}
+	var out []*TaskNode
+	for _, x := range roots {
+		if !seen[x.ID] {
+			out = append(out, grow(x))
+		}
+	}
+	return out, nil
 }
 
 // deliveryBound is the longest one delivery can take while every backend call stays inside its deadline
@@ -1230,8 +1371,8 @@ func (t *Tasks) FlushPending() (int, error) {
 				untold(d, p)
 				continue
 			}
-			if p.Kind == "dialog" && !noticeOnScreen(d, p) {
-				continue // answered or gone before its notice got through: telling the owner now would mislead
+			if !noticeLive(d, p) && (p.Kind == "dialog" || !liveClaim) {
+				continue // answered, ended or gone before its notice got through: telling the owner now would mislead
 			}
 			if x := d.Tasks[p.Task]; p.Kind == "" && x != nil && (x.Seen || x.Closed) && !liveClaim {
 				x.Notify = "seen" // the owner took the result with task wait: the notice would wake it for nothing
@@ -1251,8 +1392,8 @@ func (t *Tasks) FlushPending() (int, error) {
 	delivered := 0
 	for _, p := range claimed {
 		// Each delivery takes a second or more, so a dialog claimed above can be answered or gone by now.
-		if p.Kind == "dialog" {
-			if stale, err := t.dropStaleDialogNotice(p); err != nil || stale {
+		if p.Kind != "" {
+			if stale, err := t.dropStaleNotice(p); err != nil || stale {
 				if err != nil {
 					return delivered, err
 				}
@@ -1288,14 +1429,28 @@ func (t *Tasks) FlushPending() (int, error) {
 	return delivered, nil
 }
 
-// dropStaleDialogNotice reads the task's dialog mark right before its notice is sent, and drops the notice
-// when the dialog is no longer on screen: answered, gone, or the task ended since it was claimed.
-func (t *Tasks) dropStaleDialogNotice(p Pending) (bool, error) {
+// noticeLive: what a notice is about still holds. A dialog notice: its dialog is still marked on screen. A
+// progress or stall notice: its task still runs, and for a stall, its stall mark is still there (the worker
+// was not seen at work again, and reported no progress). A task result always holds.
+func noticeLive(d *Data, p *Pending) bool {
+	switch p.Kind {
+	case "dialog":
+		return noticeOnScreen(d, p)
+	case "progress", "stall":
+		x := d.Tasks[p.Task]
+		return x != nil && x.Status == "running" && !x.Closed && (p.Kind == "progress" || x.Stall != nil)
+	}
+	return true
+}
+
+// dropStaleNotice reads the registry right before a notice is sent, and drops the notice when what it is
+// about no longer holds: a dialog answered or gone, a task that ended, a stall that ended, since it was claimed.
+func (t *Tasks) dropStaleNotice(p Pending) (bool, error) {
 	d, err := t.Reg.Read()
 	if err != nil {
 		return false, err
 	}
-	if noticeOnScreen(d, &p) {
+	if noticeLive(d, &p) {
 		return false, nil
 	}
 	return true, t.Reg.Update(func(d *Data) error {

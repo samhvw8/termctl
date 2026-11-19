@@ -29,11 +29,12 @@ harness-ops move|pull|swap|arrange ...       # as termctl; a moved pane keeps it
 harness-ops which|read|name|whoami           # as agent-ops; send = msg
 
 harness-ops task new <harness> --title T (--brief TEXT | --brief-file F) --cwd D [--where auto|tab|split|window] [--reuse <target>] [--max N]
-harness-ops task ls [--all] [--json]
+harness-ops task ls [--all] [--tree] [--json]       # --tree: sub-tasks nested under the task they came from
 harness-ops task show <id> [--json]
 harness-ops task send [--force] <id> <text...>       # on a ready task: opens the next round
 harness-ops task wait <id> | --any [--timeout S]
 harness-ops task done <id> --status ok|failed|blocked (--summary TEXT | --summary-file F)   # the worker reports
+harness-ops task progress <id> --summary TEXT [--notify]   # a progress line; the status stays
 harness-ops task accept <id> [--close]               # the lead's verdict: only this makes a task done
 harness-ops task review <id> --blind --harness H [--model M] [--brief-file F]
 harness-ops task close [--force] <id>                # refused until accepted, unless --force
@@ -78,6 +79,8 @@ A task is one harness session doing one job, tracked in `~/.local/state/termctl/
 - A spawned harness leaves a shell behind, so a crash stays readable. The owner is told when the harness exits.
 - The owner is told with a tagged `RE: task ...` message. If the owner's input line holds a draft, the result stays pending. Any later harness-ops call delivers it, for one hour.
 - `task wait --any` returns each finished task once, so repeated calls walk through the results.
+- `task progress` stores the worker's latest line (shown in `task ls` and `task show`) without changing the status; `--notify` also tells the lead, the latest line only. The watcher tells the lead once when a running worker on a calibrated harness looks idle for 10 minutes without `task done` or progress (`task ls`: `running stalled`).
+- `task ls --tree` nests the tasks a worker started under its task (`parent`), across owners and projects; `resume .` lists them under the project's open tasks.
 - Guards (exit 6): 6 running tasks per owner (`--max`, `TERMCTL_MAX_TASKS`), spawn depth 2 (`TERMCTL_MAX_DEPTH`).
 - `--reuse` needs an idle pane running that harness. Closing such a task leaves the pane open, because it was not created for the task.
 

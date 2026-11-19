@@ -42,6 +42,7 @@ Before the journal, harness-ops kept its history in three places, and none of th
 | `answer`, `deny` | `Ops.Answer` (`answer`, `deny`; on a task's worker or a pane the caller started, which has no `task`) | the dialog's question and the choice made (`1. Yes`; a deny is always `Esc`), the dialog's fingerprint as `status` |
 | `task.new` | `Tasks.New` | the title, the brief's `file`; `status: failed` and the cause when the start failed |
 | `task.done` | `Tasks.Done` | the full summary; `to` is the owner |
+| `task.progress` | `Tasks.Progress` (`task progress`) | the progress line, one line; `status` is the task's status (running) |
 | `task.accept`, `task.close`, `task.exited` | `Tasks` | the status, the exit code |
 | `note` | `harness-ops note` | the start of the text and its `file` |
 

@@ -46,15 +46,19 @@ Talk to coding-agent panes. Put options before the target: everything after the 
                                               TARGET: the pane, or the task ID. A [persist] choice also needs --persist
   deny TARGET --expect FP                     cancel the dialog FP with Esc; never presses Enter
   task new HARNESS --title T (--brief TEXT | --brief-file F) [--cwd D] [--where W] [--reuse TARGET] [--command CMD] [--max N] [--timeout S]
-  task ls [--all] [--json]
+  task ls [--all] [--tree] [--json]           your open tasks (--all: every task); --tree nests the tasks started from each
+                                              task's worker under it, across owners and projects (JSON: "children")
   task show ID [--json]
   task send [--force] ID TEXT...
   task wait (ID | --any) [--timeout S] [--json]   returns when a task stops running or its worker shows a dialog
   task done ID --status ok|failed|blocked (--summary TEXT | --summary-file F)   the worker reports; the session stays open
+  task progress ID --summary TEXT [--notify]  the worker (or owner) notes progress on a running task; the status stays;
+                                              --notify also tells the owner (a newer progress notice replaces an unsent one)
   task accept ID [--close]                    the lead's verdict; only the owner can finish a task
   task review ID --blind --harness H [--model M] [--brief-file F]   a new session that never sees the worker's report
   task close [--force] ID                     refused until the task is accepted, unless --force
-  watch [--interval S]                        tell you of each new dialog on the panes you started; task new starts one
+  watch [--interval S]                        tell you of each new dialog on the panes you started, and of a task whose
+                                              worker looks idle 10 min without done or progress (stalled); task new starts one
   log [--project DIR] [--task ID] [--pane ID] [--since 2h|3d|DATE] [-n N] [--json]   the journal, oldest first (default: last 50)
   resume (TASK-ID | DIR)                      what a new session needs: a task's brief, report and every message in full;
                                               or a project's open tasks, notes and last entries (DIR: . for your pane's project)
@@ -233,22 +237,86 @@ func (a *App) ensureWatcher(o *Options, tasks *harness.Tasks) {
 func (a *App) printTasks(tasks []*harness.Task) {
 	fmt.Fprintf(a.Out, "%-9s %-8s %-9s %-5s %-12s %-28s SUMMARY\n", "ID", "STATUS", "HARNESS", "ROUND", "STARTED", "TITLE")
 	for _, t := range tasks {
-		extra := ""
-		if t.Notify == "pending" {
-			extra += " (owner not told yet)"
-		}
-		if t.Closed {
-			extra += " [closed]"
-		}
-		if t.ReviewOf != "" {
-			extra += " [reviews " + t.ReviewOf + "]"
-		}
-		if t.Dialog != nil {
-			extra += " [dialog " + t.Dialog.Fingerprint + "]"
-		}
-		fmt.Fprintf(a.Out, "%-9s %-8s %-9s %-5d %-12s %-28s %s%s\n", t.ID, t.Status, t.Harness, t.Round, when(t.Started), term.Cut(t.Title, 28),
-			term.Cut(strings.ReplaceAll(t.Summary, "\n", " "), 60), extra)
+		a.printTaskRow(t, "")
 	}
+}
+
+// printTree prints task nodes with each task's descendants under it, two spaces deeper per level.
+func (a *App) printTree(nodes []*harness.TaskNode) {
+	fmt.Fprintf(a.Out, "%-9s %-8s %-9s %-5s %-12s %-28s SUMMARY\n", "ID", "STATUS", "HARNESS", "ROUND", "STARTED", "TITLE")
+	var walk func(ns []*harness.TaskNode, indent string)
+	walk = func(ns []*harness.TaskNode, indent string) {
+		for _, n := range ns {
+			a.printTaskRow(n.Task, indent)
+			walk(n.Children, indent+"  ")
+		}
+	}
+	walk(nodes, "")
+}
+
+func (a *App) nowUnix() float64 {
+	if a.Clock != nil {
+		return a.Clock.Now()
+	}
+	return float64(time.Now().UnixNano()) / 1e9
+}
+
+// age says how long ago a time was, in whole seconds, minutes or hours.
+func (a *App) age(ts float64) string {
+	s := int(a.nowUnix() - ts)
+	switch {
+	case s < 0:
+		s = 0
+	case s >= 3600:
+		return fmt.Sprintf("%dh%02dm ago", s/3600, s%3600/60)
+	case s >= 60:
+		return fmt.Sprintf("%dm ago", s/60)
+	}
+	return fmt.Sprintf("%ds ago", s)
+}
+
+// progressLine is task show's progress: the latest line and its age.
+func (a *App) progressLine(t *harness.Task) string {
+	if t.Progress == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s (%s)", t.Progress.Text, a.age(t.Progress.At))
+}
+
+// stallLine is task show's stall: when the watcher marked a running task's worker idle too long.
+func (a *App) stallLine(t *harness.Task) string {
+	if t.Status != "running" || t.Stall == nil {
+		return ""
+	}
+	return fmt.Sprintf("idle 10 min without done or progress, marked %s", a.age(t.Stall.At))
+}
+
+// printTaskRow prints one task line; indent goes before the ID (task ls --tree).
+func (a *App) printTaskRow(t *harness.Task, indent string) {
+	extra := ""
+	if t.Notify == "pending" {
+		extra += " (owner not told yet)"
+	}
+	if t.Closed {
+		extra += " [closed]"
+	}
+	if t.ReviewOf != "" {
+		extra += " [reviews " + t.ReviewOf + "]"
+	}
+	if t.Dialog != nil {
+		extra += " [dialog " + t.Dialog.Fingerprint + "]"
+	}
+	status, summary := t.Status, t.Summary
+	if t.Status == "running" {
+		if t.Stall != nil {
+			status += " stalled"
+		}
+		if t.Progress != nil {
+			summary = t.Progress.Text
+		}
+	}
+	fmt.Fprintf(a.Out, "%-9s %-8s %-9s %-5d %-12s %-28s %s%s\n", indent+t.ID, status, t.Harness, t.Round, when(t.Started), term.Cut(t.Title, 28),
+		term.Cut(strings.ReplaceAll(summary, "\n", " "), 60), extra)
 }
 
 // Harness runs the harness-ops command line and returns the exit code.
@@ -739,7 +807,7 @@ func (a *App) lookCmd(cmd string, rest []string, o *Options) error {
 
 func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 	if len(rest) == 0 {
-		return term.UsageErr("usage: task new|ls|show|send|wait|done|accept|review|close")
+		return term.UsageErr("usage: task new|ls|show|send|wait|done|progress|accept|review|close")
 	}
 	cmd, rest := rest[0], rest[1:]
 	if cmd == "answer" || cmd == "deny" {
@@ -750,7 +818,7 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 	case "new":
 		vals = []string{"--title", "--brief", "--brief-file", "--cwd", "--where", "--reuse", "--command", "--max", "--timeout"}
 	case "ls":
-		bools = []string{"--all", "--json"}
+		bools = []string{"--all", "--tree", "--json"}
 	case "show":
 		bools = []string{"--json"}
 	case "send":
@@ -759,6 +827,8 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 		bools, vals = []string{"--any", "--json"}, []string{"--timeout"}
 	case "done":
 		vals = []string{"--status", "--summary", "--summary-file"}
+	case "progress":
+		bools, vals = []string{"--notify"}, []string{"--summary"}
 	case "close":
 		bools = []string{"--force"}
 	case "accept":
@@ -815,6 +885,22 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 		fmt.Fprintln(a.Out, t.ID)
 		a.ensureWatcher(o, tasks)
 	case "ls":
+		if p.bools["--tree"] {
+			nodes, err := tasks.Tree(p.bools["--all"])
+			if err != nil {
+				return err
+			}
+			if p.bools["--json"] {
+				if nodes == nil {
+					nodes = []*harness.TaskNode{}
+				}
+				data, _ := json.MarshalIndent(nodes, "", " ")
+				fmt.Fprintln(a.Out, string(data))
+			} else {
+				a.printTree(nodes)
+			}
+			return nil
+		}
 		found, err := tasks.Ls(p.bools["--all"])
 		if err != nil {
 			return err
@@ -843,7 +929,11 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 			return nil
 		}
 		for _, kv := range [][2]string{{"id", t.ID}, {"status", t.Status}, {"round", fmt.Sprint(t.Round)}, {"title", t.Title}, {"harness", t.Harness}, {"reviews", t.ReviewOf}, {"pane", t.Pane}, {"owner", t.Owner},
-			{"cwd", t.Cwd}, {"brief", t.Brief}, {"depth", fmt.Sprint(t.Depth)}, {"notify", t.Notify}, {"summary", t.Summary}, {"started", when(t.Started)}, {"ended", when(t.Ended)}} {
+			{"cwd", t.Cwd}, {"brief", t.Brief}, {"depth", fmt.Sprint(t.Depth)}, {"parent", t.Parent}, {"notify", t.Notify}, {"summary", t.Summary},
+			{"progress", a.progressLine(t)}, {"stalled", a.stallLine(t)}, {"started", when(t.Started)}, {"ended", when(t.Ended)}} {
+			if (kv[0] == "parent" || kv[0] == "progress" || kv[0] == "stalled") && kv[1] == "" {
+				continue
+			}
 			fmt.Fprintf(a.Out, "%-9s %s\n", kv[0]+":", kv[1])
 		}
 	case "send":
@@ -896,6 +986,20 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 			note = t.Notify
 		}
 		fmt.Fprintf(a.Out, "task %s: %s (%s)\n", t.ID, t.Status, note)
+	case "progress":
+		id, err := arg()
+		if err != nil {
+			return err
+		}
+		t, err := tasks.Progress(id, p.vals["--summary"], p.bools["--notify"])
+		if err != nil {
+			return err
+		}
+		note := ""
+		if p.bools["--notify"] {
+			note = " (owner notice queued)"
+		}
+		fmt.Fprintf(a.Out, "task %s: progress noted%s\n", t.ID, note)
 	case "accept":
 		id, err := arg()
 		if err != nil {

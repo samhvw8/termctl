@@ -305,9 +305,27 @@ func (a *App) resumeProject(project string, d *harness.Data, n int) error {
 	}
 	sort.Slice(open, func(i, j int) bool { return open[i].Started < open[j].Started })
 	fmt.Fprintf(w, "\n## Tasks not closed (%d)\n\n", len(open))
-	for _, x := range open {
-		fmt.Fprintf(w, "%s  %-8s %-8s %s  pane %s  (resume %s)\n", x.ID, x.Status, x.Harness, x.Title, orDash(x.Pane), x.ID)
+	// Under each, the open tasks started from its worker (Parent), whatever their project, a level deeper each.
+	kids := map[string][]*harness.Task{}
+	for _, x := range d.Tasks {
+		if x.Parent != "" && !x.Closed && x.Status != "done" {
+			kids[x.Parent] = append(kids[x.Parent], x)
+		}
 	}
+	seen := map[string]bool{}
+	var list func(xs []*harness.Task, indent string)
+	list = func(xs []*harness.Task, indent string) {
+		sort.Slice(xs, func(i, j int) bool { return xs[i].Started < xs[j].Started })
+		for _, x := range xs {
+			if seen[x.ID] {
+				continue
+			}
+			seen[x.ID] = true
+			fmt.Fprintf(w, "%s%s  %-8s %-8s %s  pane %s  (resume %s)\n", indent, x.ID, x.Status, x.Harness, x.Title, orDash(x.Pane), x.ID)
+			list(kids[x.ID], indent+"  ")
+		}
+	}
+	list(open, "")
 	entries, err := a.readJournal(harness.Filter{Project: project})
 	if err != nil {
 		return err

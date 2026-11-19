@@ -31,6 +31,9 @@ type Signal struct {
 	// Working: the program is working or blocked, by its own status where the terminal keeps one, else by
 	// a busy pattern on its screen. A dialog is blocked whatever the status says.
 	Working bool
+	// Idle: a calibrated harness, not working, no dialog, its input line read and empty. Only an idle look
+	// counts toward a stall; any other look ends the idle stretch.
+	Idle bool
 }
 
 // Source finds signals for tasks. The screen source reads each worker's screen.
@@ -233,7 +236,8 @@ func (t *Tasks) read(ws []worker, status map[string]term.ProgramStatus) []Signal
 			}
 			out = append(out, sig)
 		case w.prof.ReadInput(screens[i]) != nil:
-			out = append(out, Signal{Task: w.taskID(), Pane: w.p.ID, Kind: "clear", At: ats[i], Working: working})
+			idle := w.prof.Calibrated && !working && *w.prof.ReadInput(screens[i]) == ""
+			out = append(out, Signal{Task: w.taskID(), Pane: w.p.ID, Kind: "clear", At: ats[i], Working: working, Idle: idle})
 		default: // no dialog and no input line: a turn in progress, or a screen this reader does not know
 			out = append(out, Signal{Task: w.taskID(), Pane: w.p.ID, Kind: "busy", At: ats[i], Working: working})
 		}
@@ -386,6 +390,9 @@ func (t *Tasks) apply(sigs []Signal, notify bool) error {
 			if rec := d.Panes[x.Pane]; rec != nil && rec.Dialog != nil && x.Status == "running" {
 				rec.Dialog = nil // a running task holds the pane now: the mark is the task's
 			}
+			if notify && x.Status == "running" && !x.Closed {
+				trackIdle(d, x, s, now)
+			}
 			switch s.Kind {
 			case "clear":
 				x.Dialog = nil
@@ -402,6 +409,35 @@ func (t *Tasks) apply(sigs []Signal, notify bool) error {
 		}
 		return nil
 	})
+}
+
+// trackIdle times a running task's idle stretch from the watcher's own screen reads (no extra backend call).
+// A look that is not idle ends the stretch and its stall mark. Once the worker has looked idle for stallAfter,
+// counted from the later of the stretch's start and its last progress, the task gets a stall mark and its
+// owner one notice (kind "stall"); the mark keeps a second one from going out in the same stretch.
+func trackIdle(d *Data, x *Task, s Signal, now float64) {
+	if !s.Idle {
+		x.IdleSince, x.Stall = 0, nil
+		return
+	}
+	if x.IdleSince == 0 {
+		x.IdleSince = now
+		if s.At > 0 {
+			x.IdleSince = s.At
+		}
+		return
+	}
+	since := x.IdleSince
+	if x.Progress != nil && x.Progress.At > since {
+		since = x.Progress.At
+	}
+	if x.Stall != nil || now-since < stallAfter {
+		return
+	}
+	x.Stall = &StallMark{At: now}
+	d.Pending = append(d.Pending, &Pending{Task: x.ID, Owner: x.Owner, OwnerRef: x.OwnerRef, Tag: dialogTag(x), Kind: "stall", Created: now,
+		Text: fmt.Sprintf("task %s (%s) looks stalled: idle for %d min without task done or progress. read it: harness-ops read %s",
+			x.ID, x.Title, int(stallAfter/60), x.ID)})
 }
 
 // applyPane records a signal of a pane no running task holds on the pane's record, as apply does on a task.

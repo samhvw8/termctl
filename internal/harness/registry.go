@@ -50,7 +50,31 @@ type Task struct {
 	// stays unreachable past unreachableTTL is gone, and the task is lost.
 	Unreachable float64 `json:"unreachable,omitempty"`
 	Project     string  `json:"project,omitempty"` // the owner's folder at task new: where the journal files it
-	Unknown     Unknown `json:"-"`
+	// Parent is the task the owner pane held when it started this one (the task whose depth this one adds
+	// to), "" for a task started from a pane that holds none.
+	Parent string `json:"parent,omitempty"`
+	// Progress is the worker's latest task progress line; the status and round stay as they are.
+	Progress *ProgressNote `json:"progress,omitempty"`
+	// IdleSince is when the watcher first saw the worker idle in the current idle stretch, 0 when it was
+	// last seen at work. Stall is set once a stretch passes stallAfter, and the owner is told once.
+	IdleSince float64    `json:"idle_since,omitempty"`
+	Stall     *StallMark `json:"stall,omitempty"`
+	Unknown   Unknown    `json:"-"`
+}
+
+// ProgressNote is a worker's latest progress line on its task.
+type ProgressNote struct {
+	Text    string  `json:"text"`
+	At      float64 `json:"at"`
+	Unknown Unknown `json:"-"`
+}
+
+// StallMark records that a running task's worker looked idle for stallAfter with no done and no
+// progress, and that its owner was sent one notice of it. It goes when the worker is seen at work again,
+// and on progress or done.
+type StallMark struct {
+	At      float64 `json:"at"`
+	Unknown Unknown `json:"-"`
 }
 
 // DialogMark is the dialog on a worker's screen. It is dropped when the worker's input line is seen again
@@ -96,7 +120,7 @@ type Pending struct {
 	Created  float64           `json:"created"`
 	Claimed  float64           `json:"claimed"`
 	ClaimPid int               `json:"claim_pid,omitempty"`   // the claimer's process, on this host
-	Kind     string            `json:"kind,omitempty"`        // "" for a task result; "dialog" for a dialog notice
+	Kind     string            `json:"kind,omitempty"`        // "" for a task result; "dialog", "progress" or "stall" for a notice
 	Dialog   string            `json:"fingerprint,omitempty"` // the dialog a "dialog" notice is about
 	Pane     string            `json:"pane,omitempty"`        // a "dialog" notice of a pane no running task held: Task is ""
 	Unknown  Unknown           `json:"-"`
@@ -146,6 +170,28 @@ func (x *DialogMark) UnmarshalJSON(b []byte) (err error) {
 
 func (x DialogMark) MarshalJSON() ([]byte, error) {
 	type plain DialogMark
+	return encodeKeeping(plain(x), x.Unknown)
+}
+
+func (x *ProgressNote) UnmarshalJSON(b []byte) (err error) {
+	type plain ProgressNote
+	x.Unknown, err = decodeKeeping(b, (*plain)(x))
+	return err
+}
+
+func (x ProgressNote) MarshalJSON() ([]byte, error) {
+	type plain ProgressNote
+	return encodeKeeping(plain(x), x.Unknown)
+}
+
+func (x *StallMark) UnmarshalJSON(b []byte) (err error) {
+	type plain StallMark
+	x.Unknown, err = decodeKeeping(b, (*plain)(x))
+	return err
+}
+
+func (x StallMark) MarshalJSON() ([]byte, error) {
+	type plain StallMark
 	return encodeKeeping(plain(x), x.Unknown)
 }
 
