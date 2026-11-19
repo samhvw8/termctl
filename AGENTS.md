@@ -37,7 +37,7 @@ Releases: push a `v*` tag. See `.okf/playbooks/cut-a-release.md`.
 
 ## Rules
 
-- Exit codes are the contract: 0 ok, 1 backend error, 2 refused target/usage, 4 draft on input line, 5 wait timeout, 6 refused by a safety limit, 7 no dialog on screen or not the one expected.
+- Exit codes are the contract: 0 ok, 1 backend error, 2 refused target/usage, 4 draft on input line (for msg and slash: the text was not typed), 5 wait timeout, or typed text that stayed on the input line (it may still arrive: never resend), 6 refused by a safety limit, 7 no dialog on screen or not the one expected.
 - A dialog answer never uses digit keys (they submit at once on Claude Code): arrows, a check on screen, then Enter. A choice that widens permission needs `--persist`.
 - Never send to a pane resolved by focus. A target that is not unique, or is your own pane, is refused.
 - Layer 1 knows nothing about harnesses. Harness logic goes in `internal/harness/`.

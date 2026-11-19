@@ -173,8 +173,8 @@ func TestClearFirstRefusesWhenSlashStaysInInput(t *testing.T) {
 	r := newOps(t)
 	r.b.KeepClearText = true
 	_, err := r.ops.Msg(r.t, "x", MsgOpts{ClearFirst: true, Timeout: 60})
-	wantCode(t, err, 4)
-	if !strings.Contains(err.Error(), "/clear") || !reflect.DeepEqual(r.b.Texts(r.t.ID), []string{"/clear"}) {
+	wantCode(t, err, term.CodeTimeout) // /clear was typed: not a refusal, but the message never was
+	if !strings.Contains(err.Error(), "the message itself was not typed") || !strings.Contains(err.Error(), "/clear") || !reflect.DeepEqual(r.b.Texts(r.t.ID), []string{"/clear"}) {
 		t.Fatal(err, r.b.Texts(r.t.ID))
 	}
 }
@@ -307,8 +307,8 @@ func TestSubmitFailsLoudlyWhenTheTextNeverGoes(t *testing.T) {
 	r := newOps(t)
 	r.b.DropEnters = 100
 	_, err := r.ops.Msg(r.t, "stuck", MsgOpts{})
-	wantCode(t, err, 4)
-	if !strings.Contains(err.Error(), "not submitted") {
+	wantCode(t, err, term.CodeTimeout)
+	if !strings.Contains(err.Error(), "not confirmed") {
 		t.Fatal(err)
 	}
 }

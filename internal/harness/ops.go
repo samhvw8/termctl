@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,8 @@ const (
 	settle         = 0.5 // let the screen react to what we sent before judging it
 	submitSettle   = 0.7 // how long a TUI gets to take a submitted line off its input
 	submitRetries  = 3
+	submitConfirm  = 1.0 // the first empty input line must look empty again this much later, unless the harness went busy
+	startStable    = 3.0 // a starting harness must hold a stable screen this long: late startup banners redraw it
 	interruptLook  = 2.0 // how long a stopped harness gets to put a queued message back on its input line
 	poll           = 0.25
 	DefaultTimeout = 120.0
@@ -176,7 +179,16 @@ func (o *Ops) assertAlone(p *term.Pane, prof *Profile, force bool) error {
 // Submit types one line and presses Enter. A TUI can drop an Enter that arrives while long text
 // is still being taken in, so it checks that the text left the input line and presses Enter again.
 func (o *Ops) Submit(p *term.Pane, line string, prof *Profile) error {
-	return o.submit(p, line, prof, "")
+	_, err := o.submit(p, line, prof, "", false)
+	return err
+}
+
+// SubmitFirst is Submit for the first line into a harness that has just started. Such a harness can
+// take the typed text in late and lose the Enter sent before it (Claude Code, 2026-11-19), so the line
+// counts as submitted only when the harness went busy, or the input line is still empty submitConfirm later.
+func (o *Ops) SubmitFirst(p *term.Pane, line string, prof *Profile) error {
+	_, err := o.submit(p, line, prof, "", true)
+	return err
 }
 
 // caller names the sender to a backend that can show it, as <backend>/<id>. Only agent messages carry one:
@@ -188,44 +200,76 @@ func (o *Ops) caller() string {
 	return "termctl/agent-ops"
 }
 
-func (o *Ops) submit(p *term.Pane, line string, prof *Profile, from string) error {
+// errCode is an error's exit code, or 0 when it carries none.
+func errCode(err error) int {
+	var te *term.Error
+	if errors.As(err, &te) {
+		return te.Code
+	}
+	return 0
+}
+
+// submit reports typed: the line reached the pane, so an error after it is no refusal.
+func (o *Ops) submit(p *term.Pane, line string, prof *Profile, from string, starting bool) (bool, error) {
 	if prof == nil {
 		prof = ForProcess(p.Process)
 	}
 	if sub, ok := o.Backend.(term.Submitter); ok {
 		if err := term.CheckText(line); err != nil {
-			return err
+			return false, err
 		}
 		if err := sub.SubmitText(p, line, from); err != nil {
-			return err
+			return false, err
 		}
 	} else {
 		if err := o.Backend.SendText(p, line); err != nil {
-			return err
+			return false, err
 		}
 		o.Clock.Sleep(enterDelay)
 		if err := o.Backend.SendKey(p, "enter"); err != nil {
-			return err
+			return true, err
 		}
 	}
-	for try := 0; ; try++ {
-		o.Clock.Sleep(submitSettle)
-		d, err := o.draft(p, prof)
+	// For a starting harness one empty look is not proof (SubmitFirst). The first empty look counts when
+	// the harness went busy, or the line is still empty submitConfirm later; after that, at once.
+	enters, empty, confirmed := 0, false, !starting
+	for {
+		if empty {
+			o.Clock.Sleep(submitConfirm)
+		} else {
+			o.Clock.Sleep(submitSettle)
+		}
+		lines, err := o.Backend.Capture(p, screenLines(p))
 		if err != nil {
-			return err
+			return true, err
+		}
+		d := prof.ReadInput(lines)
+		if d == nil && !confirmed && !prof.IsBusy(lines) {
+			empty, confirmed = true, true // a starting harness may be redrawing: look again before giving up
+			continue
 		}
 		if d == nil {
 			Warn(fmt.Sprintf("cannot read the input line of %s (%s) after typing; the submit is not confirmed, check with read", p.Address(), prof.Name))
-			return nil
+			return true, nil
 		}
 		if *d == "" {
-			return nil
+			if empty || confirmed || prof.IsBusy(lines) {
+				return true, nil
+			}
+			empty, confirmed = true, true
+			continue
 		}
-		if try == submitRetries {
-			return term.Errf(term.CodeDraft, "%s: %q was typed but not submitted; it is still on the input line", p.Address(), term.Cut(line, 80))
+		empty = false
+		if enters == submitRetries {
+			// Not exit 4: the text was typed, so this is no refusal. A busy harness can show a queued message
+			// on its input line and still deliver it (2026-11-19: a lead resent three times on exit 4).
+			return true, term.Errf(term.CodeTimeout, "%s: the text stayed on the input line after %d Enters, so the submit is not confirmed: %q. "+
+				"It was typed and may still be delivered (a busy harness can hold a queued message there): read the pane, and do not send it again",
+				p.Address(), enters+1, term.Cut(line, 80))
 		}
+		enters++
 		if err := o.Backend.SendKey(p, "enter"); err != nil {
-			return err
+			return true, err
 		}
 	}
 }
@@ -364,9 +408,13 @@ func (o *Ops) waitIdle(p *term.Pane, timeout float64, prof *Profile, starting bo
 			continue
 		}
 		askSince = -1
-		nativeIdle := !prof.Calibrated && idleSince >= 0 && now-idleSince >= prof.StableSeconds
+		need := prof.StableSeconds
+		if starting {
+			need = max(need, startStable)
+		}
+		nativeIdle := !prof.Calibrated && idleSince >= 0 && now-idleSince >= need
 		promptOK := !prof.PromptRequired || prof.ReadInput(lines) != nil || nativeIdle
-		stable := now-since >= prof.StableSeconds || nativeIdle
+		stable := now-since >= need || nativeIdle
 		if !nativeBusy(native) && promptOK && !prof.IsBusy(lines) && stable {
 			return nil
 		}
@@ -473,8 +521,9 @@ type MsgOpts struct {
 
 // Sent is what Msg typed. Busy: the harness was working, so it may hold the message until its turn ends.
 type Sent struct {
-	Line string
-	Busy bool
+	Line  string
+	Busy  bool
+	Typed bool // the line was typed: an error after it is no refusal, and a retry could deliver it twice
 }
 
 // Msg sends a tagged message.
@@ -493,6 +542,9 @@ func (o *Ops) Msg(p *term.Pane, text string, opts MsgOpts) (Sent, error) {
 	prof := ForProcess(p.Process)
 	if opts.ClearFirst {
 		if err := o.Clear(p, opts.Force, opts.Timeout); err != nil {
+			if c := errCode(err); c != 0 {
+				return Sent{}, term.Errf(c, "%v (that was /clear; the message itself was not typed)", err)
+			}
 			return Sent{}, err
 		}
 		if err := o.AssertCleared(p, prof); err != nil { // even with --force
@@ -515,7 +567,7 @@ func (o *Ops) Msg(p *term.Pane, text string, opts MsgOpts) (Sent, error) {
 		line = tag + " " + text
 	}
 	line = Flat(line)
-	err = o.submit(p, line, prof, o.caller())
+	typed, err := o.submit(p, line, prof, o.caller(), false)
 	e := o.entry("msg", p)
 	e.Text, e.File, e.Error = text, file, errText(err)
 	if file != "" {
@@ -524,10 +576,14 @@ func (o *Ops) Msg(p *term.Pane, text string, opts MsgOpts) (Sent, error) {
 	if busy {
 		e.Status = "queued"
 	}
-	if err == nil || !opts.Retry {
+	unconfirmed := typed && errCode(err) == term.CodeTimeout
+	if unconfirmed {
+		e.Status = "unconfirmed"
+	}
+	if err == nil || !opts.Retry || unconfirmed { // a retried delivery records only its last try
 		o.Journal.Record(e)
 	}
-	return Sent{line, busy}, err
+	return Sent{line, busy, typed}, err
 }
 
 // busy is one look: the terminal reports the harness working or blocked, or a busy pattern is on screen.
@@ -654,7 +710,7 @@ func (o *Ops) Spawn(harness, where, cwd string, opts SpawnOpts) (*term.Pane, err
 			e.Error = err.Error()
 			return p, err
 		}
-		if err := o.Submit(p, line, prof); err != nil {
+		if err := o.SubmitFirst(p, line, prof); err != nil {
 			e.Error = err.Error()
 			return p, err
 		}

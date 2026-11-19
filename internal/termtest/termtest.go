@@ -27,6 +27,7 @@ type Screen struct {
 	Busy   int
 	Log    []string
 	Dialog *Dialog
+	hidden int // captures left before typed text shows (LateInput)
 }
 
 // Dialog is a Claude Code permission dialog drawn in place of the input box until it is answered.
@@ -79,12 +80,15 @@ type Fake struct {
 	FailList      bool
 	FailSpawn     bool
 	DropEnters    int // this many Enters are ignored, as a TUI does when text is still pasting
-	Ref           map[string]string
-	Spawned       []string
-	BackendName   string                        // Name() when set; default "fake"
-	Statuses      map[string]term.ProgramStatus // a pane's program status
-	StatusCalls   int
-	CostlyStatus  bool // the status read costs a process, as on Rex and hc: the watcher reads it once per round
+	// LateInput: after typing, this many captures still show an empty input line, and an Enter sent
+	// meanwhile is lost, as Claude Code does while it is still starting (2026-11-19, task t93a651).
+	LateInput    int
+	Ref          map[string]string
+	Spawned      []string
+	BackendName  string                        // Name() when set; default "fake"
+	Statuses     map[string]term.ProgramStatus // a pane's program status
+	StatusCalls  int
+	CostlyStatus bool // the status read costs a process, as on Rex and hc: the watcher reads it once per round
 	// History makes the fake a term.SafeHistory: a pane with Rows shows that many lines, and a Capture of
 	// more reads the lines above them, as tmux's scrollback.
 	History bool
@@ -175,6 +179,7 @@ func (f *Fake) SendText(p *term.Pane, text string) error {
 	st := f.State[p.ID]
 	f.Events = append(f.Events, Event{Kind: "text", Pane: p.ID, Text: text, Busy: st.Busy})
 	st.Input += text
+	st.hidden = f.LateInput
 	return nil
 }
 
@@ -198,6 +203,9 @@ func (f *Fake) SendKey(p *term.Pane, key string) error {
 	case "enter":
 		if f.DropEnters > 0 {
 			f.DropEnters--
+			return nil
+		}
+		if st.hidden > 0 { // not taken in yet: the Enter is lost
 			return nil
 		}
 		line := st.Input
@@ -243,6 +251,11 @@ func (f *Fake) capture(p *term.Pane) []string {
 		return append(append([]string{}, st.Log...), fmt.Sprintf("working %d", st.Busy))
 	}
 	screen := append([]string{}, st.Log...)
+	input := st.Input
+	if st.hidden > 0 {
+		st.hidden--
+		input = ""
+	}
 	if d := st.Dialog; d.Waiting() {
 		if d.HideFirst > 0 {
 			d.HideFirst--
@@ -251,13 +264,13 @@ func (f *Fake) capture(p *term.Pane) []string {
 		return append(screen, d.lines()...)
 	}
 	if p.Process == "omp" { // omp's input line, with what is typed on it
-		return append(screen, "╰─ "+st.Input)
+		return append(screen, "╰─ "+input)
 	}
 	if p.Process == "fakeagent" || p.Process == "claude" { // spawned panes pass every profile's input-line check
 		rule := strings.Repeat("─", 40)
-		screen = append(screen, rule, "❯", rule, "╰─")
+		screen = append(screen, rule, "❯ "+input, rule, "╰─")
 	}
-	return append(screen, "> "+st.Input)
+	return append(screen, "> "+input)
 }
 
 func (f *Fake) Close(p *term.Pane) error {
@@ -276,6 +289,17 @@ func (f *Fake) SetLabel(p *term.Pane, label string) error {
 	f.Events = append(f.Events, Event{Kind: "label", Pane: p.ID, Text: label})
 	p.Label = label
 	return nil
+}
+
+// Captures counts the screen reads of a pane.
+func (f *Fake) Captures(pane string) int {
+	n := 0
+	for _, e := range f.Events {
+		if e.Kind == "capture" && e.Pane == pane {
+			n++
+		}
+	}
+	return n
 }
 
 // Typed returns the text and key events sent to a pane, as "text:..." and "key:...".

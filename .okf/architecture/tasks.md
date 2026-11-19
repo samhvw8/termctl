@@ -25,7 +25,7 @@ The lead owns "done". The worker's session has the files loaded, so it is the ri
 | running | `task new`, `task send` | The worker has the job. A slot is reserved under the lock before the spawn, so parallel calls cannot exceed the cap. |
 | ready | worker's `task done --status ok` | Waiting for the lead. The session stays open. |
 | failed, blocked | worker's `task done` | Waiting for the lead. The session stays open. |
-| failed | `task new`, when the start fails | The harness never got idle: its timeout (120 s), or since v0.7.1 a startup prompt such as the folder-trust question, after about 2 s (exit 5). The pane stays open: once the user has answered, `task new --reuse PANE` gives it a new task. |
+| failed | `task new`, when the start fails | The harness never got idle: its timeout (120 s), or since v0.7.1 a startup prompt such as the folder-trust question, after about 2 s (exit 5), or the brief stayed on the input line (exit 5; exit 4 before v0.7.2). That brief may still have gone in: `read` the pane first, and close the task rather than reuse a pane whose worker is at work. The pane stays open: once the user has answered, `task new --reuse PANE` gives it a new task. |
 | done | owner's `task accept` | Only this makes a task done. Only a ready task can be accepted, so a failure is never recorded as done. |
 | exited | exit hook, or reconcile | The pane is alive and the harness is gone. The owner is told. |
 | lost | reconcile | The pane is gone, or the task never got a pane within 10 minutes. |

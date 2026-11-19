@@ -1574,3 +1574,66 @@ func TestClaimOfADeadDelivererIsTakenAtOnce(t *testing.T) {
 		t.Fatalf("the claim of a dead deliverer was not taken: %d", n)
 	}
 }
+
+// task new on a cold start: the brief prompt showed late and its Enter was lost, yet task new reported
+// success (2026-11-19, task t93a651). It must press Enter again once the prompt shows.
+func TestNewSubmitsTheBriefWhenTheFirstEnterIsLost(t *testing.T) {
+	r := newRig(t)
+	r.b.LateInput = 1
+	x := r.mustNew(t, nil, NewOpts{})
+	if in := r.b.State[x.Pane].Input; in != "" {
+		t.Fatalf("the brief prompt stayed on the input line: %q", in)
+	}
+}
+
+// A notice typed into a busy owner that kept it on its input line was retried and arrived again
+// once the line cleared (2026-11-19: three copies). Typed but not confirmed is not sent again.
+func TestUnconfirmedNoticeIsNotTypedTwice(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	st := r.b.State[r.owner.ID]
+	st.Input = "owner typing"
+	r.done(t, x, "ok", "finished")
+	st.Input = ""
+	r.b.DropEnters = 100 // the text stays on the input line, as a queued message on a busy harness
+	r.tasks.FlushPending()
+	st.Input = "" // the harness takes the queued message at the end of its turn
+	r.b.DropEnters = 0
+	r.tasks.FlushPending()
+	if texts := r.b.Texts(r.owner.ID); len(texts) != 1 {
+		t.Fatalf("typed %d times: %q", len(texts), texts)
+	}
+	if x := r.get(t, x.ID); x.Notify != "delivered" {
+		t.Fatal(x.Notify)
+	}
+	entries, _, err := (&Journal{Root: r.reg.Root}).Read(Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range entries {
+		if e.Event == "msg" && e.Status == "unconfirmed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the unconfirmed notice is missing from the journal")
+	}
+}
+
+// task send whose text stays on the input line (exit 5) may still arrive: the round opens anyway,
+// so the worker's task done for it is not refused as already reported.
+func TestTaskSendOpensTheRoundWhenUnconfirmed(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	r.done(t, x, "ok", "finished")
+	r.b.DropEnters = 100
+	err := r.tasks.Send(x.ID, "one more thing", false)
+	var te *term.Error
+	if !errors.As(err, &te) || te.Code != term.CodeTimeout {
+		t.Fatal(err)
+	}
+	if y := r.get(t, x.ID); y.Status != "running" || y.Round != 2 {
+		t.Fatalf("status %s round %d", y.Status, y.Round)
+	}
+}

@@ -792,7 +792,7 @@ func tallFlow(r *leadRig, notices *noticeWatch, cell, root string, logf func(str
 }
 
 // closeTasksTitled closes the panes of the tasks titled title: a task new that failed after its spawn (a
-// brief typed but not submitted, exit 4) prints no task ID, and its worker's tab would stay open.
+// brief typed but not confirmed, exit 5 since v0.7.2) prints no task ID, and its worker's tab would stay open.
 func closeTasksTitled(r *leadRig, title string, logf func(string, ...any)) {
 	_, out, _ := r.ops("task", "ls", "--all", "--json")
 	var tasks []struct{ ID, Title string }

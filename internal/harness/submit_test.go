@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -165,5 +166,131 @@ func TestSameServer(t *testing.T) {
 		if got := sameServer(c.stored, c.current); got != c.want {
 			t.Fatalf("%v vs %v: %v", c.stored, c.current, got)
 		}
+	}
+}
+
+// A starting Claude Code took the typed prompt late and lost its Enter, while the input line still
+// looked empty right after (2026-11-19, task t93a651). One empty look is not proof the line went.
+func TestSubmitLooksAgainWhenTheTextShowsLate(t *testing.T) {
+	r := newOps(t)
+	r.b.LateInput = 1
+	if err := r.ops.SubmitFirst(r.t, "hello", nil); err != nil {
+		t.Fatal(err)
+	}
+	if in := r.b.State[r.t.ID].Input; in != "" {
+		t.Fatalf("the text stayed on the input line: %q", in)
+	}
+	if got := typed(r); len(got) != 3 || got[1] != "key:enter" || got[2] != "key:enter" {
+		t.Fatalf("expected a second Enter once the text showed: %v", got)
+	}
+}
+
+func TestSpawnSubmitsWhenTheFirstEnterIsLost(t *testing.T) {
+	r := newOps(t)
+	r.b.LateInput = 1
+	p, err := r.ops.Spawn("generic", "tab", "/tmp/x", SpawnOpts{Prompt: "do the thing", Command: "c", Timeout: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in := r.b.State[p.ID].Input; in != "" {
+		t.Fatalf("the prompt stayed on the input line: %q", in)
+	}
+}
+
+// Text that never leaves the input line is an error, never success. It is not exit 4 (a draft refused,
+// nothing sent): the text was typed, and a busy harness can still deliver it (2026-11-19, three copies).
+func TestSubmitFailsWhenTheTextStays(t *testing.T) {
+	r := newOps(t)
+	r.b.DropEnters = 10
+	err := r.ops.Submit(r.t, "hello", nil)
+	wantCode(t, err, term.CodeTimeout)
+	if !strings.Contains(err.Error(), "stayed on the input line") || !strings.Contains(err.Error(), "do not send it again") {
+		t.Fatal(err)
+	}
+}
+
+// A send to a busy pane whose text stays on the input line is no draft refusal.
+func TestMsgToABusyPaneWhoseTextStaysIsNotARefusal(t *testing.T) {
+	r := newOps(t)
+	r.b.Natives[r.t.ID] = "working"
+	r.b.DropEnters = 10
+	_, err := r.ops.Msg(r.t, "hello", MsgOpts{Timeout: 60})
+	wantCode(t, err, term.CodeTimeout)
+	if len(r.b.Texts(r.t.ID)) != 1 {
+		t.Fatal(r.b.Texts(r.t.ID))
+	}
+}
+
+// A harness that went busy has taken the line: SubmitFirst needs no second look then.
+func TestSubmitFirstTrustsABusyHarnessAtOnce(t *testing.T) {
+	r := newOps(t)
+	busy := *Profiles["generic"]
+	busy.BusyPatterns = []*regexp.Regexp{regexp.MustCompile("(?m)^> $")} // the empty line itself reads as busy
+	if err := r.ops.SubmitFirst(r.t, "hello", &busy); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.b.Captures(r.t.ID); got != 1 {
+		t.Fatalf("expected one look, got %d", got)
+	}
+}
+
+// A starting harness whose input line cannot be read at the first look gets a second look.
+func TestSubmitFirstLooksAgainWhenTheLineIsUnreadable(t *testing.T) {
+	r := newOps(t)
+	prof := *Profiles["generic"]
+	looks := 0
+	prof.ReadInput = func(lines []string) *string {
+		looks++
+		if looks == 1 {
+			return nil // a startup redraw hides the box
+		}
+		return genericInput(lines)
+	}
+	r.b.LateInput = 1
+	if err := r.ops.SubmitFirst(r.t, "hello", &prof); err != nil {
+		t.Fatal(err)
+	}
+	if in := r.b.State[r.t.ID].Input; in != "" {
+		t.Fatalf("the text stayed on the input line: %q", in)
+	}
+}
+
+// The same lost Enter, read through Claude Code's own input box (claudeInput).
+func TestSpawnClaudeSubmitsWhenTheFirstEnterIsLost(t *testing.T) {
+	r := newOps(t)
+	r.b.LateInput = 1
+	p, err := r.ops.Spawn("claude", "tab", "/tmp/x", SpawnOpts{Prompt: "do the thing", Timeout: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in := r.b.State[p.ID].Input; in != "" {
+		t.Fatalf("the prompt stayed on the input line: %q", in)
+	}
+}
+
+// clockFake notes the time of the first typed text.
+type clockFake struct {
+	*termtest.Fake
+	clock   *termtest.Clock
+	typedAt float64
+}
+
+func (c *clockFake) SendText(p *term.Pane, text string) error {
+	if c.typedAt == 0 {
+		c.typedAt = c.clock.T
+	}
+	return c.Fake.SendText(p, text)
+}
+
+// Late startup banners redraw the screen: the first prompt waits for 3 s of stable screen, not 1.5 s.
+func TestStartupWaitsForAStableScreenOf3s(t *testing.T) {
+	r := newOps(t)
+	c := &clockFake{Fake: r.b, clock: r.clock}
+	r.ops.Backend = c
+	if _, err := r.ops.Spawn("generic", "tab", "/tmp/x", SpawnOpts{Prompt: "go", Command: "c", Timeout: 60}); err != nil {
+		t.Fatal(err)
+	}
+	if c.typedAt < 3.0 {
+		t.Fatalf("typed at %.2f s, before %g s of stable screen", c.typedAt, startStable)
 	}
 }

@@ -66,8 +66,9 @@ else ~/.local/state/termctl.
 task wait prints a DIALOG block (JSON: "event": "dialog") instead of the task table (JSON: "event": "finished")
 when a worker waits on a dialog; both exit 0. A [persist] choice widens permission and needs --persist.
 
-Exit codes: 0 ok, 1 backend error, 2 refused target/usage, 4 draft on input line, 5 wait timed out, 6 refused by a safety limit,
-7 no dialog on screen, or not the one --expect names.
+Exit codes: 0 ok, 1 backend error, 2 refused target/usage, 4 draft on input line (msg, slash: not typed),
+5 wait timed out, or typed text stayed on the input line (it may still arrive: read, never resend),
+6 refused by a safety limit, 7 no dialog on screen, or not the one --expect names.
 `
 
 var (
@@ -353,6 +354,9 @@ func (a *App) harness(argv []string) error {
 		}
 		sent, err := ops.Msg(pane, text, harness.MsgOpts{Force: p.bools["--force"], ClearFirst: p.bools["--clear-first"], Timeout: timeout})
 		if err != nil {
+			if sent.Typed { // it may still arrive: the watcher must cover the pane's dialogs
+				a.gaveWork(o, a.tasksFor(o, ops.Backend, ops.Sender), ops.Backend, pane)
+			}
 			return err
 		}
 		a.gaveWork(o, a.tasksFor(o, ops.Backend, ops.Sender), ops.Backend, pane)

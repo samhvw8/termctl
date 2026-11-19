@@ -594,6 +594,7 @@ func (t *Tasks) start(ops *Ops, owner *term.Pane, o NewOpts, task *Task, brief s
 	if err := t.Reg.Update(func(d *Data) error { d.Tasks[id].Brief = path; return nil }); err != nil {
 		return err
 	}
+	spawned := pane == nil
 	if pane == nil {
 		ref := t.Backend.ServerRef()
 		pane, err = ops.Spawn(o.Harness, o.Where, o.Cwd, SpawnOpts{
@@ -629,7 +630,11 @@ func (t *Tasks) start(ops *Ops, owner *term.Pane, o NewOpts, task *Task, brief s
 	if prof == nil {
 		prof = Profiles["generic"]
 	}
-	if err := ops.Submit(pane, prompt(id, owner, brief, path), prof); err != nil {
+	submit := ops.Submit
+	if spawned {
+		submit = ops.SubmitFirst // a harness that has just started can lose the first Enter
+	}
+	if err := submit(pane, prompt(id, owner, brief, path), prof); err != nil {
 		return err
 	}
 	return t.Reg.Update(func(d *Data) error { d.Tasks[id].Launched = true; return nil })
@@ -926,19 +931,25 @@ func (t *Tasks) Send(id, text string, force bool) error {
 	if p == nil {
 		return term.UsageErr("task %s: its pane is gone", x.ID)
 	}
-	if _, err := t.taskOps(b, t.Sender, x).Msg(p, fmt.Sprintf("task %s: %s (%s)", x.ID, text, footer(x.ID)), MsgOpts{Force: force}); err != nil {
+	sent, err := t.taskOps(b, t.Sender, x).Msg(p, fmt.Sprintf("task %s: %s (%s)", x.ID, text, footer(x.ID)), MsgOpts{Force: force})
+	if err != nil && !sent.Typed {
 		return err
 	}
+	// Typed but not confirmed (exit 5) may still arrive: open the round anyway, or the worker's
+	// task done for it would be refused as already reported.
 	t.WarnUncalibratedLead()
 	if x.Status == "running" {
-		return nil
+		return err
 	}
-	return t.Reg.Update(func(d *Data) error {
+	if uerr := t.Reg.Update(func(d *Data) error {
 		c := d.Tasks[x.ID]
 		c.Status, c.Ended, c.Notify, c.Seen = "running", 0, "none", false
 		c.Round++
 		return nil
-	})
+	}); uerr != nil {
+		return uerr
+	}
+	return err
 }
 
 func unseen(tasks map[string]*Task, owner string) []*Task {
@@ -1330,8 +1341,15 @@ func (t *Tasks) deliver(p Pending) string {
 	if d, err := t.Reg.Read(); err == nil && d.Tasks[p.Task] != nil {
 		ops.Project, ops.From = d.Tasks[p.Task].Project, d.Tasks[p.Task].Pane // the worker's report
 	}
-	if _, err := ops.Msg(pane, p.Text, MsgOpts{Tag: p.Tag, Retry: true}); err != nil {
+	if sent, err := ops.Msg(pane, p.Text, MsgOpts{Tag: p.Tag, Retry: true}); err != nil {
 		var te *term.Error
+		if sent.Typed {
+			// Typed, but not confirmed (still on the input line, or a backend error after typing): a busy
+			// harness can hold a queued message there and deliver it later. A retry could type it a second
+			// time, so it counts as delivered.
+			Warn(fmt.Sprintf("the notice about %s was typed but not confirmed; not sent again: %v", p.about(), err))
+			return "delivered"
+		}
 		if !errors.As(err, &te) || te.Code != term.CodeDraft {
 			Warn(fmt.Sprintf("could not notify the owner of %s: %v", p.about(), err))
 		}
