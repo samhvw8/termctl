@@ -1637,3 +1637,23 @@ func TestTaskSendOpensTheRoundWhenUnconfirmed(t *testing.T) {
 		t.Fatalf("status %s round %d", y.Status, y.Round)
 	}
 }
+
+// A notice is typed only into an idle owner: while the owner works it waits, then goes once.
+func TestNoticeWaitsUntilTheOwnerIsIdle(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	r.b.Natives[r.owner.ID] = "working"
+	r.done(t, x, "ok", "finished")
+	for i := 0; i < 3; i++ {
+		r.tasks.FlushPending()
+	}
+	if texts := r.b.Texts(r.owner.ID); len(texts) != 0 {
+		t.Fatalf("typed into a busy owner: %q", texts)
+	}
+	r.b.Natives[r.owner.ID] = "idle"
+	r.tasks.FlushPending()
+	r.tasks.FlushPending()
+	if texts := r.b.Texts(r.owner.ID); len(texts) != 1 {
+		t.Fatalf("typed %d times once idle: %q", len(texts), texts)
+	}
+}

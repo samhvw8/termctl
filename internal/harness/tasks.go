@@ -1341,6 +1341,12 @@ func (t *Tasks) deliver(p Pending) string {
 	if d, err := t.Reg.Read(); err == nil && d.Tasks[p.Task] != nil {
 		ops.Project, ops.From = d.Tasks[p.Task].Project, d.Tasks[p.Task].Pane // the worker's report
 	}
+	// A notice goes only to an idle owner. Typed into a busy one, it is queued on its input line, and
+	// each later look reads it as unsent (2026-11-19: one dialog typed 8 times into a busy lead). It
+	// waits in Pending instead, and the next round looks again.
+	if busy, err := ops.busy(pane, ForProcess(pane.Process)); err != nil || busy {
+		return "retry"
+	}
 	if sent, err := ops.Msg(pane, p.Text, MsgOpts{Tag: p.Tag, Retry: true}); err != nil {
 		var te *term.Error
 		if sent.Typed {
