@@ -274,6 +274,9 @@ func (t *Tasks) Reconcile() error {
 		if !open(x.Status) {
 			continue
 		}
+		if x.Defer && x.Closed {
+			continue // the watcher closed its pane on ok: gone on purpose, not lost
+		}
 		if x.Pane == "" {
 			if now-x.Started > reservationTTL {
 				lost = append(lost, x.ID)

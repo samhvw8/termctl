@@ -176,6 +176,13 @@ func TestWatcherClosesAnOkDeferredTask(t *testing.T) {
 	if ev := journalEvents(t, r, Filter{Task: ok.ID}); !termtest.Contains(ev, "task.close:ready:deferred job reported ok") {
 		t.Fatalf("%q", ev)
 	}
+	// Its pane is gone on purpose: a later reconcile must not call the task lost (seen on a real run).
+	if err := r.tasks.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if s := r.get(t, ok.ID).Status; s != "ready" {
+		t.Fatalf("a closed ok deferred task became %s", s)
+	}
 }
 
 // The watcher denies (Esc) each dialog on a deferred worker and never tells the owner; after two denials it
