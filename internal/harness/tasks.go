@@ -25,6 +25,7 @@ const (
 	notifyRetry      = 10.0 // how long `task done` keeps trying before it leaves the result pending
 	notifyPoll       = 2.0
 	PendingTTL       = 3600.0
+	idleWait         = 600.0 // how long a notice waits for its owner to look idle before it is typed anyway
 	claimTTL         = 600.0 // a claim older than this belongs to a process that died; above deliveryBound
 	reservationTTL   = 600.0 // a task with no pane after this long never got one
 	unreachableTTL   = 600.0 // a server that has not answered for this long is gone for good
@@ -1221,7 +1222,8 @@ func (t *Tasks) FlushPending() (int, error) {
 	if err := t.Reg.Update(func(d *Data) error {
 		keep := d.Pending[:0]
 		for _, p := range d.Pending {
-			if now-p.Created > PendingTTL {
+			liveClaim := p.Claimed != 0 && now-p.Claimed <= claimTTL && !claimerDead(p.ClaimPid)
+			if now-p.Created > PendingTTL && !liveClaim { // expiring a notice being typed would announce it again
 				if x := d.Tasks[p.Task]; x != nil && p.Kind == "" {
 					x.Notify = "expired"
 				}
@@ -1230,6 +1232,10 @@ func (t *Tasks) FlushPending() (int, error) {
 			}
 			if p.Kind == "dialog" && !noticeOnScreen(d, p) {
 				continue // answered or gone before its notice got through: telling the owner now would mislead
+			}
+			if x := d.Tasks[p.Task]; p.Kind == "" && x != nil && (x.Seen || x.Closed) && !liveClaim {
+				x.Notify = "seen" // the owner took the result with task wait: the notice would wake it for nothing
+				continue
 			}
 			if p.Claimed == 0 || now-p.Claimed > claimTTL || claimerDead(p.ClaimPid) {
 				p.Claimed, p.ClaimPid = now, os.Getpid()
@@ -1341,13 +1347,16 @@ func (t *Tasks) deliver(p Pending) string {
 	if d, err := t.Reg.Read(); err == nil && d.Tasks[p.Task] != nil {
 		ops.Project, ops.From = d.Tasks[p.Task].Project, d.Tasks[p.Task].Pane // the worker's report
 	}
-	// A notice goes only to an idle owner. Typed into a busy one, it is queued on its input line, and
-	// each later look reads it as unsent (2026-11-19: one dialog typed 8 times into a busy lead). It
-	// waits in Pending instead, and the next round looks again.
-	if busy, err := ops.busy(pane, ForProcess(pane.Process)); err != nil || busy {
-		return "retry"
-	}
-	if sent, err := ops.Msg(pane, p.Text, MsgOpts{Tag: p.Tag, Retry: true}); err != nil {
+	// A notice goes only to an idle owner, for up to idleWait: typed into a busy Claude Code it is queued
+	// on the input line, and before v0.7.2 each later look read it as unsent and typed it again (2026-11-19:
+	// one dialog 8 times into a busy lead). Msg checks once, with the draft check, so a delivery makes no
+	// extra backend calls (deliveryBound). Past idleWait it goes anyway: an owner that only looks busy (a
+	// busy pattern left in its last output, a status stuck on working) must still hear, once.
+	idleOnly := t.clock().Now()-p.Created < idleWait
+	if sent, err := ops.Msg(pane, p.Text, MsgOpts{Tag: p.Tag, Retry: true, IdleOnly: idleOnly}); err != nil {
+		if errors.Is(err, ErrBusy) {
+			return "retry"
+		}
 		var te *term.Error
 		if sent.Typed {
 			// Typed, but not confirmed (still on the input line, or a backend error after typing): a busy

@@ -1657,3 +1657,59 @@ func TestNoticeWaitsUntilTheOwnerIsIdle(t *testing.T) {
 		t.Fatalf("typed %d times once idle: %q", len(texts), texts)
 	}
 }
+
+// An owner that only looks busy (a busy pattern left in its last output, a status stuck on working)
+// still hears, once, after idleWait.
+func TestNoticeGoesAnywayAfterIdleWait(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	r.b.Natives[r.owner.ID] = "working"
+	r.done(t, x, "ok", "finished")
+	r.tasks.FlushPending()
+	if len(r.b.Texts(r.owner.ID)) != 0 {
+		t.Fatal("typed into a busy owner before idleWait")
+	}
+	r.clock.T += idleWait + 1
+	r.tasks.FlushPending()
+	r.tasks.FlushPending()
+	if texts := r.b.Texts(r.owner.ID); len(texts) != 1 {
+		t.Fatalf("typed %d times after idleWait: %q", len(texts), texts)
+	}
+}
+
+// A result the owner took with task wait while busy is not typed into it later.
+func TestNoticeOfAResultTakenWithWaitIsDropped(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	r.b.Natives[r.owner.ID] = "working"
+	r.done(t, x, "ok", "finished")
+	if _, err := r.tasks.Wait(x.ID, false, 4); err != nil {
+		t.Fatal(err)
+	}
+	r.b.Natives[r.owner.ID] = "idle"
+	r.tasks.FlushPending()
+	if texts := r.b.Texts(r.owner.ID); len(texts) != 0 {
+		t.Fatalf("typed a result the owner already took: %q", texts)
+	}
+	if n := len(r.data().Pending); n != 0 {
+		t.Fatalf("%d notices left", n)
+	}
+}
+
+// A notice past PendingTTL that a live process is typing right now is not expired: expiring it would
+// clear its mark and announce it again.
+func TestAPendingNoticeBeingTypedDoesNotExpire(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	r.b.Natives[r.owner.ID] = "working"
+	r.done(t, x, "ok", "finished")
+	r.clock.T += PendingTTL + 1
+	r.reg.Update(func(d *Data) error {
+		d.Pending[0].Claimed, d.Pending[0].ClaimPid = r.clock.T, os.Getpid()
+		return nil
+	})
+	r.tasks.FlushPending()
+	if n := len(r.data().Pending); n != 1 || r.get(t, x.ID).Notify == "expired" {
+		t.Fatalf("a claimed notice expired: pending=%d notify=%s", n, r.get(t, x.ID).Notify)
+	}
+}

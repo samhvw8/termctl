@@ -517,7 +517,11 @@ type MsgOpts struct {
 	Timeout           float64
 	Tag               string
 	Retry             bool // a failure will be tried again: the journal records only the delivery
+	IdleOnly          bool // refuse a busy harness with ErrBusy, nothing typed (notices)
 }
+
+// ErrBusy is Msg's refusal of a busy harness under IdleOnly: nothing was typed.
+var ErrBusy = errors.New("the harness is busy; nothing typed")
 
 // Sent is what Msg typed. Busy: the harness was working, so it may hold the message until its turn ends.
 type Sent struct {
@@ -556,6 +560,9 @@ func (o *Ops) Msg(p *term.Pane, text string, opts MsgOpts) (Sent, error) {
 	busy, err := o.busy(p, prof)
 	if err != nil {
 		return Sent{}, err
+	}
+	if busy && opts.IdleOnly {
+		return Sent{Busy: true}, ErrBusy
 	}
 	var line, file string
 	if strings.Contains(text, "\n") || len([]rune(text)) > MaxInline {

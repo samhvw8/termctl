@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -827,6 +828,10 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 			return err
 		}
 		if err := tasks.Send(id, text, p.bools["--force"]); err != nil {
+			var te *term.Error
+			if errors.As(err, &te) && te.Code == term.CodeTimeout { // typed, may still arrive: the round is open
+				a.ensureWatcher(o, tasks)
+			}
 			return err
 		}
 		fmt.Fprintf(a.Out, "sent to task %s\n", id)
@@ -857,7 +862,7 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 		if err != nil {
 			return err
 		}
-		note := map[string]string{"delivered": "owner told; keep this session open", "pending": "owner busy: notification pending; keep this session open", "owner-gone": "owner pane is gone"}[t.Notify]
+		note := map[string]string{"delivered": "owner told; keep this session open", "pending": "owner busy: notification pending; keep this session open", "owner-gone": "owner pane is gone", "seen": "owner took it with task wait"}[t.Notify]
 		if note == "" {
 			note = t.Notify
 		}
