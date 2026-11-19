@@ -1507,7 +1507,9 @@ func (t *Tasks) deliver(p Pending) string {
 	// one dialog 8 times into a busy lead). Msg checks once, with the draft check, so a delivery makes no
 	// extra backend calls (deliveryBound). Past idleWait it goes anyway: an owner that only looks busy (a
 	// busy pattern left in its last output, a status stuck on working) must still hear, once.
-	idleOnly := t.clock().Now()-p.Created < idleWait
+	// A dialog notice goes at once, busy or not: the worker is stalled until the owner answers, and a lead
+	// that heard nothing polled read/ls in a loop to find its dialogs (2026-11-19). It is typed once (v0.7.2).
+	idleOnly := p.Kind != "dialog" && t.clock().Now()-p.Created < idleWait
 	if sent, err := ops.Msg(pane, p.Text, MsgOpts{Tag: p.Tag, Retry: true, IdleOnly: idleOnly}); err != nil {
 		if errors.Is(err, ErrBusy) {
 			return "retry"

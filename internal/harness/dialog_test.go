@@ -1285,3 +1285,19 @@ func TestAnswerAndDenyASpawnedPane(t *testing.T) {
 		t.Fatalf("deny on a spawned pane pressed %q", got)
 	}
 }
+
+// A dialog notice reaches a busy owner at once: the worker is stalled until it is answered. Results
+// wait for an idle owner; a dialog must not, or the lead polls for it (2026-11-19).
+func TestADialogNoticeReachesABusyOwnerAtOnce(t *testing.T) {
+	r := newRig(t)
+	dialogTask(t, r)
+	r.b.Natives[r.owner.ID] = "working"
+	r.tasks.Watch(WatchOpts{Rounds: 1})
+	if n := len(ownerNotes(r)); n != 1 {
+		t.Fatalf("a busy owner got %d dialog notices, want 1", n)
+	}
+	r.tasks.Watch(WatchOpts{Rounds: 2})
+	if n := len(ownerNotes(r)); n != 1 {
+		t.Fatalf("typed %d times", n)
+	}
+}
