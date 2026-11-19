@@ -215,7 +215,7 @@ func (a *App) timeline(w io.Writer, entries []harness.Entry, skip string) {
 }
 
 func (a *App) resumeCmd(rest []string, o *Options) error {
-	p, err := parseArgs(rest, nil, []string{"-n"}, -1)
+	p, err := parseArgs(rest, []string{"--tree"}, []string{"-n"}, -1)
 	if err != nil {
 		return err
 	}
@@ -223,7 +223,7 @@ func (a *App) resumeCmd(rest []string, o *Options) error {
 		return err
 	}
 	if len(p.pos) != 1 {
-		return term.UsageErr("usage: resume (TASK-ID | DIR)   DIR: a project folder, . for your own")
+		return term.UsageErr("usage: resume (TASK-ID | DIR) [--tree]   DIR: a project folder, . for your own")
 	}
 	n, err := p.int("-n", 30)
 	if err != nil {
@@ -235,6 +235,11 @@ func (a *App) resumeCmd(rest []string, o *Options) error {
 		return err
 	}
 	if x := d.Tasks[p.pos[0]]; x != nil {
+		if p.bools["--tree"] {
+			fmt.Fprintf(a.Out, "# Tree of task %s: %s\n\n", x.ID, x.Title)
+			a.rollup(d, []*harness.Task{x}, true)
+			return nil
+		}
 		return a.resumeTask(x)
 	}
 	if looksLikeTaskID(p.pos[0]) {
@@ -246,7 +251,74 @@ func (a *App) resumeCmd(rest []string, o *Options) error {
 	if err != nil {
 		return err
 	}
+	if p.bools["--tree"] {
+		return a.resumeProjectTree(project, d)
+	}
 	return a.resumeProject(project, d, n)
+}
+
+// rollup prints one compact line per task and per task under it, a level deeper each: status, the latest
+// progress (a running task) or summary, and an open dialog. withClosed keeps closed descendants.
+func (a *App) rollup(d *harness.Data, roots []*harness.Task, withClosed bool) {
+	kids := map[string][]*harness.Task{}
+	for _, x := range d.Tasks {
+		if x.Parent != "" && (withClosed || !x.Closed) {
+			kids[x.Parent] = append(kids[x.Parent], x)
+		}
+	}
+	seen := map[string]bool{}
+	var walk func(xs []*harness.Task, indent string)
+	walk = func(xs []*harness.Task, indent string) {
+		sort.Slice(xs, func(i, j int) bool { return xs[i].Started < xs[j].Started })
+		for _, x := range xs {
+			if seen[x.ID] {
+				continue
+			}
+			seen[x.ID] = true
+			status := x.Status
+			if x.Closed {
+				status += " (closed)"
+			}
+			what := x.Summary
+			if x.Status == "running" && x.Progress != nil {
+				what = "progress: " + x.Progress.Text
+			}
+			line := fmt.Sprintf("%s%s  %-8s %-8s %s", indent, x.ID, status, x.Harness, term.Cut(x.Title, 40))
+			if what != "" {
+				line += "  — " + term.Cut(harness.OneLine(what), 100)
+			}
+			if x.Dialog != nil && x.Status == "running" && !x.Closed {
+				line += fmt.Sprintf("  [dialog %s: %s]", x.Dialog.Fingerprint, term.Cut(x.Dialog.Question, 60))
+			}
+			if m := harness.AckMarks(x); m != "" {
+				line += "  " + m
+			}
+			fmt.Fprintln(a.Out, line)
+			walk(kids[x.ID], indent+"  ")
+		}
+	}
+	walk(roots, "")
+}
+
+// resumeProjectTree is resume DIR --tree: the project's tasks not closed, each with a compact rollup of
+// the tasks under it, whatever their project.
+func (a *App) resumeProjectTree(project string, d *harness.Data) error {
+	fmt.Fprintf(a.Out, "# Tree of project %s (%s)\n\n", project, harness.ProjectSlug(project))
+	var open []*harness.Task
+	for _, x := range d.Tasks {
+		if filepath.Clean(x.Project) == filepath.Clean(project) && !x.Closed && x.Status != "done" {
+			if p := d.Tasks[x.Parent]; p != nil && filepath.Clean(p.Project) == filepath.Clean(project) && !p.Closed && p.Status != "done" {
+				continue // listed under its parent
+			}
+			open = append(open, x)
+		}
+	}
+	if len(open) == 0 {
+		fmt.Fprintln(a.Out, "(no tasks open)")
+		return nil
+	}
+	a.rollup(d, open, false)
+	return nil
 }
 
 var taskIDRe = regexp.MustCompile(`^t[0-9a-f]{6}$`)

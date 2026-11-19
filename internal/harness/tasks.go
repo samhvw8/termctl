@@ -19,7 +19,6 @@ import (
 
 const (
 	defaultMaxTasks  = 6
-	defaultMaxDepth  = 2
 	taskInline       = 500 // a brief up to this long is typed directly; longer goes through its file
 	WaitTimeout      = 600.0
 	waitPoll         = 3.0
@@ -49,6 +48,24 @@ func isShell(process string) bool { return shells[strings.TrimPrefix(process, "-
 
 func footer(id string) string {
 	return fmt.Sprintf(`When finished, run: harness-ops task done %s --status ok|failed|blocked --summary "<one line result>". `+"`task done`"+` tells the lead you are ready; keep this session open.`, id)
+}
+
+// taskFooter ends a task's brief: its capability card, then how to report (a deferred job acks once and
+// never replies). running is how many tasks of its tree run, itself included.
+func taskFooter(x *Task, running int) string {
+	how := footer(x.ID)
+	if x.Defer {
+		how = deferFooter(x.ID)
+	}
+	return roleCard(x, running) + " " + how
+}
+
+// sendFooter ends a task send: how to report this round. A deferred worker is reminded not to reply.
+func sendFooter(x *Task) string {
+	if x.Defer {
+		return fmt.Sprintf(`deferred: do not reply; when finished, run: harness-ops task done %s --status ok|failed|blocked --summary "<one line result>"`, x.ID)
+	}
+	return footer(x.ID)
 }
 
 func envInt(name string, def int) (int, error) {
@@ -382,6 +399,8 @@ type NewOpts struct {
 	Timeout                                                      float64
 	ReviewOf                                                     string
 	Blind                                                        bool
+	Defer                                                        bool // a deferred job: ack once, no notice, closed on ok
+	SubDepth, TreeMax                                            int  // levels below it may start (0: a leaf); running tasks in its tree (0: inherit)
 }
 
 func newID() string {
@@ -399,20 +418,22 @@ func holdsTask(d *Data, paneID string) bool {
 	return false
 }
 
-// reserve takes a slot under the lock, before the spawn, so parallel calls cannot exceed the cap.
-func (t *Tasks) reserve(owner *term.Pane, o NewOpts, pane *term.Pane) (*Task, error) {
+// reserve takes a slot under the lock, before the spawn, so parallel calls cannot exceed the cap. It
+// returns the task and how many tasks of its tree run, itself included (for its capability card).
+func (t *Tasks) reserve(owner *term.Pane, o NewOpts, pane *term.Pane) (*Task, int, error) {
 	limit := o.MaxTasks
 	if limit == 0 {
 		var err error
 		if limit, err = envInt("TERMCTL_MAX_TASKS", defaultMaxTasks); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 	depthLimit, err := envInt("TERMCTL_MAX_DEPTH", defaultMaxDepth)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var task *Task
+	inTree := 0
 	err = t.Reg.Update(func(d *Data) error {
 		running := 0
 		var parent *Task
@@ -427,20 +448,16 @@ func (t *Tasks) reserve(owner *term.Pane, o NewOpts, pane *term.Pane) (*Task, er
 		if running >= limit {
 			return term.Errf(term.CodeGuard, "%s already runs %d tasks (limit %d); use --max to raise it", owner.Address(), running, limit)
 		}
-		depth := 1
-		if parent != nil {
-			depth = parent.Depth + 1
-		}
-		if depth > depthLimit {
-			return term.Errf(term.CodeGuard, "task depth %d is over the limit %d; set TERMCTL_MAX_DEPTH to change it", depth, depthLimit)
-		}
 		if pane != nil && holdsTask(d, pane.ID) {
 			return term.Errf(term.CodeGuard, "%s already holds a running task", pane.Address())
 		}
 		task = &Task{
 			ID: newID(), Title: o.Title, Harness: o.Harness, Ref: t.Backend.ServerRef(), Owner: owner.ID, OwnerRef: t.SenderRef,
-			Cwd: o.Cwd, Status: "running", Started: t.clock().Now(), Depth: depth, Notify: "none", Owned: pane == nil,
-			Round: 1, ReviewOf: o.ReviewOf, Blind: o.Blind, Project: ProjectOf(owner),
+			Cwd: o.Cwd, Status: "running", Started: t.clock().Now(), Notify: "none", Owned: pane == nil,
+			Round: 1, ReviewOf: o.ReviewOf, Blind: o.Blind, Project: ProjectOf(owner), Defer: o.Defer,
+		}
+		if err := place(d, task, parent, o.SubDepth, o.TreeMax, depthLimit); err != nil {
+			return err
 		}
 		if parent != nil {
 			task.Parent = parent.ID
@@ -449,17 +466,18 @@ func (t *Tasks) reserve(owner *term.Pane, o NewOpts, pane *term.Pane) (*Task, er
 			task.Pane = pane.ID
 		}
 		d.Tasks[task.ID] = task
+		inTree = runningInTree(d, task.Root)
 		return nil
 	})
-	return task, err
+	return task, inTree, err
 }
 
-// writeBrief files the brief in the task's project folder of the journal.
-func (t *Tasks) writeBrief(x *Task, text string) (string, error) {
-	return t.journal().WriteFile(x.Project, "brief", x.ID, strings.TrimRight(text, " \n\t")+"\n\n"+footer(x.ID))
+// writeBrief files the brief in the task's project folder of the journal, with the footer typed after it.
+func (t *Tasks) writeBrief(x *Task, text, foot string) (string, error) {
+	return t.journal().WriteFile(x.Project, "brief", x.ID, strings.TrimRight(text, " \n\t")+"\n\n"+foot)
 }
 
-func prompt(id string, owner *term.Pane, text, brief string) string {
+func prompt(id string, owner *term.Pane, text, brief, foot string) string {
 	body := Flat(strings.TrimSpace(text))
 	name := owner.Label
 	if name == "" {
@@ -471,7 +489,7 @@ func prompt(id string, owner *term.Pane, text, brief string) string {
 	if strings.Contains(body, "\n") || len([]rune(body)) > taskInline {
 		body = "Read the file " + brief + " and do what it says."
 	}
-	return fmt.Sprintf("[task %s from %s] %s %s", id, name, body, footer(id))
+	return fmt.Sprintf("[task %s from %s] %s %s", id, name, body, foot)
 }
 
 func (t *Tasks) fail(id string, cause error) {
@@ -564,13 +582,13 @@ func (t *Tasks) New(o NewOpts) (*Task, error) {
 			return nil, err
 		}
 	}
-	task, err := t.reserve(owner, o, pane)
+	task, inTree, err := t.reserve(owner, o, pane)
 	if err != nil {
 		return nil, err
 	}
 	id := task.ID
 	ops.Task, ops.Project = id, task.Project
-	if err := t.start(ops, owner, o, task, brief, pane); err != nil {
+	if err := t.start(ops, owner, o, task, brief, taskFooter(task, inTree), pane); err != nil {
 		t.fail(id, err)
 		t.logTask("task.new", task, "failed", err.Error())
 		return nil, err
@@ -591,9 +609,9 @@ func (t *Tasks) New(o NewOpts) (*Task, error) {
 	return x, nil
 }
 
-func (t *Tasks) start(ops *Ops, owner *term.Pane, o NewOpts, task *Task, brief string, pane *term.Pane) error {
+func (t *Tasks) start(ops *Ops, owner *term.Pane, o NewOpts, task *Task, brief, foot string, pane *term.Pane) error {
 	id := task.ID
-	path, err := t.writeBrief(task, brief)
+	path, err := t.writeBrief(task, brief, foot)
 	if err != nil {
 		return err
 	}
@@ -640,7 +658,7 @@ func (t *Tasks) start(ops *Ops, owner *term.Pane, o NewOpts, task *Task, brief s
 	if spawned {
 		submit = ops.SubmitFirst // a harness that has just started can lose the first Enter
 	}
-	if err := submit(pane, prompt(id, owner, brief, path), prof); err != nil {
+	if err := submit(pane, prompt(id, owner, brief, path, foot), prof); err != nil {
 		return err
 	}
 	return t.Reg.Update(func(d *Data) error { d.Tasks[id].Launched = true; return nil })
@@ -937,7 +955,7 @@ func (t *Tasks) Send(id, text string, force bool) error {
 	if p == nil {
 		return term.UsageErr("task %s: its pane is gone", x.ID)
 	}
-	sent, err := t.taskOps(b, t.Sender, x).Msg(p, fmt.Sprintf("task %s: %s (%s)", x.ID, text, footer(x.ID)), MsgOpts{Force: force})
+	sent, err := t.taskOps(b, t.Sender, x).Msg(p, fmt.Sprintf("task %s: %s (%s)", x.ID, text, sendFooter(x)), MsgOpts{Force: force})
 	if err != nil && !sent.Typed {
 		return err
 	}
@@ -1164,6 +1182,11 @@ func (t *Tasks) Done(id, status, summary, summaryFile string) (*Task, error) {
 		x.Dialog = nil // the worker is reporting, so nothing waits on screen
 		x.IdleSince, x.Stall = 0, nil
 		tid = x.ID
+		if x.Defer { // nobody reads a deferred job's result: recorded and journaled, never typed
+			x.Notify = "none"
+			done = *x
+			return nil
+		}
 		done = *x
 		tag, err := t.doneTag(x, t.Backend)
 		if err != nil {
@@ -1439,6 +1462,8 @@ func noticeLive(d *Data, p *Pending) bool {
 	case "progress", "stall":
 		x := d.Tasks[p.Task]
 		return x != nil && x.Status == "running" && !x.Closed && (p.Kind == "progress" || x.Stall != nil)
+	case "escalate": // of a dialog: it still waits; of ended tasks with running sub-tasks: always
+		return p.Dialog == "" || dialogOnScreen(d.Tasks[p.Task], p.Dialog)
 	}
 	return true
 }
@@ -1604,8 +1629,14 @@ type ReviewOpts struct {
 	Timeout                                       float64
 }
 
+// stripFooter is a brief file without the footer typed after it: since 2026-11-19 the footer starts with the
+// capability card ("Role: ..."), before that it was footer(id) alone.
 func stripFooter(brief, id string) string {
-	return strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(brief), footer(id)))
+	brief = strings.TrimSpace(brief)
+	if i := strings.LastIndex(brief, "\n\nRole: "); i >= 0 {
+		return strings.TrimSpace(brief[:i])
+	}
+	return strings.TrimSpace(strings.TrimSuffix(brief, footer(id)))
 }
 
 func (t *Tasks) blindBrief(x *Task) string {

@@ -14,7 +14,7 @@ import (
 // pane that holds none has no parent.
 func TestNewRecordsTheParentTask(t *testing.T) {
 	r := newRig(t)
-	t1 := r.mustNew(t, nil, NewOpts{})
+	t1 := r.mustNew(t, nil, NewOpts{SubDepth: 1})
 	t2 := r.mustNew(t, r.as(r.pane(t1)), NewOpts{})
 	if g := r.get(t, t1.ID); g.Parent != "" {
 		t.Fatalf("a top task has parent %q", g.Parent)
@@ -28,8 +28,8 @@ func TestNewRecordsTheParentTask(t *testing.T) {
 func TestTreeNestsDescendantsAcrossOwners(t *testing.T) {
 	t.Setenv("TERMCTL_MAX_DEPTH", "3")
 	r := newRig(t)
-	t1 := r.mustNew(t, nil, NewOpts{Title: "top"})
-	t2 := r.mustNew(t, r.as(r.pane(t1)), NewOpts{Title: "sub"})
+	t1 := r.mustNew(t, nil, NewOpts{Title: "top", SubDepth: 2})
+	t2 := r.mustNew(t, r.as(r.pane(t1)), NewOpts{Title: "sub", SubDepth: 1})
 	t3 := r.mustNew(t, r.as(r.pane(t2)), NewOpts{Title: "subsub"})
 	lone := r.mustNew(t, r.as(r.other), NewOpts{Title: "another lead's"})
 	nodes, err := r.tasks.Tree(false)

@@ -549,7 +549,7 @@ func TestSpawnWithAPromptAndMsgToYourPaneStartAWatcher(t *testing.T) {
 		t.Fatal("the spawn's prompt was not recorded as work")
 	}
 	for _, cmd := range []string{"msg", "send"} {
-		if code, _, stderr := e.run(cmd, "partner", "your turn"); code != 0 {
+		if code, _, stderr := e.run(cmd, "partner", "your turn: "+cmd); code != 0 { // the same text twice is refused
 			t.Fatal(cmd, code, stderr)
 		}
 	}

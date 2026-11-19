@@ -344,10 +344,12 @@ const startAsk = 2.0
 // trustPrompt is the folder-trust question Claude Code and agy ask before their first start in a folder.
 var trustPrompt = regexp.MustCompile(`(?i)\btrust (this folder|the files in this folder)\b`)
 
-// startupPrompt names what a starting harness waits on, or "": the terminal's "waiting" report (iTerm2, hc),
-// else the trust question on the screen (tmux and Rex report no status).
-func startupPrompt(native string, lines []string) string {
-	if strings.HasPrefix(native, "waiting") {
+// startupPrompt names what a starting harness waits on, or "": the terminal's "waiting" report (iTerm2, hc)
+// while the profile finds no input line on screen, else the trust question on the screen (tmux and Rex report
+// no status). A native "waiting" beside a visible input line is no prompt: on 2026-11-19 iTerm2 reported agy
+// waiting ("Sign in required") for over 2 s while its input line was already drawn, and task new failed.
+func startupPrompt(native string, lines []string, prof *Profile) string {
+	if strings.HasPrefix(native, "waiting") && (prof.ReadInput == nil || prof.ReadInput(lines) == nil) {
 		if d := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(native, "waiting"), ":")); d != "" {
 			return d
 		}
@@ -395,7 +397,7 @@ func (o *Ops) waitIdle(p *term.Pane, timeout float64, prof *Profile, starting bo
 		} else if idleSince < 0 {
 			idleSince = now
 		}
-		if ask := startupPrompt(native, lines); starting && ask != "" {
+		if ask := startupPrompt(native, lines, prof); starting && ask != "" {
 			if askSince < 0 {
 				askSince = now
 			}
@@ -518,7 +520,16 @@ type MsgOpts struct {
 	Tag               string
 	Retry             bool // a failure will be tried again: the journal records only the delivery
 	IdleOnly          bool // refuse a busy harness with ErrBusy, nothing typed (notices)
+	// Key is the message's idempotency key (MsgKey): the same key in a msg entry of the last keyWindow
+	// refuses the send (exit 6) unless Again. "" for none: notices and task send are not keyed.
+	Key    string
+	Again  bool
+	ID     string // a deferred message's ID, kept in its journal entry
+	Suffix string // added to the typed line after the text (or the file it points to); not journaled
 }
+
+// keyWindow is how long a msg's idempotency key refuses the same message to the same pane.
+const keyWindow = 600
 
 // ErrBusy is Msg's refusal of a busy harness under IdleOnly: nothing was typed.
 var ErrBusy = errors.New("the harness is busy; nothing typed")
@@ -541,6 +552,15 @@ func (o *Ops) Msg(p *term.Pane, text string, opts MsgOpts) (Sent, error) {
 		var err error
 		if tag, err = o.Tag(); err != nil {
 			return Sent{}, err
+		}
+	}
+	if opts.Key != "" && !opts.Again {
+		now := int64(o.Clock.Now())
+		if prev, err := o.Journal.FindKey(opts.Key, now-keyWindow); err != nil {
+			return Sent{}, err
+		} else if prev != nil {
+			return Sent{}, term.Errf(term.CodeGuard, "the same message went to %s at %s (%ds ago); not sent again. Pass --again to send it anyway",
+				p.Address(), time.Unix(prev.T, 0).Format("15:04:05"), now-prev.T)
 		}
 	}
 	prof := ForProcess(p.Process)
@@ -573,10 +593,13 @@ func (o *Ops) Msg(p *term.Pane, text string, opts MsgOpts) (Sent, error) {
 	} else {
 		line = tag + " " + text
 	}
-	line = Flat(line)
+	line = Flat(line + opts.Suffix)
 	typed, err := o.submit(p, line, prof, o.caller(), false)
 	e := o.entry("msg", p)
-	e.Text, e.File, e.Error = text, file, errText(err)
+	e.Text, e.File, e.Error, e.ID = text, file, errText(err), opts.ID
+	if typed {
+		e.Key = opts.Key // an error before typing sent nothing: the same message may go again
+	}
 	if file != "" {
 		e.Text = preview(text)
 	}

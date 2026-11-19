@@ -401,7 +401,7 @@ func TestStartupPromptReadsTheRealTrustScreen(t *testing.T) {
 		{"idle", []string{"❯ ", "? for shortcuts"}, ""},
 		{"working", nil, ""},
 	} {
-		if got := startupPrompt(c.native, c.lines); got != c.want {
+		if got := startupPrompt(c.native, c.lines, Profiles["claude"]); got != c.want {
 			t.Errorf("startupPrompt(%q) = %q, want %q", c.native, got, c.want)
 		}
 	}

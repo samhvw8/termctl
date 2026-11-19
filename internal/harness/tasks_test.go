@@ -179,21 +179,28 @@ func TestFinishedTasksFreeTheirSlot(t *testing.T) {
 	r.mustNew(t, nil, NewOpts{})
 }
 
+// TERMCTL_MAX_DEPTH (default 4) is a hard ceiling on total depth: a --sub-depth that would pass it is refused.
 func TestDepthLimit(t *testing.T) {
 	r := newRig(t)
-	t1 := r.mustNew(t, nil, NewOpts{})
-	t2 := r.mustNew(t, r.as(r.pane(t1)), NewOpts{})
-	if t1.Depth != 1 || t2.Depth != 2 {
-		t.Fatal(t1.Depth, t2.Depth)
+	t1 := r.mustNew(t, nil, NewOpts{SubDepth: 3})
+	t2 := r.mustNew(t, r.as(r.pane(t1)), NewOpts{SubDepth: 2})
+	t3 := r.mustNew(t, r.as(r.pane(t2)), NewOpts{SubDepth: 1})
+	t4 := r.mustNew(t, r.as(r.pane(t3)), NewOpts{})
+	if t1.Depth != 1 || t2.Depth != 2 || t3.Depth != 3 || t4.Depth != 4 {
+		t.Fatal(t1.Depth, t2.Depth, t3.Depth, t4.Depth)
 	}
-	_, err := r.new(t, r.as(r.pane(t2)), NewOpts{})
+	_, err := r.new(t, nil, NewOpts{SubDepth: 4}) // depth 1 + 4 levels below = 5
+	wantCode(t, err, 6)
+	if !strings.Contains(err.Error(), "limit 4") {
+		t.Fatal(err)
+	}
+	t.Setenv("TERMCTL_MAX_DEPTH", "2")
+	_, err = r.new(t, nil, NewOpts{SubDepth: 2})
+	wantCode(t, err, 6)
+	_, err = r.new(t, r.as(r.pane(t2)), NewOpts{}) // depth 3 under a ceiling of 2
 	wantCode(t, err, 6)
 	if !strings.Contains(err.Error(), "depth") {
 		t.Fatal(err)
-	}
-	t.Setenv("TERMCTL_MAX_DEPTH", "3")
-	if x := r.mustNew(t, r.as(r.pane(t2)), NewOpts{}); x.Depth != 3 {
-		t.Fatal(x.Depth)
 	}
 }
 
@@ -249,6 +256,21 @@ func TestStartupPromptFailsFastAndThePaneCanBeReused(t *testing.T) {
 	x, err := r.new(t, nil, NewOpts{Reuse: pane.ID})
 	if err != nil || x.Pane != pane.ID || x.Status != "running" {
 		t.Fatalf("%+v %v", x, err)
+	}
+}
+
+// iTerm2 reported agy "waiting" (Sign in required) for over 2 s while its input line was already on screen,
+// and task new failed with exit 5 (2026-11-19). A native "waiting" counts as a startup prompt only when the
+// profile finds no input line; the harness at its input line is idle.
+func TestNativeWaitingBesideAnInputLineIsNoStartupPrompt(t *testing.T) {
+	r := newRig(t)
+	r.tasks.spawnHook = func(p *term.Pane) { r.b.Natives[p.ID] = "waiting: Sign in required" } // its input line is drawn
+	x, err := r.new(t, nil, NewOpts{Harness: "claude"})
+	if err != nil || x.Status != "running" {
+		t.Fatalf("%+v %v", x, err)
+	}
+	if got := startupPrompt("waiting: Sign in required", []string{strings.Repeat("─", 40), "❯ ", strings.Repeat("─", 40)}, Profiles["claude"]); got != "" {
+		t.Fatalf("a visible input line read as a startup prompt: %q", got)
 	}
 }
 

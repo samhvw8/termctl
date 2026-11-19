@@ -30,11 +30,12 @@ Before the journal, harness-ops kept its history in three places, and none of th
 
 # Entries
 
-`Entry` in `internal/harness/journal.go`: `t` (Unix seconds), `time` (RFC 3339, local), `zone`, `event`, `project`, `from`/`from_name`, `to`/`to_name`, `task`, `harness`, `status`, `text`, `file`, `error`.
+`Entry` in `internal/harness/journal.go`: `t` (Unix seconds), `time` (RFC 3339, local), `zone`, `event`, `project`, `from`/`from_name`, `to`/`to_name`, `task`, `harness`, `status`, `text`, `file`, `error`, and since 2026-11-19 `id` (a deferred message's ID, and the ID an `ack` entry acks) and `key` (a `msg`'s idempotency key), both omitted when empty.
 
 | Event | Written by | Holds |
 |---|---|---|
-| `msg` | `Ops.Msg` (msg, task send, a delivered report) | the full text, or the first 200 characters and `file` for a long one; `status: queued` when the target was working; `error` when the submit failed |
+| `msg` | `Ops.Msg` (msg, task send, a delivered report) | the full text, or the first 200 characters and `file` for a long one; `status: queued` when the target was working; `error` when the submit failed; `key` for a `harness-ops msg` that was typed; `id` for `msg --defer` |
+| `ack` | `Tasks.Ack` (`harness-ops ack`) | the receiver's note; `task` for a deferred task, `id` for a deferred message; `to` is the owner or the sender |
 | `spawn` | `Ops.Spawn` | the harness and the first prompt (or its file) |
 | `slash`, `interrupt` | `Ops.Slash` (also each `/clear`), `Ops.Interrupt` | the command, the keys |
 | `close` | `Tasks.ClosePane` | `status: forced` with `--force` |
@@ -43,7 +44,9 @@ Before the journal, harness-ops kept its history in three places, and none of th
 | `task.new` | `Tasks.New` | the title, the brief's `file`; `status: failed` and the cause when the start failed |
 | `task.done` | `Tasks.Done` | the full summary; `to` is the owner |
 | `task.progress` | `Tasks.Progress` (`task progress`) | the progress line, one line; `status` is the task's status (running) |
-| `task.accept`, `task.close`, `task.exited` | `Tasks` | the status, the exit code |
+| `task.accept`, `task.close`, `task.exited` | `Tasks` | the status, the exit code; a deferred task's pane closed on ok has the text `deferred job reported ok: its pane was closed` |
+| `task.blocked` | the watcher | a deferred task marked blocked after 2 denied dialogs (`denied 2 dialogs`) |
+| `task.adopt` | `Tasks.Adopt` (`task adopt`) | `adopted from <old owner>`, or the pane a new task was made for |
 | `note` | `harness-ops note` | the start of the text and its `file` |
 
 Rules:
@@ -53,9 +56,14 @@ Rules:
 - **A report that waits for the owner's draft** (`FlushPending`, retried) is journaled once, when it is delivered: `MsgOpts.Retry` keeps failed tries out.
 - **The journal is live data** in the live state directory: never delete it. `state clean` removes it only from a `TERMCTL_STATE_DIR`.
 
+# Idempotency key
+
+`harness-ops msg` (and `send`) keys each message: `MsgKey`, the first 16 hex characters of SHA-256 over the sender's address, the target pane's ID and the message text (the user's text, without a deferred suffix). Before anything is typed, `Ops.Msg` looks for a `msg` entry with that key from the last 10 minutes (`keyWindow`); one found refuses the send with exit 6, naming when the first went and `--again`, which sends it anyway. The key is stored only on an entry whose line was typed: a send refused before typing (a draft, exit 4, records no entry at all) or failed before typing (an error from the terminal) does not count. Notices delivered by the watcher and `task done`, `task send`, `slash` and the adopt message are not keyed: notices have their own dedup, and a task round is a new message by design. The look reads the journal from its end in 64 KB blocks (`scanBack`) and stops 60 s before the window, so it costs the same however long the journal is. Tests: `TestSameMessageTwiceIsRefused`, `TestAKeyIsKeptOnlyOnceTyped`, `TestFindKeyReadsAcrossBlocks`.
+
 # Commands
 
 - `harness-ops log [--project DIR] [--task ID] [--pane ID] [--since 2h|3d|DATE] [-n N] [--json]`: the timeline, oldest first, the last 50 by default. One row per entry: local time, project (when not filtered by project or task), event, `from → to`, task, status, text on one line, file. Unreadable lines are counted on stderr, never hidden.
+- `harness-ops resume TASK-ID --tree` and `resume DIR --tree`: one compact line per task under the task, or under each of the project's open tasks: status, latest progress or summary, open dialog (see [tasks](tasks.md#lead-of-lead)).
 - `harness-ops resume TASK-ID`: the task's state and last report, its brief in full, then every journal entry with its whole text; a long message's file is printed under its entry. `resume DIR` (`.` is the caller's project, the folder its pane started in, which is where its writes go; a shell that changed folder does not change it): the project's tasks that are not closed, its notes, and its last 30 entries (`-n`).
 - `harness-ops note WHAT (TEXT... | --file F | stdin)`: files a text in the caller's project folder, journals it, and prints the path. `--file F` may come before or after WHAT; after WHAT it must be the next word, so a text that mentions `--file` stays text. Leads write job briefs with it instead of naming files by hand.
 

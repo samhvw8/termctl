@@ -10,9 +10,9 @@ import (
 )
 
 // newTask starts a generic task as the current sender and returns its ID.
-func (e *env) newTask(t *testing.T, title, cwd string) string {
+func (e *env) newTask(t *testing.T, title, cwd string, extra ...string) string {
 	t.Helper()
-	code, out, stderr := e.run("task", "new", "generic", "--title", title, "--brief", "do it", "--cwd", cwd, "--command", "fake-cmd", "--timeout", "60")
+	code, out, stderr := e.run(append([]string{"task", "new", "generic", "--title", title, "--brief", "do it", "--cwd", cwd, "--command", "fake-cmd", "--timeout", "60"}, extra...)...)
 	if code != 0 {
 		t.Fatal(out, stderr)
 	}
@@ -41,7 +41,7 @@ func (e *env) as(t *testing.T, id string) {
 func TestTaskTreeAndResumeShowSubTasks(t *testing.T) {
 	e := newEnv(t)
 	me := e.app.OpenSender
-	top := e.newTask(t, "top", "/w")
+	top := e.newTask(t, "top", "/w", "--sub-depth", "1")
 	e.as(t, top)
 	sub := e.newTask(t, "sub", "/w")
 	e.app.OpenSender = me

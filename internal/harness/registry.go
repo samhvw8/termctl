@@ -59,7 +59,21 @@ type Task struct {
 	// last seen at work. Stall is set once a stretch passes stallAfter, and the owner is told once.
 	IdleSince float64    `json:"idle_since,omitempty"`
 	Stall     *StallMark `json:"stall,omitempty"`
-	Unknown   Unknown    `json:"-"`
+	// Defer marks a deferred job: the worker acks once (AckedAt, AckNote), then is silent; its owner is told
+	// nothing, the watcher denies its dialogs (Denied counts them) and closes its pane on ok.
+	Defer   bool    `json:"defer,omitempty"`
+	AckedAt float64 `json:"acked_at,omitempty"`
+	AckNote string  `json:"ack_note,omitempty"`
+	Denied  int     `json:"denied,omitempty"`
+	// Root is the top task of this task's tree (its own ID at depth 1). SubDepth is how many levels below
+	// this task may still be started (0: a leaf), TreeMax how many tasks of the tree may run at once. Set at
+	// reserve, inherited; a child may only narrow them. Empty on tasks from before 2026-11-19 (legacy).
+	Root     string `json:"root,omitempty"`
+	SubDepth int    `json:"sub_depth,omitempty"`
+	TreeMax  int    `json:"tree_max,omitempty"`
+	// Orphaned is when the owner was told that this task ended while sub-tasks of it still run (once).
+	Orphaned float64 `json:"orphaned,omitempty"`
+	Unknown  Unknown `json:"-"`
 }
 
 // ProgressNote is a worker's latest progress line on its task.
@@ -83,8 +97,9 @@ type DialogMark struct {
 	Fingerprint string  `json:"fingerprint"`
 	Question    string  `json:"question"`
 	Since       float64 `json:"since"`
-	Notified    bool    `json:"notified,omitempty"` // the owner was sent a notice of it (watch)
-	Returned    bool    `json:"returned,omitempty"` // task wait has returned it once
+	Notified    bool    `json:"notified,omitempty"`  // the owner was sent a notice of it (watch)
+	Returned    bool    `json:"returned,omitempty"`  // task wait has returned it once
+	Escalated   bool    `json:"escalated,omitempty"` // the lead above the task's owner was told it waits (escalation)
 	Unknown     Unknown `json:"-"`
 }
 

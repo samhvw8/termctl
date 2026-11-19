@@ -22,7 +22,12 @@ Talk to coding-agent panes. Put options before the target: everything after the 
                                               with STATUS "dialog <fp>" where a dialog waits (JSON: "dialog")
   which TARGET                                resolve a target; never sends
   read TARGET [-n LINES]                      print a pane's screen (alias: capture)
-  msg [--force] [--clear-first] [--timeout S] TARGET TEXT...   tagged message (alias: send)
+  msg [--force] [--clear-first] [--again] [--defer [--wait-ack [S]]] [--timeout S] TARGET TEXT...   tagged message (alias: send).
+                                              The same text to the same pane within 10 min is refused (exit 6) unless --again.
+                                              --defer: prints a message ID; the receiver acks once (harness-ops ack ID) and
+                                              never replies; --wait-ack waits up to S s (default 30) for the ack (exit 5 if none)
+  ack ID [NOTE...]                            the receiver's one ack of a deferred task (from its own pane) or deferred message
+                                              (from the pane it went to); a second ack exits 2; nothing is typed to anyone
   slash [--force] [--wait] [--timeout S] TARGET /COMMAND
   clear [--force] [--timeout S] TARGET        /clear alone, then wait for idle
   wait-idle [--timeout S] TARGET
@@ -46,6 +51,12 @@ Talk to coding-agent panes. Put options before the target: everything after the 
                                               TARGET: the pane, or the task ID. A [persist] choice also needs --persist
   deny TARGET --expect FP                     cancel the dialog FP with Esc; never presses Enter
   task new HARNESS --title T (--brief TEXT | --brief-file F) [--cwd D] [--where W] [--reuse TARGET] [--command CMD] [--max N] [--timeout S]
+           [--sub-depth K] [--tree-max M] [--defer [--wait-ack [S]]]
+                                              --sub-depth K: levels below the task may start (default 0: a leaf, whose own task
+                                              new exits 6); a sub-task may only narrow K and M. --tree-max M: running tasks in the
+                                              tree (default 12 at the root, inherited). TERMCTL_MAX_DEPTH (default 4) caps the depth.
+                                              --defer: the worker acks once, then is silent; nobody is told of its result, the
+                                              watcher denies its dialogs (2 denials: interrupted, blocked) and closes its pane on ok
   task ls [--all] [--tree] [--json]           your open tasks (--all: every task); --tree nests the tasks started from each
                                               task's worker under it, across owners and projects (JSON: "children")
   task show ID [--json]
@@ -56,12 +67,19 @@ Talk to coding-agent panes. Put options before the target: everything after the 
                                               --notify also tells the owner (a newer progress notice replaces an unsent one)
   task accept ID [--close]                    the lead's verdict; only the owner can finish a task
   task review ID --blind --harness H [--model M] [--brief-file F]   a new session that never sees the worker's report
-  task close [--force] ID                     refused until the task is accepted, unless --force
+  task close [--force] [--tree] ID            refused until the task is accepted, unless --force; --tree also closes the
+                                              tasks under it (--tree --force: your own subtree, whatever the status)
+  task adopt (ID | PANE) [--force]            you become the owner: of a task (its sub-tasks stay under it), or of a pane with
+                                              no task (a running task is made; the pane is told to report with task done).
+                                              Refused while the old owner pane is alive, unless --force (exit 6)
   watch [--interval S]                        tell you of each new dialog on the panes you started, and of a task whose
-                                              worker looks idle 10 min without done or progress (stalled); task new starts one
+                                              worker looks idle 10 min without done or progress (stalled); task new starts one.
+                                              Also tells you once when a task below your own tasks waits on a dialog 3 min, or
+                                              when one of your tasks ends while tasks under it still run
   log [--project DIR] [--task ID] [--pane ID] [--since 2h|3d|DATE] [-n N] [--json]   the journal, oldest first (default: last 50)
-  resume (TASK-ID | DIR)                      what a new session needs: a task's brief, report and every message in full;
-                                              or a project's open tasks, notes and last entries (DIR: . for your pane's project)
+  resume (TASK-ID | DIR) [--tree]             what a new session needs: a task's brief, report and every message in full;
+                                              or a project's open tasks, notes and last entries (DIR: . for your pane's project);
+                                              --tree: one line per task under it: status, latest progress or summary, open dialog
   note WHAT (TEXT... | --file F | stdin)      file a text (a job brief, a plan) in your project's journal folder; prints its path
   state clean                                 remove the throwaway directory in TERMCTL_STATE_DIR; refuses the live one
 
@@ -291,6 +309,30 @@ func (a *App) stallLine(t *harness.Task) string {
 	return fmt.Sprintf("idle 10 min without done or progress, marked %s", a.age(t.Stall.At))
 }
 
+// role is task show's capability line: what the task may start, and its tree's limit.
+func role(t *harness.Task) string {
+	switch {
+	case t.Root == "":
+		return ""
+	case t.SubDepth < 1:
+		return fmt.Sprintf("leaf; tree limit %d", t.TreeMax)
+	}
+	return fmt.Sprintf("lead, may start tasks with --sub-depth up to %d; tree limit %d", t.SubDepth-1, t.TreeMax)
+}
+
+// deferLine is task show's deferred line: acked or not, and the ack note.
+func deferLine(t *harness.Task) string {
+	switch {
+	case !t.Defer:
+		return ""
+	case t.AckedAt == 0:
+		return "yes, not acked"
+	case t.AckNote != "":
+		return fmt.Sprintf("yes, acked %s: %s", when(t.AckedAt), t.AckNote)
+	}
+	return "yes, acked " + when(t.AckedAt)
+}
+
 // printTaskRow prints one task line; indent goes before the ID (task ls --tree).
 func (a *App) printTaskRow(t *harness.Task, indent string) {
 	extra := ""
@@ -305,6 +347,9 @@ func (a *App) printTaskRow(t *harness.Task, indent string) {
 	}
 	if t.Dialog != nil {
 		extra += " [dialog " + t.Dialog.Fingerprint + "]"
+	}
+	if m := harness.AckMarks(t); m != "" {
+		extra += " " + m
 	}
 	status, summary := t.Status, t.Summary
 	if t.Status == "running" {
@@ -399,7 +444,8 @@ func (a *App) harness(argv []string) error {
 	case "which", "read", "capture":
 		return a.lookCmd(cmd, rest, o)
 	case "msg", "send":
-		p, err := parseArgs(rest, []string{"--force", "--clear-first"}, []string{"--timeout"}, 1)
+		rest = optionalValue(rest, "--wait-ack", "30", []string{"--timeout", "--backend", "-L"}, true)
+		p, err := parseArgs(rest, []string{"--force", "--clear-first", "--defer", "--again"}, []string{"--timeout", "--wait-ack"}, 1)
 		if err != nil {
 			return err
 		}
@@ -422,11 +468,25 @@ func (a *App) harness(argv []string) error {
 		if err != nil {
 			return err
 		}
+		_, waitAck := p.vals["--wait-ack"]
+		ackWait, err := p.float("--wait-ack", 30)
+		if err != nil {
+			return err
+		}
+		if waitAck && !p.bools["--defer"] {
+			return term.UsageErr("--wait-ack goes with --defer")
+		}
 		pane, err := ops.Pick(p.pos[0])
 		if err != nil {
 			return err
 		}
-		sent, err := ops.Msg(pane, text, harness.MsgOpts{Force: p.bools["--force"], ClearFirst: p.bools["--clear-first"], Timeout: timeout})
+		mo := harness.MsgOpts{Force: p.bools["--force"], ClearFirst: p.bools["--clear-first"], Timeout: timeout, Again: p.bools["--again"],
+			Key: harness.MsgKey(address(ops.Sender), pane.ID, text)}
+		if p.bools["--defer"] {
+			mo.ID = harness.NewMsgID()
+			mo.Suffix = harness.DeferSuffix(mo.ID)
+		}
+		sent, err := ops.Msg(pane, text, mo)
 		if err != nil {
 			if sent.Typed { // it may still arrive: the watcher must cover the pane's dialogs
 				a.gaveWork(o, a.tasksFor(o, ops.Backend, ops.Sender), ops.Backend, pane)
@@ -434,12 +494,52 @@ func (a *App) harness(argv []string) error {
 			return err
 		}
 		a.gaveWork(o, a.tasksFor(o, ops.Backend, ops.Sender), ops.Backend, pane)
+		if mo.ID != "" {
+			fmt.Fprintln(a.Out, mo.ID)
+		}
+		if waitAck {
+			if sent.Busy {
+				a.queued(pane)
+			} else {
+				a.sent(pane)
+			}
+			if err := a.tasksFor(o, ops.Backend, ops.Sender).WaitAck(mo.ID, ackWait); err != nil {
+				return err
+			}
+			fmt.Fprintf(a.Out, "acked %s\n", mo.ID)
+			return nil
+		}
 		if sent.Busy {
-			fmt.Fprintf(a.Out, "queued for %s (%s, %s): it is working and may hold the message until its turn ends; "+
-				"an interrupt would put it back on the input line unsent\n", term.Cut(pane.Address(), 8), harness.HarnessName(pane), orFolder(pane))
+			a.queued(pane)
 			return nil
 		}
 		a.sent(pane)
+		return nil
+	case "ack":
+		p, err := parseArgs(rest, nil, nil, 1)
+		if err != nil {
+			return err
+		}
+		if err := applyOptions(p, o); err != nil {
+			return err
+		}
+		if len(p.pos) != 1 {
+			return term.UsageErr("usage: ack ID [NOTE...]  (ID: a deferred task or message)")
+		}
+		words, _ := attachLiteral(p.rest, tail, dashed)
+		b, err := a.OpenBackend(o, "")
+		if err != nil {
+			return err
+		}
+		tasks, err := a.openTasks(o, b)
+		if err != nil {
+			return err
+		}
+		what, err := tasks.Ack(p.pos[0], strings.Join(words, " "))
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(a.Out, "acked %s; nothing was sent: do the job, and do not reply\n", what)
 		return nil
 	case "slash":
 		p, err := parseArgs(rest, []string{"--force", "--wait"}, []string{"--timeout"}, 1)
@@ -642,6 +742,18 @@ func orFolder(p *term.Pane) string {
 	return p.Folder
 }
 
+func (a *App) queued(pane *term.Pane) {
+	fmt.Fprintf(a.Out, "queued for %s (%s, %s): it is working and may hold the message until its turn ends; "+
+		"an interrupt would put it back on the input line unsent\n", term.Cut(pane.Address(), 8), harness.HarnessName(pane), orFolder(pane))
+}
+
+func address(p *term.Pane) string {
+	if p == nil {
+		return ""
+	}
+	return p.Address()
+}
+
 func (a *App) sent(p *term.Pane) {
 	fmt.Fprintf(a.Out, "sent to %s (%s, %s)\n", term.Cut(p.Address(), 8), harness.HarnessName(p), orFolder(p))
 }
@@ -807,7 +919,7 @@ func (a *App) lookCmd(cmd string, rest []string, o *Options) error {
 
 func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 	if len(rest) == 0 {
-		return term.UsageErr("usage: task new|ls|show|send|wait|done|progress|accept|review|close")
+		return term.UsageErr("usage: task new|ls|show|send|wait|done|progress|accept|review|close|adopt")
 	}
 	cmd, rest := rest[0], rest[1:]
 	if cmd == "answer" || cmd == "deny" {
@@ -816,7 +928,10 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 	bools, vals, restAfter := []string{}, []string{}, -1
 	switch cmd {
 	case "new":
-		vals = []string{"--title", "--brief", "--brief-file", "--cwd", "--where", "--reuse", "--command", "--max", "--timeout"}
+		rest = optionalValue(rest, "--wait-ack", "30", []string{"--title", "--brief", "--brief-file", "--cwd", "--where", "--reuse", "--command",
+			"--max", "--timeout", "--sub-depth", "--tree-max", "--backend", "-L"}, false)
+		bools = []string{"--defer"}
+		vals = []string{"--title", "--brief", "--brief-file", "--cwd", "--where", "--reuse", "--command", "--max", "--timeout", "--wait-ack", "--sub-depth", "--tree-max"}
 	case "ls":
 		bools = []string{"--all", "--tree", "--json"}
 	case "show":
@@ -830,6 +945,8 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 	case "progress":
 		bools, vals = []string{"--notify"}, []string{"--summary"}
 	case "close":
+		bools = []string{"--force", "--tree"}
+	case "adopt":
 		bools = []string{"--force"}
 	case "accept":
 		bools = []string{"--close"}
@@ -877,13 +994,36 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 		if err != nil {
 			return err
 		}
+		subDepth, err := p.int("--sub-depth", 0)
+		if err != nil {
+			return err
+		}
+		treeMax, err := p.int("--tree-max", 0)
+		if err != nil {
+			return err
+		}
+		_, waitAck := p.vals["--wait-ack"]
+		ackWait, err := p.float("--wait-ack", 30)
+		if err != nil {
+			return err
+		}
+		if waitAck && !p.bools["--defer"] {
+			return term.UsageErr("--wait-ack goes with --defer")
+		}
 		t, err := tasks.New(harness.NewOpts{Harness: p.pos[0], Title: p.vals["--title"], Brief: p.vals["--brief"], BriefFile: p.vals["--brief-file"],
-			Cwd: cwdOr(p.vals["--cwd"]), Where: p.vals["--where"], Reuse: p.vals["--reuse"], Command: p.vals["--command"], MaxTasks: maxTasks, Timeout: timeout})
+			Cwd: cwdOr(p.vals["--cwd"]), Where: p.vals["--where"], Reuse: p.vals["--reuse"], Command: p.vals["--command"], MaxTasks: maxTasks, Timeout: timeout,
+			Defer: p.bools["--defer"], SubDepth: subDepth, TreeMax: treeMax})
 		if err != nil {
 			return err
 		}
 		fmt.Fprintln(a.Out, t.ID)
 		a.ensureWatcher(o, tasks)
+		if waitAck {
+			if err := tasks.WaitAck(t.ID, ackWait); err != nil {
+				return err
+			}
+			fmt.Fprintf(a.Out, "acked %s\n", t.ID)
+		}
 	case "ls":
 		if p.bools["--tree"] {
 			nodes, err := tasks.Tree(p.bools["--all"])
@@ -930,8 +1070,9 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 		}
 		for _, kv := range [][2]string{{"id", t.ID}, {"status", t.Status}, {"round", fmt.Sprint(t.Round)}, {"title", t.Title}, {"harness", t.Harness}, {"reviews", t.ReviewOf}, {"pane", t.Pane}, {"owner", t.Owner},
 			{"cwd", t.Cwd}, {"brief", t.Brief}, {"depth", fmt.Sprint(t.Depth)}, {"parent", t.Parent}, {"notify", t.Notify}, {"summary", t.Summary},
-			{"progress", a.progressLine(t)}, {"stalled", a.stallLine(t)}, {"started", when(t.Started)}, {"ended", when(t.Ended)}} {
-			if (kv[0] == "parent" || kv[0] == "progress" || kv[0] == "stalled") && kv[1] == "" {
+			{"progress", a.progressLine(t)}, {"stalled", a.stallLine(t)}, {"root", t.Root}, {"role", role(t)}, {"deferred", deferLine(t)},
+			{"started", when(t.Started)}, {"ended", when(t.Ended)}} {
+			if (kv[0] == "parent" || kv[0] == "progress" || kv[0] == "stalled" || kv[0] == "root" || kv[0] == "role" || kv[0] == "deferred") && kv[1] == "" {
 				continue
 			}
 			fmt.Fprintf(a.Out, "%-9s %s\n", kv[0]+":", kv[1])
@@ -982,6 +1123,9 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 			return err
 		}
 		note := map[string]string{"delivered": "owner told; keep this session open", "pending": "owner busy: notification pending; keep this session open", "owner-gone": "owner pane is gone", "seen": "owner took it with task wait"}[t.Notify]
+		if t.Defer {
+			note = "deferred: recorded, nobody is told; do not reply"
+		}
 		if note == "" {
 			note = t.Notify
 		}
@@ -1030,6 +1174,23 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 		}
 		fmt.Fprintln(a.Out, t.ID)
 		a.ensureWatcher(o, tasks) // the reviewer is a running task, and can stop on a dialog too
+	case "adopt":
+		id, err := arg()
+		if err != nil {
+			return err
+		}
+		res, err := tasks.Adopt(id, p.bools["--force"])
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(a.Out, res.Task.ID)
+		switch {
+		case res.New:
+			fmt.Fprintf(a.Out, "adopted %s as task %s; it was told to report to you with task done\n", res.Task.Pane, res.Task.ID)
+		default:
+			fmt.Fprintf(a.Out, "adopted task %s from %s; it reports to you now\n", res.Task.ID, orDash(res.OldOwner))
+		}
+		a.ensureWatcher(o, tasks)
 	case "exited":
 		id, err := arg()
 		if err != nil {
@@ -1047,6 +1208,13 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 	case "close":
 		id, err := arg()
 		if err != nil {
+			return err
+		}
+		if p.bools["--tree"] {
+			closed, err := tasks.CloseTree(id, p.bools["--force"])
+			for _, c := range closed {
+				fmt.Fprintf(a.Out, "closed task %s (%s)\n", c.ID, c.Status)
+			}
 			return err
 		}
 		t, err := tasks.Close(id, p.bools["--force"])

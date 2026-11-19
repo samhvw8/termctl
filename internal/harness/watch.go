@@ -400,7 +400,7 @@ func (t *Tasks) apply(sigs []Signal, notify bool) error {
 				if x.Dialog == nil || x.Dialog.Fingerprint != s.Dialog.Fingerprint {
 					x.Dialog = &DialogMark{Fingerprint: s.Dialog.Fingerprint, Question: s.Dialog.Question, Since: now}
 				}
-				if notify && !x.Dialog.Notified {
+				if notify && !x.Dialog.Notified && !x.Defer { // a deferred job's dialogs are denied, never told (denyDeferred)
 					x.Dialog.Notified = true
 					d.Pending = append(d.Pending, &Pending{Task: x.ID, Owner: x.Owner, OwnerRef: x.OwnerRef, Tag: dialogTag(x),
 						Text: dialogNotice(x, s), Created: now, Kind: "dialog", Dialog: s.Dialog.Fingerprint})
@@ -652,15 +652,27 @@ func (t *Tasks) Watch(o WatchOpts) error {
 		if err := t.Reconcile(); err != nil {
 			say("reconcile: " + err.Error())
 		}
+		t.closeDeferred(owner.ID, say)
+		if err := t.escalate(owner.ID); err != nil {
+			say("escalate: " + err.Error())
+		}
 		d, err := t.Reg.Read()
 		if err != nil {
 			t.stopMemo()
 			return err
 		}
 		if _, p, err := t.paneByID(owner.ID, t.SenderRef); err == nil && p == nil {
-			t.stopMemo()
-			say("the owner pane is gone; stopping")
-			return nil
+			// A deferred job outlives its owner: stay while one runs (its dialogs are denied) or one that
+			// reported ok still has its pane open, and only then.
+			if !deferredLeft(d, owner.ID, t.SenderRef) {
+				t.stopMemo()
+				say("the owner pane is gone; stopping")
+				return nil
+			}
+			if !w.ownerGone {
+				w.ownerGone = true
+				say("the owner pane is gone; staying for its deferred tasks")
+			}
 		}
 		running := runningTasks(d, owner.ID, t.SenderRef)
 		panes, gone := t.paneWorkers(d, owner.ID, t.SenderRef)
@@ -723,7 +735,7 @@ func (t *Tasks) keepOn(d *Data, owner string) bool {
 			return true
 		}
 	}
-	if len(runningTasks(d, owner, t.SenderRef)) > 0 || holdsNotice(d, owner, t.SenderRef) {
+	if len(runningTasks(d, owner, t.SenderRef)) > 0 || holdsNotice(d, owner, t.SenderRef) || deferredLeft(d, owner, t.SenderRef) {
 		return true
 	}
 	now := t.clock().Now()
@@ -769,13 +781,14 @@ func (w *watchState) quietRound(busy bool) bool {
 // watchState is what a watcher keeps between rounds: the workers of the last round and the status each
 // had, so that a status poll can tell which worker turned blocked.
 type watchState struct {
-	t       *Tasks
-	say     func(string)
-	ws      []worker
-	seen    map[string]term.ProgramStatus
-	lastErr string
-	quiet   int  // rounds in a row with no running task and no pane at work
-	worked  bool // a pane of the owner's was seen at work since the watcher started
+	t         *Tasks
+	say       func(string)
+	ws        []worker
+	seen      map[string]term.ProgramStatus
+	lastErr   string
+	quiet     int  // rounds in a row with no running task and no pane at work
+	worked    bool // a pane of the owner's was seen at work since the watcher started
+	ownerGone bool // said once: the owner pane is gone, the watcher stays for deferred tasks
 }
 
 // statusErr logs a failed status read once, until a different one comes: the read repeats every second.
@@ -806,6 +819,7 @@ func (w *watchState) handle(d *Data, sigs []Signal) {
 	if err := w.t.apply(sigs, true); err != nil {
 		w.say("record: " + err.Error())
 	}
+	w.t.denyDeferred(sigs, w.say)
 	if n, err := w.t.FlushPending(); err != nil {
 		w.say("deliver: " + err.Error())
 	} else if n > 0 {

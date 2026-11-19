@@ -18,7 +18,8 @@ termctl name <label>
 termctl whoami
 
 harness-ops ls [--json] [--all] [--mine]     # --mine: only panes you started
-harness-ops msg [--force] [--clear-first] [--timeout S] <target> <text...>
+harness-ops msg [--force] [--clear-first] [--again] [--defer [--wait-ack [S]]] [--timeout S] <target> <text...>
+harness-ops ack <id> [note...]               # the one reply to a deferred task or message; nothing is typed
 harness-ops slash [--force] [--wait] <target> </command>
 harness-ops clear [--force] <target>         # /clear alone, then wait for idle
 harness-ops wait-idle [--timeout S] <target>
@@ -29,6 +30,7 @@ harness-ops move|pull|swap|arrange ...       # as termctl; a moved pane keeps it
 harness-ops which|read|name|whoami           # as agent-ops; send = msg
 
 harness-ops task new <harness> --title T (--brief TEXT | --brief-file F) --cwd D [--where auto|tab|split|window] [--reuse <target>] [--max N]
+                     [--sub-depth K] [--tree-max M] [--defer [--wait-ack [S]]]
 harness-ops task ls [--all] [--tree] [--json]       # --tree: sub-tasks nested under the task they came from
 harness-ops task show <id> [--json]
 harness-ops task send [--force] <id> <text...>       # on a ready task: opens the next round
@@ -37,7 +39,9 @@ harness-ops task done <id> --status ok|failed|blocked (--summary TEXT | --summar
 harness-ops task progress <id> --summary TEXT [--notify]   # a progress line; the status stays
 harness-ops task accept <id> [--close]               # the lead's verdict: only this makes a task done
 harness-ops task review <id> --blind --harness H [--model M] [--brief-file F]
-harness-ops task close [--force] <id>                # refused until accepted, unless --force
+harness-ops task close [--force] [--tree] <id>       # refused until accepted, unless --force; --tree: and the tasks under it
+harness-ops task adopt <id>|<pane> [--force]         # become the owner of a task, or of a pane with no task
+harness-ops resume <id>|<dir> [--tree]               # --tree: one line per task under it
 ```
 
 `--where auto` is the default. A new agent splits the caller's tab, whatever its folder, or a tab of an agent the caller started when the caller's tab is full. It splits the largest pane there along its long side and evens out the pane sizes, up to 12 panes per tab. Otherwise it opens a new tab right after the caller's tab. Herdr ignores `--where`.
@@ -81,7 +85,9 @@ A task is one harness session doing one job, tracked in `~/.local/state/termctl/
 - `task wait --any` returns each finished task once, so repeated calls walk through the results.
 - `task progress` stores the worker's latest line (shown in `task ls` and `task show`) without changing the status; `--notify` also tells the lead, the latest line only. The watcher tells the lead once when a running worker on a calibrated harness looks idle for 10 minutes without `task done` or progress (`task ls`: `running stalled`).
 - `task ls --tree` nests the tasks a worker started under its task (`parent`), across owners and projects; `resume .` lists them under the project's open tasks.
-- Guards (exit 6): 6 running tasks per owner (`--max`, `TERMCTL_MAX_TASKS`), spawn depth 2 (`TERMCTL_MAX_DEPTH`).
+- Guards (exit 6): 6 running tasks per owner (`--max`, `TERMCTL_MAX_TASKS`), total depth 4 (`TERMCTL_MAX_DEPTH`), a leaf's own `task new` (`--sub-depth` defaults to 0: give a lead `--sub-depth K`; a sub-task may only narrow it), 12 running tasks per tree (`--tree-max`), the same `msg` to the same pane within 10 minutes (`--again`), `task adopt` of a task whose owner is alive (`--force`).
+- `task new --defer` and `msg --defer` are fire and forget: the receiver runs `harness-ops ack <id>` once and never replies; a deferred task's result reaches nobody, its dialogs are denied (two, and it is interrupted and blocked), and its pane closes when it reports ok. `--wait-ack` waits for the ack in the same command (exit 5 without one).
+- The watcher tells a lead once when a task below its own tasks waits 3 minutes on a dialog, or when one of its tasks ends while tasks under it still run (`task close --tree --force <id>`).
 - `--reuse` needs an idle pane running that harness. Closing such a task leaves the pane open, because it was not created for the task.
 
 ## State directory

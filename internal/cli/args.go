@@ -140,3 +140,33 @@ func applyOptions(p *parsed, o *Options) error {
 	}
 	return nil
 }
+
+// optionalValue rewrites a flag whose value may be left out (--wait-ack [S]) as flag=value: the next word
+// when it is a number, else def. With stop, it looks only before the first positional: a msg's words after
+// its target are text. values are the flags that take a value, whose value is skipped.
+func optionalValue(argv []string, flag, def string, values []string, stop bool) []string {
+	out := make([]string, 0, len(argv))
+	for i := 0; i < len(argv); i++ {
+		arg := argv[i]
+		switch {
+		case arg == flag:
+			if i+1 < len(argv) {
+				if _, err := strconv.ParseFloat(argv[i+1], 64); err == nil {
+					out = append(out, flag+"="+argv[i+1])
+					i++
+					continue
+				}
+			}
+			out = append(out, flag+"="+def)
+			continue
+		case has(values, arg) && i+1 < len(argv):
+			out = append(out, arg, argv[i+1])
+			i++
+			continue
+		case stop && !strings.HasPrefix(arg, "-"):
+			return append(out, argv[i:]...)
+		}
+		out = append(out, arg)
+	}
+	return out
+}

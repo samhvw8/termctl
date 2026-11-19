@@ -2,9 +2,14 @@ package harness
 
 import (
 	"bufio"
+	"bytes"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -45,6 +50,8 @@ type Entry struct {
 	Text     string `json:"text,omitempty"` // the full text, or its start when File holds it
 	File     string `json:"file,omitempty"`
 	Error    string `json:"error,omitempty"` // the action failed; the entry records the attempt
+	ID       string `json:"id,omitempty"`    // a deferred message's ID (send --defer), and the ID an ack entry acks
+	Key      string `json:"key,omitempty"`   // a msg's idempotency key: sender, target pane and text; set once typed
 }
 
 // Journal writes and reads the journal and the project files under Root.
@@ -152,19 +159,24 @@ func (j *Journal) WriteFile(project, kind, who, body string) (string, error) {
 
 // Append adds one entry under the lock. Time fields and an empty project are filled in.
 func (j *Journal) Append(e Entry) error {
-	t := j.now()
+	j.stamp(&e)
+	return j.locked(func() error { return j.appendLocked(e) })
+}
+
+// stamp fills in an entry's time fields and an empty project.
+func (j *Journal) stamp(e *Entry) {
 	if e.T == 0 {
-		e.T = t.Unix()
+		e.T = j.now().Unix()
 	}
 	ts := time.Unix(e.T, 0)
 	e.Time, e.Zone = ts.Format(time.RFC3339), ZoneName(ts)
 	if e.Project == "" {
 		e.Project = ProjectOf(nil)
 	}
-	line, err := json.Marshal(e)
-	if err != nil {
-		return term.BackendErr("journal: %v", err)
-	}
+}
+
+// locked runs fn holding the journal's flock: an append, or a look and an append that must not race.
+func (j *Journal) locked(fn func() error) error {
 	if err := os.MkdirAll(j.Root, 0o755); err != nil {
 		return term.BackendErr("journal: %v", err)
 	}
@@ -177,6 +189,15 @@ func (j *Journal) Append(e Entry) error {
 		return term.BackendErr("journal lock: %v", err)
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	return fn()
+}
+
+// appendLocked writes one entry; the caller holds the lock. Time fields are filled in by Append.
+func (j *Journal) appendLocked(e Entry) error {
+	line, err := json.Marshal(e)
+	if err != nil {
+		return term.BackendErr("journal: %v", err)
+	}
 	f, err := os.OpenFile(filepath.Join(j.Root, journalFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return term.BackendErr("journal: %v", err)
@@ -295,4 +316,83 @@ func address(p *term.Pane) string {
 		return ""
 	}
 	return p.Address()
+}
+
+// scanBack calls fn with the journal's entries newest first, until fn returns false. It reads the file from
+// its end in blocks, so a look at the last minutes costs the same however long the journal is. Lines that
+// cannot be read are skipped.
+func (j *Journal) scanBack(fn func(Entry) bool) error {
+	f, err := os.Open(filepath.Join(j.Root, journalFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return term.BackendErr("journal: %v", err)
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return term.BackendErr("journal: %v", err)
+	}
+	const block = 64 << 10
+	var carry []byte // the start of a line whose beginning is in an earlier block
+	for pos := st.Size(); pos > 0; {
+		n := min(int64(block), pos)
+		pos -= n
+		buf := make([]byte, n, int(n)+len(carry))
+		if _, err := f.ReadAt(buf, pos); err != nil && !errors.Is(err, io.EOF) {
+			return term.BackendErr("journal: %v", err)
+		}
+		lines := bytes.Split(append(buf, carry...), []byte("\n"))
+		first := 0
+		carry = nil
+		if pos > 0 {
+			carry, first = append([]byte{}, lines[0]...), 1
+		}
+		for i := len(lines) - 1; i >= first; i-- {
+			if len(bytes.TrimSpace(lines[i])) == 0 {
+				continue
+			}
+			var e Entry
+			if json.Unmarshal(lines[i], &e) != nil {
+				continue
+			}
+			if !fn(e) {
+				return nil
+			}
+		}
+	}
+	return nil
+}
+
+// keySlack is how far out of time order two appends can land (each stamps its time before taking the lock).
+const keySlack = 60
+
+// FindKey returns the oldest msg entry with idempotency key key written at or after since, or nil.
+func (j *Journal) FindKey(key string, since int64) (*Entry, error) {
+	var found *Entry
+	err := j.scanBack(func(e Entry) bool {
+		if e.T < since-keySlack {
+			return false
+		}
+		if e.Event == "msg" && e.Key == key && e.T >= since {
+			c := e
+			found = &c
+		}
+		return true
+	})
+	return found, err
+}
+
+// MsgKey is a message's idempotency key: the sender's address, the target pane's ID and the text.
+func MsgKey(from, pane, text string) string {
+	sum := sha256.Sum256([]byte(from + "\x00" + pane + "\x00" + strings.TrimSpace(text)))
+	return hex.EncodeToString(sum[:8])
+}
+
+// NewMsgID is a deferred message's ID: m and 6 hex digits.
+func NewMsgID() string {
+	b := make([]byte, 3)
+	rand.Read(b)
+	return "m" + hex.EncodeToString(b)
 }
