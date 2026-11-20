@@ -1370,12 +1370,25 @@ func TestAutoPlacementSplitsTheCallersTab(t *testing.T) {
 	}
 }
 
-// Teammates address a task by its ID, so a reused pane gets the task ID as its label too.
+// Teammates address a task by its ID, so a reused pane gets the task ID as its label too,
+// and its pane title updates to the new role. A backend without Titler is skipped silently.
 func TestReuseLabelsThePaneWithTheTaskID(t *testing.T) {
 	r := newRig(t)
-	x := r.mustNew(t, nil, NewOpts{Reuse: "other"})
+	r.other.Title = "advisor"
+	x := r.mustNew(t, nil, NewOpts{Reuse: r.other.ID, Title: "port", SubDepth: 1})
 	if r.other.Label != x.ID {
 		t.Fatalf("label %q, want %q", r.other.Label, x.ID)
+	}
+	if want := "LEAD · " + x.ID + " · port"; r.other.Title != want || !r.b.Has("title", r.other.ID) {
+		t.Fatalf("title %q, want %q (events %+v)", r.other.Title, want, r.b.Events)
+	}
+
+	r2 := newRig(t)
+	r2.tasks.Backend = termtest.Basic{Backend: r2.b}
+	r2.other.Title = "advisor"
+	y := r2.mustNew(t, nil, NewOpts{Reuse: r2.other.ID, Title: "port"})
+	if r2.other.Label != y.ID || r2.other.Title != "advisor" {
+		t.Fatalf("Basic reuse: label=%q title=%q", r2.other.Label, r2.other.Title)
 	}
 }
 

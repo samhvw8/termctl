@@ -615,3 +615,95 @@ func TestAnAdoptedHandStartedPaneIsNeverClosableWithoutForce(t *testing.T) {
 		t.Fatal("a hand-started pane was closed")
 	}
 }
+
+// Adopting a task renames its pane (and any sub-task whose role narrowed) to its new role;
+// adopting a hand-started pane with no task names it WORKER · <id> · <title>.
+func TestAdoptRenamesPaneWhenRoleChanges(t *testing.T) {
+	r := newRig(t)
+	lead := r.mustNew(t, nil, NewOpts{Title: "top", SubDepth: 2})
+	// Under r.other: x is LEAD OF LEADS (SubDepth 2), y under x is LEAD (SubDepth 1).
+	x := r.mustNew(t, r.as(r.other), NewOpts{Title: "mid", SubDepth: 2})
+	y := r.mustNew(t, r.as(r.pane(x)), NewOpts{Title: "sub", SubDepth: 1})
+	if r.pane(x).Title != "LEAD OF LEADS · "+x.ID+" · mid" || r.pane(y).Title != "LEAD · "+y.ID+" · sub" {
+		t.Fatalf("initial titles: x=%q y=%q", r.pane(x).Title, r.pane(y).Title)
+	}
+	dropPane(r.b, r.other.ID)
+	// lead has SubDepth 2 (k.sub=2), so adopting x narrows x to SubDepth 1 (LEAD) and y to SubDepth 1 -> Wait:
+	// let's make lead have SubDepth 1 so x narrows to SubDepth 0 (WORKER), and test depth-4 narrowing on another subtree.
+	r2 := newRig(t)
+	lead1 := r2.mustNew(t, nil, NewOpts{Title: "lead1", SubDepth: 1})
+	x1 := r2.mustNew(t, r2.as(r2.other), NewOpts{Title: "mid", SubDepth: 1})
+	if r2.pane(x1).Title != "LEAD · "+x1.ID+" · mid" {
+		t.Fatalf("initial x1 title %q", r2.pane(x1).Title)
+	}
+	dropPane(r2.b, r2.other.ID)
+	if _, err := r2.as(r2.pane(lead1)).Adopt(x1.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := r2.pane(x1).Title; got != "WORKER · "+x1.ID+" · mid" {
+		t.Fatalf("adopted x1 title %q, want WORKER", got)
+	}
+
+	// Subtree narrowing: lead at depth 1 (SubDepth 3) adopts x (depth 1 -> 2, SubDepth 2) with y (depth 2 -> 3, SubDepth 1)
+	// and z (depth 3 -> 4, SubDepth 1 -> 0): z's role changes from LEAD to WORKER.
+	r3 := newRig(t)
+	l3 := r3.mustNew(t, nil, NewOpts{Title: "l3", SubDepth: 3})
+	x3 := r3.mustNew(t, r3.as(r3.other), NewOpts{Title: "x3", SubDepth: 3})
+	y3 := r3.mustNew(t, r3.as(r3.pane(x3)), NewOpts{Title: "y3", SubDepth: 2})
+	z3 := r3.mustNew(t, r3.as(r3.pane(y3)), NewOpts{Title: "z3", SubDepth: 1})
+	if r3.pane(z3).Title != "LEAD · "+z3.ID+" · z3" {
+		t.Fatalf("initial z3 title %q", r3.pane(z3).Title)
+	}
+	dropPane(r3.b, r3.other.ID)
+	if _, err := r3.as(r3.pane(l3)).Adopt(x3.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := r3.pane(x3).Title; got != "LEAD OF LEADS · "+x3.ID+" · x3" {
+		t.Fatalf("x3 title %q", got)
+	}
+	if got := r3.pane(z3).Title; got != "WORKER · "+z3.ID+" · z3" {
+		t.Fatalf("narrowed descendant z3 title %q, want WORKER", got)
+	}
+	_ = lead
+	_ = y
+
+	// Adopting a pane with no task sets its title to WORKER · <id> · adopted <addr>.
+	r4 := newRig(t)
+	r4.other.Title = "zsh"
+	res, err := r4.tasks.Adopt(r4.other.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "WORKER · " + res.Task.ID + " · adopted " + r4.other.Address(); r4.other.Title != want {
+		t.Fatalf("adoptPane title %q, want %q", r4.other.Title, want)
+	}
+}
+
+// Reopening a deferred task with task send is not a role change, so the pane is not renamed.
+func TestDeferredTaskSendDoesNotRenamePane(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{Title: "cleanup", Defer: true, SubDepth: 1})
+	wantTitle := x.ID + " · cleanup"
+	if got := r.pane(x).Title; got != wantTitle {
+		t.Fatalf("initial title %q, want %q", got, wantTitle)
+	}
+	r.done(t, x, "ok", "part 1")
+	before := 0
+	for _, ev := range r.b.Events {
+		if ev.Kind == "title" {
+			before++
+		}
+	}
+	if err := r.tasks.Send(x.ID, "part 2", false); err != nil {
+		t.Fatal(err)
+	}
+	after := 0
+	for _, ev := range r.b.Events {
+		if ev.Kind == "title" {
+			after++
+		}
+	}
+	if after != before || r.pane(x).Title != wantTitle {
+		t.Fatalf("task send changed title or fired SetTitle: before=%d after=%d title=%q", before, after, r.pane(x).Title)
+	}
+}

@@ -166,6 +166,9 @@ func TestWhichReadNameWaitIdle(t *testing.T) {
 	if code, out, _ := e.run("name", "good-label"); code != 0 || !strings.Contains(out, "good-label") {
 		t.Fatal(code, out)
 	}
+	if e.b.Me.Label != "good-label" || e.b.Me.Title != "good-label" || !e.b.Has("title", e.b.Me.ID) {
+		t.Fatalf("name did not set title: label=%q title=%q events=%+v", e.b.Me.Label, e.b.Me.Title, e.b.Events)
+	}
 	if code, out, _ := e.run("wait-idle", "target", "--timeout", "10"); code != 0 || !strings.Contains(out, "idle") {
 		t.Fatal(code, out)
 	}

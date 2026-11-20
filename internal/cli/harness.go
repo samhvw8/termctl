@@ -873,6 +873,9 @@ func (a *App) selfCmd(cmd string, rest []string, o *Options) error {
 	if err := b.SetLabel(me, p.pos[0]); err != nil {
 		return err
 	}
+	if err := term.SetTitle(b, me, p.pos[0]); err != nil {
+		return err
+	}
 	fmt.Fprintf(a.Out, "labelled this pane: %s\n", p.pos[0])
 	return nil
 }

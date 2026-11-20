@@ -19,6 +19,11 @@ const (
 	itermApp   = "/Applications/iTerm.app"
 	labelVar   = "user.agent"
 	apiTimeout = CallTimeout // a stalled API call must fail, not hang every caller
+	// itermTitleComponentSessionName is the "Title Components" bitmask (KEY_TITLE_COMPONENTS) for
+	// showing the session name only: iTermTitleComponentsSessionName = 1 << 0 in iTerm2's
+	// sources/Settings/Profiles/ITAddressBookMgr.h (and TitleComponents.SESSION_NAME = 1 << 0 in
+	// api/library/python/iterm2/iterm2/profile.py; documented in docs/names-and-titles.md).
+	itermTitleComponentSessionName = 1
 )
 
 // itermKeys are the bytes a key sends: iTerm2's API writes them to the session as typed input, so they are
@@ -273,12 +278,28 @@ func (b *ITerm2Backend) SelfPane() (*Pane, error) {
 	return nil, nil
 }
 
-func jsonValue(v string) string {
+func jsonValue(v any) string {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	enc.Encode(v)
 	return strings.TrimSpace(buf.String())
+}
+
+// itermBadgeText keeps only role and ID for the large corner badge; the full title stays in Name.
+func itermBadgeText(title string) string {
+	if parts := strings.SplitN(title, " · ", 3); len(parts) == 3 {
+		return parts[0] + " · " + parts[1]
+	}
+	return title
+}
+
+func itermTitleProperties(title string) []*api.ProfileProperty {
+	return []*api.ProfileProperty{
+		{Key: proto.String("Name"), JsonValue: proto.String(jsonValue(title))},
+		{Key: proto.String("Badge Text"), JsonValue: proto.String(jsonValue(itermBadgeText(title)))},
+		{Key: proto.String("Title Components"), JsonValue: proto.String(jsonValue(itermTitleComponentSessionName))},
+	}
 }
 
 func (b *ITerm2Backend) Spawn(where, cmd, cwd, title string) (*Pane, error) {
@@ -314,14 +335,9 @@ func (b *ITerm2Backend) SpawnAt(at *Pane, where, cmd, cwd, title string) (*Pane,
 		set("Working Directory", cwd)
 	}
 	if title != "" {
-		// The session name shows in the pane's title bar and in notifications; the badge is large text in the
-		// pane's corner that the program inside cannot overwrite (Claude Code and agy set their own titles).
-		set("Name", title)
-		badge := title // role and ID only: the badge is large, the full title is in the session name
-		if parts := strings.SplitN(title, " · ", 3); len(parts) == 3 {
-			badge = parts[0] + " · " + parts[1]
-		}
-		set("Badge Text", badge)
+		// The session name shows in the pane's title bar (with Title Components = Session Name only) and
+		// in notifications; the badge is large text in the pane's corner.
+		props = append(props, itermTitleProperties(title)...)
 	}
 	want := selfNative()
 	if at != nil {
@@ -499,6 +515,27 @@ func (b *ITerm2Backend) SetLabel(p *Pane, label string) error {
 		return BackendErr("iTerm2 set label on %s: %s", p.Native, s)
 	}
 	return nil
+}
+
+// SetTitle renames a running session's Name, Badge Text and Title Components (Session Name only)
+// without modifying the underlying profile, and updates its session name so the title bar shows it.
+func (b *ITerm2Backend) SetTitle(p *Pane, title string) error {
+	props := itermTitleProperties(title)
+	assignments := make([]*api.SetProfilePropertyRequest_Assignment, len(props))
+	for i, prop := range props {
+		assignments[i] = &api.SetProfilePropertyRequest_Assignment{Key: prop.Key, JsonValue: prop.JsonValue}
+	}
+	resp, err := b.call(&api.ClientOriginatedMessage{SetProfilePropertyRequest: &api.SetProfilePropertyRequest{
+		Session:     proto.String(p.Native),
+		Assignments: assignments,
+	}})
+	if err != nil {
+		return err
+	}
+	if s := resp.GetSetProfilePropertyResponse().GetStatus(); s != api.SetProfilePropertyResponse_OK {
+		return BackendErr("iTerm2 set title on %s: %s", p.Native, s)
+	}
+	return b.setName(p.Native, title)
 }
 
 // itermStatus is what iTerm2's built-in get_session_status answers: what the session's program set with

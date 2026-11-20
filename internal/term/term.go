@@ -147,6 +147,20 @@ type Submitter interface {
 	SubmitText(p *Pane, text, from string) error
 }
 
+// Titler is an optional backend interface for renaming a running pane's title.
+// A backend that cannot rename a live pane does not implement it and is skipped silently.
+type Titler interface {
+	SetTitle(p *Pane, title string) error
+}
+
+// SetTitle renames a running pane when its backend supports it; otherwise it is a no-op.
+func SetTitle(b Backend, p *Pane, title string) error {
+	if t, ok := b.(Titler); ok {
+		return t.SetTitle(p, title)
+	}
+	return nil
+}
+
 // Where lists the --where values. "auto" is resolved by Place before a backend sees it.
 var Where = []string{"auto", "tab", "split", "window"}
 

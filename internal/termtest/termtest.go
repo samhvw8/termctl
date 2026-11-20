@@ -291,6 +291,16 @@ func (f *Fake) SetLabel(p *term.Pane, label string) error {
 	return nil
 }
 
+// SetTitle implements term.Titler on the fake backend.
+func (f *Fake) SetTitle(p *term.Pane, title string) error {
+	f.Events = append(f.Events, Event{Kind: "title", Pane: p.ID, Text: title})
+	p.Title = title
+	if q := f.find(p.ID); q != nil {
+		q.Title = title
+	}
+	return nil
+}
+
 // Captures counts the screen reads of a pane.
 func (f *Fake) Captures(pane string) int {
 	n := 0

@@ -241,7 +241,7 @@ func (b *TmuxBackend) SpawnAt(at *Pane, where, cmd, cwd, title string) (*Pane, e
 		b.tile(native)
 	}
 	if title != "" {
-		if _, err := b.run("select-pane", "-t", native, "-T", title); err != nil {
+		if err := b.SetTitle(&Pane{Native: native}, title); err != nil {
 			return nil, err
 		}
 	}
@@ -301,6 +301,12 @@ func (b *TmuxBackend) Close(p *Pane) error {
 
 func (b *TmuxBackend) SetLabel(p *Pane, label string) error {
 	_, err := b.run("set-option", "-p", "-t", p.Native, tmuxLabelOpt, label)
+	return err
+}
+
+// SetTitle sets the pane's tmux title (shown when pane-border-status is enabled).
+func (b *TmuxBackend) SetTitle(p *Pane, title string) error {
+	_, err := b.run("select-pane", "-t", p.Native, "-T", title)
 	return err
 }
 

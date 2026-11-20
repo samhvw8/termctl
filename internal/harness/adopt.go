@@ -95,6 +95,12 @@ func (t *Tasks) adoptTask(me *term.Pane, x *Task, force bool) (*Adopted, error) 
 	}
 	old, oldRef := x.Owner, x.OwnerRef
 	var out Task
+	type titleUpdate struct {
+		pane  string
+		ref   map[string]string
+		title string
+	}
+	var renames []titleUpdate
 	err = t.Reg.Update(func(d *Data) error {
 		c := d.Tasks[x.ID]
 		parent := heldBy(d, me.ID)
@@ -134,7 +140,11 @@ func (t *Tasks) adoptTask(me *term.Pane, x *Task, force bool) (*Adopted, error) 
 		sub = min(sub, maxDepth-depth)
 		shift := depth - c.Depth
 		c.Owner, c.OwnerRef, c.Depth, c.Root, c.SubDepth, c.TreeMax = me.ID, t.SenderRef, depth, root, sub, treeMax
+		if c.Pane != "" {
+			renames = append(renames, titleUpdate{c.Pane, c.Ref, paneTitle(c)})
+		}
 		for _, y := range below { // they stay under it, and may only narrow what it now has
+			beforeTitle := paneTitle(y)
 			legacy := y.Root == ""
 			y.Depth += shift
 			y.Root = root
@@ -145,6 +155,9 @@ func (t *Tasks) adoptTask(me *term.Pane, x *Task, force bool) (*Adopted, error) 
 				y.SubDepth = maxDepth - y.Depth
 			}
 			y.SubDepth = max(0, min(y.SubDepth, maxDepth-y.Depth))
+			if afterTitle := paneTitle(y); afterTitle != beforeTitle && y.Pane != "" && open(y.Status) && !y.Closed {
+				renames = append(renames, titleUpdate{y.Pane, y.Ref, afterTitle})
+			}
 		}
 		if rec := d.Panes[c.Pane]; rec != nil {
 			rec.Owner, rec.OwnerRef = me.ID, t.SenderRef
@@ -163,6 +176,15 @@ func (t *Tasks) adoptTask(me *term.Pane, x *Task, force bool) (*Adopted, error) 
 	})
 	if err != nil {
 		return nil, err
+	}
+	for _, u := range renames {
+		if b, p, err := t.paneByID(u.pane, u.ref); err != nil {
+			Warn(fmt.Sprintf("could not rename pane %s: %v", u.pane, err))
+		} else if p != nil {
+			if err := term.SetTitle(b, p, u.title); err != nil {
+				Warn(fmt.Sprintf("could not rename pane %s: %v", u.pane, err))
+			}
+		}
 	}
 	t.logTask("task.adopt", &out, out.Status, "adopted from "+old)
 	if _, err := t.FlushPending(); err != nil {
@@ -203,6 +225,9 @@ func (t *Tasks) adoptPane(me *term.Pane, b term.Backend, p *term.Pane) (*Adopted
 		return nil
 	}); err != nil {
 		return nil, err
+	}
+	if err := term.SetTitle(b, p, paneTitle(x)); err != nil {
+		Warn(fmt.Sprintf("could not rename pane %s: %v", p.Address(), err))
 	}
 	name := me.Label
 	if name == "" {

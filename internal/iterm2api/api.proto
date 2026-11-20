@@ -10,6 +10,7 @@ option go_package = "github.com/samhvw8/termctl/internal/iterm2api";
 message ClientOriginatedMessage {
   optional int64 id = 1;
   optional GetBufferRequest get_buffer_request = 100;
+  optional SetProfilePropertyRequest set_profile_property_request = 105;
   optional ListSessionsRequest list_sessions_request = 106;
   optional SendTextRequest send_text_request = 107;
   optional CreateTabRequest create_tab_request = 108;
@@ -26,6 +27,7 @@ message ServerOriginatedMessage {
   optional int64 id = 1;
   optional string error = 2;
   optional GetBufferResponse get_buffer_response = 100;
+  optional SetProfilePropertyResponse set_profile_property_response = 105;
   optional ListSessionsResponse list_sessions_response = 106;
   optional SendTextResponse send_text_response = 107;
   optional CreateTabResponse create_tab_response = 108;
@@ -294,4 +296,24 @@ message SetTabLayoutResponse {
     INVALID_SIZE = 3;
   }
   optional Status status = 1;
+}
+
+// Sets values in a session's copy of the profile without modifying the underlying profile.
+message SetProfilePropertyRequest {
+  optional string session = 1;
+  repeated SetProfilePropertyRequest.Assignment assignments = 5;
+  message Assignment {
+    optional string key = 1;
+    optional string json_value = 2;
+  }
+}
+
+message SetProfilePropertyResponse {
+  optional SetProfilePropertyResponse.Status status = 1 [default = OK];
+  enum Status {
+    OK = 0;
+    SESSION_NOT_FOUND = 1;
+    REQUEST_MALFORMED = 2;
+    BAD_GUID = 3;
+  }
 }

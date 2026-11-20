@@ -646,6 +646,9 @@ func (t *Tasks) start(ops *Ops, owner *term.Pane, o NewOpts, task *Task, brief, 
 		if err := t.Backend.SetLabel(pane, id); err != nil { // teammates address a task by its ID
 			return err
 		}
+		if err := term.SetTitle(t.Backend, pane, paneTitle(task)); err != nil {
+			return err
+		}
 		if err := ops.Clear(pane, false, o.Timeout); err != nil {
 			return err
 		}

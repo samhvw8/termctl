@@ -191,3 +191,22 @@ func TestITermCommandKeepsAFailedSessionOpen(t *testing.T) {
 		t.Fatalf("%s\nwant %s", got, want)
 	}
 }
+
+func TestSetTitleSkipsBackendsWithoutTitler(t *testing.T) {
+	var it Backend = &ITerm2Backend{}
+	var tm Backend = &TmuxBackend{}
+	if _, ok := it.(Titler); !ok {
+		t.Fatal("ITerm2Backend must implement Titler")
+	}
+	if _, ok := tm.(Titler); !ok {
+		t.Fatal("TmuxBackend must implement Titler")
+	}
+	for _, b := range []Backend{&RexBackend{}, &HcBackend{}, ghostty{}} {
+		if _, ok := b.(Titler); ok {
+			t.Fatalf("%s should not implement Titler", b.Name())
+		}
+		if err := SetTitle(b, &Pane{ID: b.Name() + ":1", Native: "1"}, "WORKER · t1 · x"); err != nil {
+			t.Fatalf("%s SetTitle returned error %v, want nil", b.Name(), err)
+		}
+	}
+}

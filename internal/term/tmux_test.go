@@ -87,7 +87,19 @@ func TestTmuxListLabelTitleFolder(t *testing.T) {
 			if x.Label != "worker-1" || x.Title != "sleeper" || !strings.HasSuffix(x.Folder, dir[strings.LastIndex(dir, "/"):]) || x.Process != "sleep" {
 				t.Fatalf("%+v", x)
 			}
-			return
+			if err := b.SetTitle(x, "WORKER · t1 · renamed"); err != nil {
+				t.Fatal(err)
+			}
+			after, _ := b.ListPanes()
+			for _, y := range after {
+				if y.ID == p.ID {
+					if y.Title != "WORKER · t1 · renamed" {
+						t.Fatalf("after SetTitle: got %q, want %q", y.Title, "WORKER · t1 · renamed")
+					}
+					return
+				}
+			}
+			t.Fatal("missing after SetTitle")
 		}
 	}
 	t.Fatal("not listed")

@@ -22,7 +22,10 @@ sources:
     title: iTerm2 built-in functions move_session, move_session_to_new_tab, apply_layout (MoveSessionBuiltInFunction.swift, MoveSessionBuiltInFunctions.swift, ApplyLayoutBuiltInFunction.swift)
   - id: iterm2-proto
     resource: https://github.com/gnachman/iTerm2/blob/master/proto/api.proto
-    title: iTerm2 API messages (ListSessionsResponse.Tab.minimized_sessions, MenuItemRequest)
+    title: iTerm2 API messages (ListSessionsResponse.Tab.minimized_sessions, MenuItemRequest, SetProfilePropertyRequest)
+  - id: iterm2-titles
+    resource: https://github.com/gnachman/iTerm2/blob/master/docs/names-and-titles.md
+    title: iTerm2 names, Title Components (iTermTitleComponentsSessionName = 1 << 0 in ITAddressBookMgr.h), and OSC title handling
 ---
 
 # Interface
@@ -36,6 +39,20 @@ sources:
 `Mover`, `Breaker`, `Swapper` and `Arranger` are optional too: see [moving and arranging](#moving-and-arranging).
 
 `StatusReader` is optional: `ProgramStatuses(panes)` gives many panes' program status in one call; its cost per backend is in the table below, and `FreeStatus` marks the backends whose read starts no process. See [program status](#program-status).
+
+`Titler` is optional: `SetTitle(p, title)` renames a running pane. `term.SetTitle(b, p, title)` calls it when `b` implements `Titler` and skips backends without it silently (returning `nil`). See [pane titles](#pane-titles).
+
+# Pane titles
+
+At spawn, iTerm2 sets `"Title Components"` to `1` (`iTermTitleComponentsSessionName = 1 << 0`, Session Name only)[^iterm2-titles] beside `"Name"` and `"Badge Text"`, so a split pane's title bar shows the session name rather than the process command. Live renames (`term.SetTitle`, used by `task new --reuse`, `task adopt` on task or pane, and `harness-ops name`) update only backends that can rename a single pane without clobbering its label:
+
+| Backend | `Titler` | Mechanism and notes |
+|---|---|---|
+| iTerm2 | yes | `SetProfilePropertyRequest` (`api.proto` field 105)[^iterm2-proto] sets `"Name"`, `"Badge Text"` (role and ID), and `"Title Components": 1` on the session's copy of the profile, then `iterm2.set_name`. OSC 2 (`agy`) sets `windowName` only and leaves `Title Components = 1` intact; OSC 0 (`claude`) and OSC 1 also call `setIconName`, which overwrites `autoNameFormat` unless `"Allow Title Setting"` is off. |
+| tmux | yes | `select-pane -t <pane> -T <title>` (sets `pane_title`, shown when `pane-border-status` is on). |
+| Rex | no | `rex block rename` is `SetLabel` (calling it would overwrite task ID labels) and `rex window rename` renames the whole tab/window; skipped silently. |
+| hc | no | `herdr-core` 0.1.19 names a terminal only at `hc run --name` and has no rename command or RPC (`hc label` sets labels); skipped silently. |
+| Ghostty | no | Unsupported; skipped silently. |
 
 # Program status
 
@@ -185,3 +202,4 @@ Measured on hc 0.1.19 and the reason the code is the way it is:
 [^iterm2-status]: iTerm2 built-in function get_session_status
 [^osc7501]: Program Status Protocol (OSC 7501)
 [^alerts-report]: Capturing terminal alerts per pane, research report (2026-11-17)
+[^iterm2-titles]: iTerm2 names, Title Components, and OSC title handling
