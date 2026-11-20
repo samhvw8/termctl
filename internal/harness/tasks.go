@@ -824,7 +824,7 @@ func (t *Tasks) ClosePane(target string, force bool) (*term.Pane, error) {
 		return nil, err
 	}
 	rec := d.Panes[p.ID]
-	owned := rec != nil
+	owned := rec != nil && !rec.Adopted // an adopted pane was started by hand, not by harness-ops
 	if owned && !sameServer(rec.Ref, t.Backend.ServerRef()) {
 		owned = false // the record is from before a terminal server restart
 	}

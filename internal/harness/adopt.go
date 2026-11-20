@@ -194,11 +194,12 @@ func (t *Tasks) adoptPane(me *term.Pane, b term.Backend, p *term.Pane) (*Adopted
 	if err := t.Reg.Update(func(d *Data) error {
 		c := d.Tasks[x.ID]
 		c.Ref, c.Launched = ref, true // the harness is already in the pane
-		label := p.Label
+		label, adopted := p.Label, true
 		if rec := d.Panes[p.ID]; rec != nil {
-			label = rec.Label
+			label, adopted = rec.Label, rec.Adopted // a pane harness-ops created stays closable
 		}
-		d.Panes[p.ID] = &PaneRecord{Harness: HarnessName(p), Label: label, Cwd: p.Folder, Ref: ref, Owner: me.ID, OwnerRef: t.SenderRef, Created: t.clock().Now()}
+		d.Panes[p.ID] = &PaneRecord{Harness: HarnessName(p), Label: label, Cwd: p.Folder, Ref: ref, Owner: me.ID, OwnerRef: t.SenderRef,
+			Created: t.clock().Now(), Adopted: adopted}
 		return nil
 	}); err != nil {
 		return nil, err

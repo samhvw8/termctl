@@ -1,6 +1,7 @@
 # Update Log
 
 ## 2026-11-20
+* **Release**: v0.10.2 — safety fix: after `task adopt` of a pane someone started by hand, its pane record made `close` take it for a pane harness-ops created, so once its task was accepted or closed, any session could close it without `--force` (found by an agy Neon design review; no real use of adopt had happened). The record is now marked `adopted` and never counts as created. Test: `TestAnAdoptedHandStartedPaneIsNeverClosableWithoutForce` (failed before the fix). Verified: unit tests, tmux e2e alone. Runs: nothing new.
 * **Release**: v0.10.1 — no stall notice for a task whose sub-task works; when all its running sub-tasks are stalled, the notice names them. Reported by the growtrics superagent: lead t93a651 was flagged stalled twice while its worker td3571e worked. Test: `TestALeadWaitingOnAWorkingSubTaskIsNotStalled` (fails without the change). Verified: unit tests, tmux e2e alone. Runs: nothing new.
 
 ## 2026-11-19

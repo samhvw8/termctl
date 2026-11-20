@@ -121,7 +121,10 @@ type PaneRecord struct {
 	AnsweredAt float64     `json:"answered_at,omitempty"`
 	// Worked is when the owner last gave the pane work (spawn with a prompt, msg): a watcher counts it
 	// working for workGrace, since a harness takes a moment to look busy.
-	Worked  float64 `json:"worked,omitempty"`
+	Worked float64 `json:"worked,omitempty"`
+	// Adopted: task adopt wrote this record for a pane harness-ops did not create (someone started it by
+	// hand), so its new owner can answer its dialogs. Such a pane is never closable without --force.
+	Adopted bool    `json:"adopted,omitempty"`
 	Unknown Unknown `json:"-"`
 }
 

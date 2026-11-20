@@ -597,3 +597,21 @@ func TestAKeyIsKeptOnlyOnceTyped(t *testing.T) {
 		t.Fatalf("typed %d times", n)
 	}
 }
+
+// A pane someone started by hand and then adopted was not created by harness-ops: after its task ends,
+// close must still refuse it without --force (v0.10.0 left a record that made it look created).
+func TestAnAdoptedHandStartedPaneIsNeverClosableWithoutForce(t *testing.T) {
+	r := newRig(t)
+	res, err := r.tasks.Adopt(r.other.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.tasks.Close(res.Task.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	_, err = r.tasks.ClosePane(r.other.ID, false)
+	wantCode(t, err, 6)
+	if r.b.Has("close", r.other.ID) {
+		t.Fatal("a hand-started pane was closed")
+	}
+}
