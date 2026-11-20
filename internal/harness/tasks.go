@@ -154,14 +154,19 @@ var errSeveral = errors.New("several tasks match")
 
 // findError is find's refusal: a *term.Error (exit 2) that also says whether several tasks matched.
 type findError struct {
-	err     *term.Error
-	several bool
+	err      *term.Error
+	several  bool
+	sentinel error
 }
 
 func (e *findError) Error() string { return e.err.Error() }
 func (e *findError) Unwrap() []error {
 	if e.several {
-		return []error{e.err, errSeveral}
+		s := e.sentinel
+		if s == nil {
+			s = errSeveral
+		}
+		return []error{e.err, s}
 	}
 	return []error{e.err}
 }
@@ -183,7 +188,7 @@ func (t *Tasks) find(d *Data, id string) (*Job, *Lease, error) {
 	if len(hits) > 1 {
 		word = "several tasks"
 	}
-	return nil, nil, &findError{term.TargetErr("%s match '%s'", word, id), len(hits) > 1}
+	return nil, nil, &findError{err: term.TargetErr("%s match '%s'", word, id), several: len(hits) > 1}
 }
 
 // sameServer: a pane ID only means something on the server it was recorded on. Backends with a core_id
@@ -258,9 +263,10 @@ func (t *Tasks) warnDownOnce(id string, cause error) {
 	Warn(fmt.Sprintf("cannot check task %s: %v; only its owner records that its server does not answer", id, cause))
 }
 
-// Reconcile marks active tasks whose pane is gone as lost. Unknown is not gone: a server that does not
-// answer changes nothing until it has not answered for unreachableTTL; then it is gone for good, and its
-// tasks are lost. Only a task's owner records that: other processes leave the task alone and warn once. "cannot check" is warned once when a task's server stops answering, not on every call.
+// Reconcile marks active tasks and scopes whose pane is gone as lost, or whose harness exited to a shell
+// as exited. Unknown is not gone: a server that does not answer changes nothing until it has not answered
+// for unreachableTTL; then it is gone for good. Only a lease's owner records that: other processes leave
+// it alone and warn once.
 func (t *Tasks) Reconcile() error {
 	memo := t.memo == nil
 	if memo {
@@ -272,8 +278,10 @@ func (t *Tasks) Reconcile() error {
 		return err
 	}
 	var lost, exited, back []string
-	down := map[string]error{} // tasks whose server does not answer, and the first time or past the TTL
+	down := map[string]error{}
 	restarted := map[string]bool{}
+	var scopeLost, scopeExited, scopeBack []string
+	scopeDown := map[string]error{}
 	now := t.clock().Now()
 	for _, j := range d.Jobs {
 		l := d.leaseOf(j)
@@ -326,10 +334,45 @@ func (t *Tasks) Reconcile() error {
 			exited = append(exited, j.ID)
 		}
 	}
-	if len(lost)+len(exited)+len(back)+len(down)+len(restarted) == 0 {
+	for _, lid := range sortedLeaseIDs(d) {
+		l := d.Leases[lid]
+		if l.State != "active" || l.Job != "" || l.Scope == "" || l.Pane == "" {
+			continue
+		}
+		_, p, err := t.paneByID(l.Pane, l.Ref)
+		if err != nil && !t.owns(l) {
+			t.warnDownOnce(leaseRefLabel(d, l), err)
+			continue
+		}
+		if err != nil {
+			if l.Unreachable == 0 || now-l.Unreachable > unreachableTTL {
+				scopeDown[l.ID] = err
+			}
+			continue
+		}
+		if l.Unreachable != 0 && t.owns(l) {
+			scopeBack = append(scopeBack, l.ID)
+		}
+		switch {
+		case p == nil:
+			scopeLost = append(scopeLost, l.ID)
+		case l.Launched && isShell(p.Process):
+			scopeExited = append(scopeExited, l.ID)
+		}
+	}
+	if len(lost)+len(exited)+len(back)+len(down)+len(restarted)+
+		len(scopeLost)+len(scopeExited)+len(scopeBack)+len(scopeDown) == 0 {
 		return nil
 	}
-	return t.Reg.Update(func(d *Data) error {
+	type scopeEv struct {
+		event string
+		s     Scope
+		l     Lease
+		state string
+		text  string
+	}
+	var scopeLogs []scopeEv
+	err = t.Reg.Update(func(d *Data) error {
 		lose := func(j *Job, l *Lease, why string) {
 			now := t.clock().Now()
 			j.Status, j.Ended, l.Dialog = "lost", now, nil
@@ -342,6 +385,29 @@ func (t *Tasks) Reconcile() error {
 			if l.Pane != "" {
 				if c := d.Created[l.Pane]; c != nil && sameServer(c.Ref, l.Ref) {
 					delete(d.Created, l.Pane)
+				}
+			}
+		}
+		endNonJob := func(l *Lease, state, why string) {
+			now := t.clock().Now()
+			l.State, l.Ended, l.Dialog = state, now, nil
+			if state == "lost" && l.Pane != "" {
+				if c := d.Created[l.Pane]; c != nil && sameServer(c.Ref, l.Ref) {
+					delete(d.Created, l.Pane)
+				}
+			}
+			if l.Scope != "" {
+				if s := d.Scopes[l.Scope]; s != nil {
+					if s.Lease == l.ID {
+						s.Lease = ""
+					}
+					d.Notices = append(d.Notices, &Notice{
+						ID: newNoticeID(d), Lease: l.ID, Owner: l.Owner, OwnerRef: l.OwnerRef,
+						Tag: scopeTag(s, l), Kind: "exited", Created: now,
+						Text: fmt.Sprintf("scope %s (%s): pane %s %s; rebind with harness-ops attach <new-pane> --name %s",
+							s.Name, s.ID, l.Pane, state, s.Name),
+					})
+					scopeLogs = append(scopeLogs, scopeEv{"scope." + state, *s, *l, state, why})
 				}
 			}
 		}
@@ -378,8 +444,57 @@ func (t *Tasks) Reconcile() error {
 				lose(j, l, fmt.Sprintf("its server has not answered for %gs: %v", unreachableTTL, cause))
 			}
 		}
+		for _, lid := range scopeLost {
+			if l := d.Leases[lid]; l != nil && l.State == "active" {
+				endNonJob(l, "lost", "its pane is gone")
+			}
+		}
+		for _, lid := range scopeExited {
+			if l := d.Leases[lid]; l != nil && l.State == "active" {
+				endNonJob(l, "exited", "the harness exited")
+			}
+		}
+		for _, lid := range scopeBack {
+			if l := d.Leases[lid]; l != nil && l.Unreachable != 0 {
+				l.Unreachable = 0
+				Warn(fmt.Sprintf("%s: its server answers again", leaseRefLabel(d, l)))
+			}
+		}
+		for lid, cause := range scopeDown {
+			l := d.Leases[lid]
+			if l == nil || l.State != "active" {
+				continue
+			}
+			switch {
+			case l.Unreachable == 0:
+				l.Unreachable = now
+				Warn(fmt.Sprintf("cannot check %s: %v; it is lost if its server does not answer for %gs", leaseRefLabel(d, l), cause, unreachableTTL))
+			case now-l.Unreachable > unreachableTTL:
+				endNonJob(l, "lost", fmt.Sprintf("its server has not answered for %gs: %v", unreachableTTL, cause))
+			}
+		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	for _, ev := range scopeLogs {
+		e := Entry{
+			Event:   ev.event,
+			Project: ev.s.Project,
+			From:    ev.l.Pane,
+			To:      ev.l.Owner,
+			Scope:   ev.s.ID,
+			Harness: ev.l.Harness,
+			Status:  ev.state,
+			Text:    ev.text,
+		}
+		if e.Project == "" {
+			e.Project = ev.l.Project
+		}
+		t.journal().Record(e)
+	}
+	return nil
 }
 
 // harnessBack reports whether pane p is running lease l's harness again after its job was marked exited.
@@ -470,9 +585,22 @@ func holdsTask(d *Data, paneID string) bool {
 	return false
 }
 
+type reservePolicy struct {
+	paneRef        map[string]string
+	forAdopt       bool
+	force          bool
+	prevOwnerAlive bool
+	prevLeaseID    string
+	label          string
+}
+
 // reserve takes a slot under the lock, before the spawn, so parallel calls cannot exceed the cap. It
 // returns the task and how many tasks of its tree run, itself included (for its capability card).
 func (t *Tasks) reserve(owner *term.Pane, o NewOpts, pane *term.Pane) (string, int, error) {
+	return t.reserveWith(owner, o, pane, reservePolicy{})
+}
+
+func (t *Tasks) reserveWith(owner *term.Pane, o NewOpts, pane *term.Pane, rp reservePolicy) (string, int, error) {
 	limit := o.MaxTasks
 	if limit == 0 {
 		var err error
@@ -484,18 +612,18 @@ func (t *Tasks) reserve(owner *term.Pane, o NewOpts, pane *term.Pane) (string, i
 	if err != nil {
 		return "", 0, err
 	}
+	ref := rp.paneRef
+	if ref == nil {
+		ref = t.Backend.ServerRef()
+	}
 	var id string
 	inTree := 0
 	err = t.Reg.Update(func(d *Data) error {
 		running := 0
-		var parent *Job
 		for _, x := range d.Jobs {
 			xl := d.leaseOf(x)
 			if x.Status == "running" && xl.Owner == owner.ID {
 				running++
-			}
-			if open(x.Status) && xl.Pane == owner.ID {
-				parent = x
 			}
 		}
 		if running >= limit {
@@ -504,26 +632,43 @@ func (t *Tasks) reserve(owner *term.Pane, o NewOpts, pane *term.Pane) (string, i
 		if pane != nil && holdsTask(d, pane.ID) {
 			return term.Errf(term.CodeGuard, "%s already holds a running task", pane.Address())
 		}
+		if pane != nil {
+			if al := activeLeaseForPane(d, pane.ID, ref); al != nil && al.Scope != "" {
+				name := al.Scope
+				if s := d.Scopes[al.Scope]; s != nil {
+					name = s.Name
+				}
+				if !rp.forAdopt {
+					return term.Errf(term.CodeGuard, "%s holds attached scope %s (%s); detach it or use send", pane.Address(), name, al.Scope)
+				}
+				if !t.owns(al) && !rp.force && (rp.prevOwnerAlive || al.ID != rp.prevLeaseID) {
+					return term.Errf(term.CodeGuard, "%s holds scope %s owned by %s, which is still there; ask it, or use --force", pane.Address(), name, al.Owner)
+				}
+			}
+		}
 		now := t.clock().Now()
 		j := &Job{ID: newJobID(d), Title: o.Title, Status: "running", Started: now, Notify: "none", Owned: pane == nil, Round: 1, ReviewOf: o.ReviewOf,
 			Blind: o.Blind, Defer: o.Defer}
-		l := &Lease{ID: newLeaseID(d), Owner: owner.ID, OwnerRef: t.SenderRef, Ref: t.Backend.ServerRef(), Harness: o.Harness, Cwd: o.Cwd,
+		l := &Lease{ID: newLeaseID(d), Owner: owner.ID, OwnerRef: t.SenderRef, Ref: ref, Harness: o.Harness, Cwd: o.Cwd,
 			Project: ProjectOf(owner), Job: j.ID, State: "active", Started: now}
+		if rp.forAdopt {
+			l.Launched = true
+			l.Label = rp.label
+		}
 		j.Lease = l.ID
-		var pl *Lease
-		if parent != nil {
-			pl = d.leaseOf(parent)
-		}
-		if err := place(d, j, l, parent, pl, o.SubDepth, o.TreeMax, depthLimit); err != nil {
+		pl := activeLeaseForPane(d, owner.ID, t.callerRef())
+		if err := placeLease(d, l, pl, o.SubDepth, o.TreeMax, depthLimit, true); err != nil {
 			return err
-		}
-		if pl != nil {
-			l.Parent = pl.ID
 		}
 		if pane != nil {
 			// The pane's supervision passes to this task: a lease left on it ends (one active lease per pane).
 			for _, lid := range sortedLeaseIDs(d) {
 				if old := d.Leases[lid]; old.State == "active" && old.Pane == pane.ID && sameServer(old.Ref, l.Ref) {
+					if old.Scope != "" {
+						if sc := d.Scopes[old.Scope]; sc != nil && sc.Lease == old.ID {
+							sc.Lease = ""
+						}
+					}
 					endLease(old, now)
 				}
 			}
@@ -631,6 +776,13 @@ func (t *Tasks) New(o NewOpts) (*Task, error) {
 		}
 		if holdsTask(d, pane.ID) {
 			return nil, term.Errf(term.CodeGuard, "%s already holds a running task", pane.Address())
+		}
+		if al := activeLeaseForPane(d, pane.ID, t.Backend.ServerRef()); al != nil && al.Scope != "" {
+			name := al.Scope
+			if s := d.Scopes[al.Scope]; s != nil {
+				name = s.Name
+			}
+			return nil, term.Errf(term.CodeGuard, "%s holds attached scope %s (%s); detach it or use send", pane.Address(), name, al.Scope)
 		}
 		idle := reuseIdleTimeout
 		if o.Timeout > 0 && o.Timeout < idle {
@@ -796,19 +948,37 @@ func (t *Tasks) ownsPane(d *Data, pane string, paneRef map[string]string) *Lease
 
 // Spawn starts a harness and records the pane, so close may act on it later.
 func (t *Tasks) Spawn(harness, where, cwd string, opts SpawnOpts) (*term.Pane, error) {
+	depthLimit, err := envInt("TERMCTL_MAX_DEPTH", defaultMaxDepth)
+	if err != nil {
+		return nil, err
+	}
+	if t.Sender != nil {
+		d, err := t.Reg.Read()
+		if err != nil {
+			return nil, err
+		}
+		pl := activeLeaseForPane(d, t.Sender.ID, t.callerRef())
+		if err := placeLease(d, &Lease{ID: "tmp"}, pl, 0, 0, depthLimit, false); err != nil {
+			return nil, err
+		}
+	}
 	ref := t.Backend.ServerRef()
 	opts.Owned = t.owned()
 	opts.Wrap = func(cmd string) string { return SurvivingCommand(cmd, "") }
 	opts.OnCreated = func(p *term.Pane) error {
 		return t.Reg.Update(func(d *Data) error {
 			owner := ""
+			var pl *Lease
 			if t.Sender != nil {
 				owner = t.Sender.ID
+				pl = activeLeaseForPane(d, owner, t.callerRef())
 			}
 			now := t.clock().Now()
 			l := &Lease{ID: newLeaseID(d), Owner: owner, OwnerRef: t.SenderRef, Pane: p.ID, Ref: ref, Harness: harness, Label: opts.Label,
-				Cwd: cwd, Project: ProjectOf(t.Sender), Depth: 1, TreeMax: defaultTreeMax, State: "active", Launched: true, Started: now}
-			l.Root = l.ID
+				Cwd: cwd, Project: ProjectOf(t.Sender), State: "active", Launched: true, Started: now}
+			if err := placeLease(d, l, pl, 0, 0, depthLimit, false); err != nil {
+				return err
+			}
 			for _, lid := range sortedLeaseIDs(d) { // a lease left from an earlier pane of this ID on this server
 				if old := d.Leases[lid]; old.State == "active" && old.Pane == p.ID && sameServer(old.Ref, ref) {
 					endLease(old, now)
@@ -946,11 +1116,18 @@ func (t *Tasks) ClosePane(target string, force bool) (*term.Pane, error) {
 		}
 	}
 	if !force {
-		if !owned {
-			return nil, term.Errf(term.CodeGuard, "%s was not created through spawn or task new; use --force to close it", p.Address())
-		}
 		if task != nil {
 			return nil, term.Errf(term.CodeGuard, "%s holds task %s (%s), not accepted; use task accept, or --force", p.Address(), task.ID, task.Status)
+		}
+		if al := activeLeaseForPane(d, p.ID, ref); al != nil && al.Scope != "" {
+			name := al.Scope
+			if s := d.Scopes[al.Scope]; s != nil {
+				name = s.Name
+			}
+			return nil, term.Errf(term.CodeGuard, "%s holds active scope %s (%s); detach it first, or use --force", p.Address(), name, al.Scope)
+		}
+		if !owned {
+			return nil, term.Errf(term.CodeGuard, "%s was not created through spawn or task new; use --force to close it", p.Address())
 		}
 		busy, err := t.busy(t.Backend, p)
 		if err != nil {
@@ -970,6 +1147,11 @@ func (t *Tasks) ClosePane(target string, force bool) (*term.Pane, error) {
 		if e.Project == "" {
 			e.Project = ProjectOf(t.Sender)
 		}
+	} else if al := activeLeaseForPane(d, p.ID, ref); al != nil && al.Scope != "" {
+		e.Scope = al.Scope
+		if al.Project != "" {
+			e.Project = al.Project
+		}
 	}
 	if force {
 		e.Status = "forced"
@@ -980,6 +1162,11 @@ func (t *Tasks) ClosePane(target string, force bool) (*term.Pane, error) {
 		delete(d.Created, p.ID)
 		for _, l := range d.Leases { // the pane is gone: its supervision ends
 			if l.Pane == p.ID && sameServer(l.Ref, ref) {
+				if l.Scope != "" {
+					if s := d.Scopes[l.Scope]; s != nil && s.Lease == l.ID {
+						s.Lease = ""
+					}
+				}
 				l.Dialog, l.Restarted = nil, false
 				endLease(l, now)
 			}
@@ -1379,23 +1566,17 @@ func (t *Tasks) Progress(id, text string, notify bool) (*Task, error) {
 			return term.UsageErr("task %s is %s: progress is for a running task", j.ID, j.Status)
 		}
 		now := t.clock().Now()
-		l.Progress = &ProgressNote{Text: text, At: now}
-		l.IdleSince, l.Stall = 0, nil
+		var tag, noticeText string
 		if notify {
-			keep := d.Notices[:0]
-			for _, n := range d.Notices {
-				if n.Kind == "progress" && n.Lease == l.ID && n.Claimed == 0 {
-					continue // not being typed: the newer line replaces it
-				}
-				keep = append(keep, n)
-			}
-			d.Notices = keep
-			tag, err := t.doneTag(j, l, t.Backend)
+			var err error
+			tag, err = t.doneTag(j, l, t.Backend)
 			if err != nil {
 				return err
 			}
-			d.Notices = append(d.Notices, &Notice{ID: newNoticeID(d), Lease: l.ID, Owner: l.Owner, OwnerRef: l.OwnerRef, Tag: tag, Kind: "progress",
-				Text: fmt.Sprintf("PROGRESS task %s (%s)%s: %s", j.ID, j.Title, roundNote(j.Round), text), Created: now})
+			noticeText = fmt.Sprintf("PROGRESS task %s (%s)%s: %s", j.ID, j.Title, roundNote(j.Round), text)
+		}
+		if err := t.recordProgress(d, l, tag, noticeText, text, notify, now); err != nil {
+			return err
 		}
 		out, outJob, outLease = d.TaskView(j.ID), *j, *l
 		return nil
@@ -1601,10 +1782,16 @@ func noticeLive(d *Data, n *Notice) bool {
 	case "dialog":
 		return noticeOnScreen(d, n)
 	case "progress", "stall":
-		j := d.jobOf(l)
-		return j != nil && j.Status == "running" && !j.Closed && (n.Kind == "progress" || l.Stall != nil)
-	case "escalate": // of a dialog: it still waits; of ended tasks with running sub-tasks: always
-		return n.Dialog == "" || dialogOnScreen(d.jobOf(l), l, n.Dialog)
+		if l == nil || l.State != "active" {
+			return false
+		}
+		if l.Job != "" {
+			j := d.Jobs[l.Job]
+			return j != nil && j.Status == "running" && !j.Closed && (n.Kind == "progress" || l.Stall != nil)
+		}
+		return n.Kind == "progress" || l.Stall != nil
+	case "escalate": // of a dialog: it still waits; of ended tasks/scopes with running sub-tasks: always
+		return n.Dialog == "" || leaseDialogOnScreen(d, l, n.Dialog)
 	}
 	return true
 }
@@ -1645,10 +1832,15 @@ func (n Notice) about(d *Data) string {
 	switch {
 	case l == nil:
 		return "lease " + n.Lease
-	case l.Job == "":
-		return "pane " + l.Pane
+	case l.Job != "":
+		return "task " + l.Job
+	case l.Scope != "":
+		if s := d.Scopes[l.Scope]; s != nil {
+			return "scope " + s.Name
+		}
+		return "scope " + l.Scope
 	}
-	return "task " + l.Job
+	return "pane " + l.Pane
 }
 
 func (t *Tasks) deliver(n Notice) string {

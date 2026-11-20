@@ -32,9 +32,16 @@ Talk to coding-agent panes. Put options before the target: everything after the 
   clear [--force] [--timeout S] TARGET        /clear alone, then wait for idle
   wait-idle [--timeout S] TARGET
   spawn HARNESS [--where auto|tab|split|window] [--cwd D] [--prompt T | --prompt-file F] [--label L] [--command CMD] [--timeout S]
-  close [--force] TARGET                      only panes made by spawn or task new; never your own
+                                              refused (exit 6) from a leaf task (--sub-depth 0)
+  attach TARGET [--name SLUG] [--about TEXT] [--stall DUR] [--sub-depth K] [--tree-max M] [--notify] [--force]
+                                              attach an existing pane as a durable Scope (silent by default; 0 task slots)
+  detach TARGET [--keep] [--notify]           end supervision of a scope or pane without closing it (drops unless --keep)
+  report [--notify] TEXT...                   attached scope reports one line of progress, resetting its stall timer
+  scope ls [--all] [--tree] [--json]          list scopes (--tree nests child tasks and sub-scopes)
+  scope show (NAME | ID) [--json]             show one scope's details
+  close [--force] TARGET                      only panes made by spawn or task new; never your own; refuses active scopes
   interrupt [--key K] TARGET                  stop the current turn
-  key [--force] TARGET KEY...                 press keys on a pane you started (spawn or task new): a menu, a picker,
+  key [--force] TARGET KEY...                 press keys on a pane you started or attached: a menu, a picker,
                                               shift-tab. KEY: enter escape tab shift-tab backspace delete space up down
                                               left right home end pageup pagedown f1-f12 ctrl-X alt-X (alt+x, meta-x,
                                               option-x too); never a plain digit. Refused on a dialog (use answer or
@@ -47,8 +54,8 @@ Talk to coding-agent panes. Put options before the target: everything after the 
                                               L: even, rows, columns, tiled, main-left, main-top
   name LABEL                                  label the current pane
   whoami
-  answer TARGET N --expect FP [--persist]     choose N in the dialog FP on a pane you started (spawn or task new) or a task's worker;
-                                              TARGET: the pane, or the task ID. A [persist] choice also needs --persist
+  answer TARGET N --expect FP [--persist]     choose N in the dialog FP on a pane you started/attached or a task's worker;
+                                              TARGET: the pane, scope, lease, or task ID. A [persist] choice needs --persist
   deny TARGET --expect FP                     cancel the dialog FP with Esc; never presses Enter
   task new HARNESS --title T (--brief TEXT | --brief-file F) [--cwd D] [--where W] [--reuse TARGET] [--command CMD] [--max N] [--timeout S]
            [--sub-depth K] [--tree-max M] [--defer [--wait-ack [S]]]
@@ -76,10 +83,10 @@ Talk to coding-agent panes. Put options before the target: everything after the 
                                               worker looks idle 10 min without done or progress (stalled); task new starts one.
                                               Also tells you once when a task below your own tasks waits on a dialog 3 min, or
                                               when one of your tasks ends while tasks under it still run
-  log [--project DIR] [--task ID] [--pane ID] [--since 2h|3d|DATE] [-n N] [--json]   the journal, oldest first (default: last 50)
-  resume (TASK-ID | DIR) [--tree]             what a new session needs: a task's brief, report and every message in full;
-                                              or a project's open tasks, notes and last entries (DIR: . for your pane's project);
-                                              --tree: one line per task under it: status, latest progress or summary, open dialog
+  log [--project DIR] [--task ID] [--scope NAME|ID] [--pane ID] [--since 2h|3d|DATE] [-n N] [--json]   the journal, oldest first (default: last 50)
+  resume (TASK-ID | SCOPE | DIR) [--tree]     what a new session needs: a task's or scope's state, report and timeline;
+                                              or a project's open tasks, scopes, notes and last entries (DIR: . for yours);
+                                              --tree: one line per scope/task under it: status, latest report/progress, open dialog
   note WHAT (TEXT... | --file F | stdin)      file a text (a job brief, a plan) in your project's journal folder; prints its path
   state clean                                 remove the throwaway directory in TERMCTL_STATE_DIR; refuses the live one
 
@@ -114,9 +121,11 @@ type row struct {
 	Folder  string `json:"folder"`
 	Self    bool   `json:"self"`
 	Status  string `json:"status"`
-	Tab     string `json:"tab"`              // the tab (tmux: window) ID, "" where the backend reports none
-	Hidden  bool   `json:"hidden,omitempty"` // behind a maximized pane (iTerm2)
-	Dialog  string `json:"dialog,omitempty"` // ls --mine: the fingerprint of the dialog marked open on the pane
+	Tab     string `json:"tab"`               // the tab (tmux: window) ID, "" where the backend reports none
+	Hidden  bool   `json:"hidden,omitempty"`  // behind a maximized pane (iTerm2)
+	Dialog  string `json:"dialog,omitempty"`  // ls --mine: the fingerprint of the dialog marked open on the pane
+	Scope   string `json:"scope,omitempty"`   // ls --mine: attached scope name
+	Stalled bool   `json:"stalled,omitempty"` // ls --mine: whether the lease is marked stalled
 }
 
 func (a *App) printTable(panes []*term.Pane) {
@@ -241,10 +250,17 @@ func (a *App) printAnswered(target string, res *harness.Answered) {
 	}
 }
 
-// ensureWatcher starts a detached watcher for the caller unless one already runs. Failing to start
-// one only warns: the task itself is running.
+// ensureWatcher starts a detached watcher for the caller unless one already runs (in which case it wakes
+// a running watcher from slow-idle sleep). Failing to start one only warns: the task/scope itself is running.
 func (a *App) ensureWatcher(o *Options, tasks *harness.Tasks) {
-	if a.StartWatcher == nil || tasks.Sender == nil || tasks.Watching(tasks.Sender.ID) != 0 {
+	if tasks.Sender == nil {
+		return
+	}
+	if tasks.Watching(tasks.Sender.ID) != 0 {
+		tasks.WakeWatcher(tasks.Sender.ID)
+		return
+	}
+	if a.StartWatcher == nil {
 		return
 	}
 	if err := a.StartWatcher(o, tasks.WatchLog(tasks.Sender.ID)); err != nil {
@@ -412,6 +428,14 @@ func (a *App) harness(argv []string) error {
 		return nil
 	case "task":
 		return a.task(rest, tail, dashed, o)
+	case "attach":
+		return a.attachCmd(rest, o)
+	case "detach":
+		return a.detachCmd(rest, o)
+	case "report":
+		return a.reportCmd(rest, tail, dashed, o)
+	case "scope":
+		return a.scopeCmd(rest, o)
 	case "state":
 		if len(rest) != 1 || rest[0] != "clean" {
 			return term.UsageErr("usage: state clean  (removes the directory in TERMCTL_STATE_DIR; never the live one)")
@@ -483,20 +507,32 @@ func (a *App) harness(argv []string) error {
 		if err != nil {
 			return err
 		}
+		tasks := a.tasksFor(o, ops.Backend, ops.Sender)
+		scopeID, attachSuf := tasks.PrepareMsg(ops.Backend, pane, p.bools["--defer"])
+		if scopeID != "" {
+			ops.Scope = scopeID
+		}
 		mo := harness.MsgOpts{Force: p.bools["--force"], ClearFirst: p.bools["--clear-first"], Timeout: timeout, Again: p.bools["--again"],
 			Key: harness.MsgKey(address(ops.Sender), pane.ID, text)}
 		if p.bools["--defer"] {
 			mo.ID = harness.NewMsgID()
 			mo.Suffix = harness.DeferSuffix(mo.ID)
+		} else if attachSuf != "" {
+			mo.Suffix = attachSuf
 		}
 		sent, err := ops.Msg(pane, text, mo)
+		if sent.Typed && attachSuf != "" {
+			if terr := tasks.MarkScopeTold(ops.Backend, pane); terr != nil {
+				fmt.Fprintf(a.Err, "harness-ops: warning: %v\n", terr)
+			}
+		}
 		if err != nil {
 			if sent.Typed { // it may still arrive: the watcher must cover the pane's dialogs
-				a.gaveWork(o, a.tasksFor(o, ops.Backend, ops.Sender), ops.Backend, pane)
+				a.gaveWork(o, tasks, ops.Backend, pane)
 			}
 			return err
 		}
-		a.gaveWork(o, a.tasksFor(o, ops.Backend, ops.Sender), ops.Backend, pane)
+		a.gaveWork(o, tasks, ops.Backend, pane)
 		if mo.ID != "" {
 			fmt.Fprintln(a.Out, mo.ID)
 		}
@@ -506,7 +542,7 @@ func (a *App) harness(argv []string) error {
 			} else {
 				a.sent(pane)
 			}
-			if err := a.tasksFor(o, ops.Backend, ops.Sender).WaitAck(mo.ID, ackWait); err != nil {
+			if err := tasks.WaitAck(mo.ID, ackWait); err != nil {
 				return err
 			}
 			fmt.Fprintf(a.Out, "acked %s\n", mo.ID)
@@ -674,6 +710,9 @@ func (a *App) harness(argv []string) error {
 			return err
 		}
 		fmt.Fprintf(a.Out, "closed %s (%s, %s)\n", term.Cut(pane.Address(), 8), harness.HarnessName(pane), orFolder(pane))
+		if tasks.Sender != nil && tasks.Watching(tasks.Sender.ID) != 0 {
+			tasks.WakeWatcher(tasks.Sender.ID)
+		}
 		return nil
 	case "key":
 		p, err := parseArgs(rest, []string{"--force"}, nil, -1)
@@ -785,6 +824,8 @@ func (a *App) ls(o *Options, all, asJSON, mine bool) error {
 	}
 	var panes []*term.Pane
 	dialogs := map[string]string{}
+	scopes := map[string]string{}
+	stalls := map[string]bool{}
 	for _, name := range names {
 		opt := *o
 		if name != "" {
@@ -801,6 +842,7 @@ func (a *App) ls(o *Options, all, asJSON, mine bool) error {
 		if err != nil {
 			return err
 		}
+		var mineEntries []harness.MineEntry
 		if mine {
 			tasks, err := a.openTasks(&opt, b)
 			if err != nil {
@@ -809,25 +851,30 @@ func (a *App) ls(o *Options, all, asJSON, mine bool) error {
 			if tasks.Sender == nil {
 				return term.UsageErr("ls --mine: cannot tell which pane this runs in")
 			}
-			found, err = tasks.Mine(found)
+			mineEntries, err = tasks.MineInfo(found)
 			if err != nil {
 				return err
+			}
+			found = make([]*term.Pane, 0, len(mineEntries))
+			for _, me := range mineEntries {
+				found = append(found, me.Pane)
 			}
 		}
 		fillStatus(a.newOps(b, nil), found)
 		if mine {
-			// A dialog the watcher marked: for a lead whose harness is not typed notices, the only sign of one.
-			tasks, err := a.openTasks(&opt, b)
-			if err != nil {
-				return err
-			}
-			open, err := tasks.OpenDialogs()
-			if err != nil {
-				return err
-			}
-			for _, p := range found {
-				if fp := open[p.ID]; fp != "" {
-					p.Status, dialogs[p.ID] = "dialog "+fp, fp
+			for _, me := range mineEntries {
+				p := me.Pane
+				if me.Dialog != "" {
+					p.Status, dialogs[p.ID] = "dialog "+me.Dialog, me.Dialog
+				} else if me.Stalled {
+					p.Status = "stalled"
+				}
+				if me.Scope != "" {
+					scopes[p.ID] = me.Scope
+					p.Status += " (scope " + me.Scope + ")"
+				}
+				if me.Stalled {
+					stalls[p.ID] = true
 				}
 			}
 		}
@@ -836,7 +883,7 @@ func (a *App) ls(o *Options, all, asJSON, mine bool) error {
 	if asJSON {
 		rows := []row{}
 		for _, p := range panes {
-			rows = append(rows, row{p.Address(), p.ID, p.TTY, p.Title, p.Label, harness.HarnessName(p), p.Folder, p.IsSelf, p.Status, p.Tab, p.Hidden, dialogs[p.ID]})
+			rows = append(rows, row{p.Address(), p.ID, p.TTY, p.Title, p.Label, harness.HarnessName(p), p.Folder, p.IsSelf, p.Status, p.Tab, p.Hidden, dialogs[p.ID], scopes[p.ID], stalls[p.ID]})
 		}
 		data, _ := json.MarshalIndent(rows, "", " ")
 		fmt.Fprintln(a.Out, string(data))
@@ -861,17 +908,27 @@ func (a *App) selfCmd(cmd string, rest []string, o *Options) error {
 	if err != nil {
 		return err
 	}
+	if cmd == "whoami" {
+		me, err := a.OpenSender(o, b)
+		if err != nil {
+			return err
+		}
+		if me == nil {
+			return term.UsageErr("cannot tell which pane this runs in")
+		}
+		fillStatus(a.newOps(b, nil), []*term.Pane{me})
+		a.printTable([]*term.Pane{me})
+		if line := a.tasksFor(o, b, me).SupervisionLine(); line != "" {
+			fmt.Fprintln(a.Out, line)
+		}
+		return nil
+	}
 	me, err := b.SelfPane()
 	if err != nil {
 		return err
 	}
 	if me == nil {
 		return term.UsageErr("cannot tell which pane this runs in")
-	}
-	if cmd == "whoami" {
-		fillStatus(a.newOps(b, nil), []*term.Pane{me})
-		a.printTable([]*term.Pane{me})
-		return nil
 	}
 	if err := b.SetLabel(me, p.pos[0]); err != nil {
 		return err

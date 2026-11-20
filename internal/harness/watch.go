@@ -44,11 +44,12 @@ type Source interface {
 }
 
 const (
-	WatchInterval = 3.0
-	StatusEvery   = 1.0 // between screen rounds, a backend with a status source is asked this often
-	blockedLook   = 0.5 // the status says blocked: look again this soon when the dialog was not drawn yet
-	readWorkers   = 8   // screens read at once
-	minGap        = 0.5 // the least pause between rounds, however long a round took
+	WatchInterval     = 3.0
+	IdleWatchInterval = 30.0
+	StatusEvery       = 1.0 // between screen rounds, a backend with a status source is asked this often
+	blockedLook       = 0.5 // the status says blocked: look again this soon when the dialog was not drawn yet
+	readWorkers       = 8   // screens read at once
+	minGap            = 0.5 // the least pause between rounds, however long a round took
 )
 
 // worker is a watched live pane, resolved once per round: a running task's worker, or (task nil) a pane
@@ -133,7 +134,7 @@ func (t *Tasks) paneWorkers(d *Data, owner string, ref map[string]string) (out [
 			continue
 		}
 		prof := ForProcess(p.Process)
-		if prof.ReadDialog == nil {
+		if prof.ReadDialog == nil && !(l.Scope != "" && prof.Calibrated && effectiveStallAfter(d, l) > 0) {
 			continue
 		}
 		out = append(out, worker{lease: l, b: b, p: p, prof: prof})
@@ -409,7 +410,7 @@ func (t *Tasks) applyOn(d *Data, sigs []Signal, notify bool, now float64) bool {
 			continue
 		}
 		if notify && j.Status == "running" && !j.Closed {
-			if trackIdle(d, j, l, s, now) {
+			if trackLeaseIdle(d, l, s, now) {
 				changed = true
 			}
 		}
@@ -435,11 +436,20 @@ func (t *Tasks) applyOn(d *Data, sigs []Signal, notify bool, now float64) bool {
 	return changed
 }
 
-// trackIdle times a running task's idle stretch from the watcher's own screen reads (no extra backend call).
-// A look that is not idle ends the stretch and its stall mark. Once the worker has looked idle for stallAfter,
-// counted from the later of the stretch's start and its last progress, the task gets a stall mark and its
-// owner one notice (kind "stall"); the mark keeps a second one from going out in the same stretch.
-func trackIdle(d *Data, j *Job, l *Lease, s Signal, now float64) bool {
+func trackIdle(d *Data, _ *Job, l *Lease, s Signal, now float64) bool {
+	return trackLeaseIdle(d, l, s, now)
+}
+
+// trackLeaseIdle times a running task or stalled-enabled scope's idle stretch from the watcher's own screen
+// reads (no extra backend call). A look that is not idle ends the stretch and its stall mark. Once the
+// worker has looked idle for effectiveStallAfter, counted from the later of the stretch's start and its
+// last progress, the lease gets a stall mark and its owner one notice (kind "stall"); the mark keeps a
+// second one from going out in the same stretch.
+func trackLeaseIdle(d *Data, l *Lease, s Signal, now float64) bool {
+	threshold := effectiveStallAfter(d, l)
+	if threshold <= 0 {
+		return false
+	}
 	if !s.Idle {
 		if l.IdleSince != 0 || l.Stall != nil {
 			l.IdleSince, l.Stall = 0, nil
@@ -470,16 +480,29 @@ func trackIdle(d *Data, j *Job, l *Lease, s Signal, now float64) bool {
 	if l.Progress != nil && l.Progress.At > since {
 		since = l.Progress.At
 	}
-	if l.Stall != nil || now-since < stallAfter {
+	if l.Stall != nil || now-since < threshold {
 		return false
 	}
 	l.Stall = &StallMark{At: now}
-	text := fmt.Sprintf("task %s (%s) looks stalled: idle for %d min without task done or progress. read it: harness-ops read %s",
-		j.ID, j.Title, int(stallAfter/60), j.ID)
+	dur := fmt.Sprintf("%d min", int(threshold/60))
+	if threshold < 60 {
+		dur = fmt.Sprintf("%ds", int(threshold))
+	}
+	var text string
+	if j := d.jobOf(l); j != nil {
+		text = fmt.Sprintf("task %s (%s) looks stalled: idle for %s without task done or progress. read it: harness-ops read %s",
+			j.ID, j.Title, dur, j.ID)
+	} else if sc := d.Scopes[l.Scope]; sc != nil {
+		text = fmt.Sprintf("scope %s (%s) looks stalled: idle for %s without report. read it: harness-ops read %s",
+			sc.Name, sc.ID, dur, l.Pane)
+	} else {
+		text = fmt.Sprintf("pane %s looks stalled: idle for %s without report. read it: harness-ops read %s",
+			l.Pane, dur, l.Pane)
+	}
 	if len(stalled) > 0 {
 		text += "; its sub-tasks look stalled too: " + strings.Join(stalled, ", ")
 	}
-	d.Notices = append(d.Notices, &Notice{ID: newNoticeID(d), Lease: l.ID, Owner: l.Owner, OwnerRef: l.OwnerRef, Tag: dialogTag(j, l), Kind: "stall", Created: now, Text: text})
+	d.Notices = append(d.Notices, &Notice{ID: newNoticeID(d), Lease: l.ID, Owner: l.Owner, OwnerRef: l.OwnerRef, Tag: leaseTag(d, l), Kind: "stall", Created: now, Text: text})
 	return true
 }
 
@@ -508,6 +531,11 @@ func (t *Tasks) applyPane(d *Data, s Signal, notify bool, now float64) bool {
 		return false
 	}
 	changed := false
+	if notify && effectiveStallAfter(d, l) > 0 {
+		if trackLeaseIdle(d, l, s, now) {
+			changed = true
+		}
+	}
 	switch s.Kind {
 	case "clear":
 		if l.Dialog != nil {
@@ -525,8 +553,13 @@ func (t *Tasks) applyPane(d *Data, s Signal, notify bool, now float64) bool {
 			if ref == nil { // a lease from before owner_ref: the watcher serves its owner on its own server
 				ref = t.SenderRef
 			}
-			d.Notices = append(d.Notices, &Notice{ID: newNoticeID(d), Lease: l.ID, Owner: l.Owner, OwnerRef: ref, Tag: paneTag(d, l),
-				Text: paneNotice(d, l, s), Created: now, Kind: "dialog", Dialog: s.Dialog.Fingerprint})
+			tag, text := paneTag(d, l), paneNotice(d, l, s)
+			if l.Scope != "" {
+				sc := d.Scopes[l.Scope]
+				tag, text = scopeTag(sc, l), scopeDialogNotice(sc, l, s)
+			}
+			d.Notices = append(d.Notices, &Notice{ID: newNoticeID(d), Lease: l.ID, Owner: l.Owner, OwnerRef: ref, Tag: tag,
+				Text: text, Created: now, Kind: "dialog", Dialog: s.Dialog.Fingerprint})
 			changed = true
 		}
 	}
@@ -562,15 +595,19 @@ var ErrWatching = errors.New("a watcher already runs for this owner")
 // executable changed. The lock is released when Watch returns it.
 var ErrRestart = errors.New("the watcher's executable changed")
 
-// watchPaths are keyed by the owner pane and its server: the same pane ID on another server is another owner.
-func (t *Tasks) watchPaths(owner string) (lock, log string) {
+func (t *Tasks) watchPathsFor(owner string, ref map[string]string) (lock, log string) {
 	name := owner
-	if k := serverKey(t.SenderRef); k != "" {
+	if k := serverKey(ref); k != "" {
 		name += "@" + k
 	}
 	name = unsafeName.ReplaceAllString(name, "_")
 	dir := filepath.Join(t.Reg.Root, "watch")
 	return filepath.Join(dir, name+".lock"), filepath.Join(dir, name+".log")
+}
+
+// watchPaths are keyed by the owner pane and its server: the same pane ID on another server is another owner.
+func (t *Tasks) watchPaths(owner string) (lock, log string) {
+	return t.watchPathsFor(owner, t.SenderRef)
 }
 
 // WatchLog is where a detached watcher writes, in the state directory.
@@ -620,9 +657,7 @@ func trimLog(path string) error {
 	return f.Close()
 }
 
-// lockWatcher takes the owner's watcher lock without waiting. It holds while the returned file is open.
-func (t *Tasks) lockWatcher(owner string) (*os.File, error) {
-	path, _ := t.watchPaths(owner)
+func (t *Tasks) lockWatcherAt(path string) (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, term.BackendErr("watch: %v", err)
 	}
@@ -640,34 +675,63 @@ func (t *Tasks) lockWatcher(owner string) (*os.File, error) {
 	return f, nil
 }
 
-// Watching reports the pid of the watcher that serves owner, or 0 when none runs.
-func (t *Tasks) Watching(owner string) int {
-	f, err := t.lockWatcher(owner)
+// lockWatcher takes the owner's watcher lock without waiting. It holds while the returned file is open.
+func (t *Tasks) lockWatcher(owner string) (*os.File, error) {
+	path, _ := t.watchPathsFor(owner, t.SenderRef)
+	return t.lockWatcherAt(path)
+}
+
+func (t *Tasks) watchLockInfo(owner string, ref map[string]string) (pid int, canWake bool) {
+	path, _ := t.watchPathsFor(owner, ref)
+	f, err := t.lockWatcherAt(path)
 	if err == nil {
 		f.Close()
-		return 0
+		return 0, false
 	}
 	if !errors.Is(err, ErrWatching) {
-		return 0
+		return 0, false
 	}
-	path, _ := t.watchPaths(owner)
 	data, _ := os.ReadFile(path)
-	pid, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+	fields := strings.Fields(string(data))
+	if len(fields) == 0 {
+		return -1, false
+	}
+	pid, _ = strconv.Atoi(fields[0])
 	if pid == 0 {
 		pid = -1
 	}
+	return pid, len(fields) >= 2 && fields[1] == "wake"
+}
+
+// Watching reports the pid of the watcher that serves owner, or 0 when none runs.
+func (t *Tasks) Watching(owner string) int {
+	pid, _ := t.watchLockInfo(owner, t.SenderRef)
 	return pid
 }
 
-// WakeWatcher asks the watcher that serves owner, if one runs, to start its next round now (SIGUSR1; a
-// watcher of v0.10.x has no handler for it, and SIGUSR1 ends a process by default: wake only a watcher
-// started by this build). It reports whether a signal was sent.
-func (t *Tasks) WakeWatcher(owner string) bool {
-	pid := t.Watching(owner)
-	if pid <= 0 {
+// WakeWatcherFor signals owner's watcher on ref with SIGUSR1 if running and its lock advertises "wake".
+func (t *Tasks) WakeWatcherFor(owner string, ref map[string]string) bool {
+	pid, canWake := t.watchLockInfo(owner, ref)
+	if pid <= 0 || !canWake {
 		return false
 	}
 	return syscall.Kill(pid, syscall.SIGUSR1) == nil
+}
+
+// WakeWatcher asks the watcher that serves owner, if one runs and supports SIGUSR1 ("wake" token in its
+// lock file), to start its next round now. A v0.10.x watcher has no handler for SIGUSR1 and dies by
+// default, so watchers without the "wake" token are never signaled. It reports whether a signal was sent.
+func (t *Tasks) WakeWatcher(owner string) bool {
+	return t.WakeWatcherFor(owner, t.SenderRef)
+}
+
+func writeWatchLock(lock *os.File, canWake bool) {
+	mark := strconv.Itoa(os.Getpid())
+	if canWake {
+		mark += " wake"
+	}
+	lock.Truncate(0)
+	lock.WriteAt([]byte(mark+"\n"), 0)
 }
 
 // WatchOpts are options of Watch. Rounds stops after that many screen rounds (tests); 0 runs until no
@@ -710,8 +774,7 @@ func (t *Tasks) Watch(o WatchOpts) error {
 		return err
 	}
 	defer func() { lock.Close() }() // the lock in hand when Watch returns: it is taken again below
-	lock.Truncate(0)
-	lock.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0)
+	writeWatchLock(lock, o.Wake != nil)
 	if err := trimLog(t.WatchLog(owner.ID)); err != nil { // under the lock: no other watcher of this owner runs
 		say("could not cut this log: " + err.Error())
 	}
@@ -759,6 +822,7 @@ func (t *Tasks) Watch(o WatchOpts) error {
 		running := runningLeases(d, owner.ID, t.SenderRef)
 		panes, gone := t.paneWorkers(d, owner.ID, t.SenderRef)
 		idle := len(running) == 0 && len(panes) == 0 && len(gone) == 0 && !t.keepOn(d, owner.ID)
+		atWork := false
 		if !idle {
 			w.ws = append(t.workers(running), panes...)
 			status := programStatuses(w.ws, w.statusErr)
@@ -768,17 +832,20 @@ func (t *Tasks) Watch(o WatchOpts) error {
 				sigs = append(sigs, Signal{Lease: l.ID, Pane: l.Pane, Kind: "clear"})
 			}
 			w.handle(d, sigs)
-			atWork := panesAtWork(sigs)
+			atWork = panesAtWork(sigs)
 			if atWork { // also while tasks run: a member at work beside them must not stop the watcher with the last task
 				w.quiet, w.worked = 0, true
 			}
 			if len(running) == 0 {
-				idle = w.quietRound(atWork || t.keepOn(nil, owner.ID))
+				if dNow, rerr := t.Reg.Read(); rerr == nil {
+					d = dNow
+				}
+				idle = w.quietRound(atWork || activeWork(d, owner.ID, t.SenderRef, t.clock().Now())) && !hasActiveScope(d, owner.ID, t.SenderRef)
 			}
 		}
 		t.stopMemo()
 		if idle {
-			// Work given after the read above (a task new, task send, or a msg to one of the owner's panes)
+			// Work given after the read above (a task new, task send, attach, or a msg to one of the owner's panes)
 			// found this lock held, so it started no watcher. Look again once the lock is free, and serve
 			// what came, unless a new watcher took the lock first.
 			lock.Close()
@@ -793,8 +860,7 @@ func (t *Tasks) Watch(o WatchOpts) error {
 				}
 				return err
 			}
-			lock.Truncate(0)
-			lock.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0)
+			writeWatchLock(lock, o.Wake != nil)
 			say("work came while stopping; watching again")
 			w.quiet = 0
 			continue
@@ -802,14 +868,56 @@ func (t *Tasks) Watch(o WatchOpts) error {
 		if o.Rounds > 0 && round >= o.Rounds {
 			return nil
 		}
+		interval, statusEvery := o.Interval, o.StatusEvery
+		if dNow, rerr := t.Reg.Read(); rerr == nil {
+			d = dNow
+		}
+		fast := activeWork(d, owner.ID, t.SenderRef, t.clock().Now()) || atWork || (w.worked && w.quiet < quietRounds)
+		if !fast && hasActiveScope(d, owner.ID, t.SenderRef) {
+			interval = max(o.Interval, IdleWatchInterval)
+			statusEvery = -1
+		}
 		// Rounds start every Interval: the time a round took (lists, reads, notices) is not added on top.
-		w.between(max(o.Interval-(t.clock().Now()-start), minGap), o.StatusEvery)
+		w.between(max(interval-(t.clock().Now()-start), minGap), statusEvery)
 	}
 }
 
-// keepOn: work the watcher must stay for whatever the screens show: a running task, a notice still
-// waiting for the owner, or a pane of the owner's given work (spawn --prompt, msg) less than workGrace ago,
-// which may not look busy yet. d nil reads the registry; a read that fails keeps the watcher on.
+func hasRunningDescendantJob(d *Data, lid string) bool {
+	for _, g := range leaseDescendants(d, lid) {
+		if isRunningJob(d, g) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasActiveScope(d *Data, owner string, ref map[string]string) bool {
+	for _, l := range d.Leases {
+		if l.State == "active" && l.Scope != "" && l.Owner == owner && sameServer(l.OwnerRef, ref) {
+			return true
+		}
+	}
+	return false
+}
+
+func activeWork(d *Data, owner string, ref map[string]string, now float64) bool {
+	if len(runningLeases(d, owner, ref)) > 0 || holdsNotice(d, owner, ref) || deferredLeft(d, owner, ref) {
+		return true
+	}
+	for _, l := range d.Leases {
+		if l.State == "active" && l.Owner == owner && l.Pane != owner && sameServer(l.OwnerRef, ref) {
+			if (l.Worked > 0 && now-l.Worked < workGrace) || l.Dialog != nil || hasRunningDescendantJob(d, l.ID) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// keepOn: work the watcher must stay for whatever the screens show: activeWork (a running task, a notice
+// waiting for the owner, work given less than workGrace ago, an open dialog, a running descendant job) OR
+// an active Scope lease (watched at 30 s slow-idle cadence when idle). d nil reads the registry; a read that
+// fails keeps the watcher on.
 func (t *Tasks) keepOn(d *Data, owner string) bool {
 	if d == nil {
 		var err error
@@ -817,16 +925,7 @@ func (t *Tasks) keepOn(d *Data, owner string) bool {
 			return true
 		}
 	}
-	if len(runningLeases(d, owner, t.SenderRef)) > 0 || holdsNotice(d, owner, t.SenderRef) || deferredLeft(d, owner, t.SenderRef) {
-		return true
-	}
-	now := t.clock().Now()
-	for _, l := range d.Leases {
-		if l.State == "active" && l.Owner == owner && l.Pane != owner && sameServer(l.OwnerRef, t.SenderRef) && l.Worked > 0 && now-l.Worked < workGrace {
-			return true
-		}
-	}
-	return false
+	return activeWork(d, owner, t.SenderRef, t.clock().Now()) || hasActiveScope(d, owner, t.SenderRef)
 }
 
 const (

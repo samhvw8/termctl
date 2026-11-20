@@ -30,17 +30,21 @@ Before the journal, harness-ops kept its history in three places, and none of th
 
 # Entries
 
-`Entry` in `internal/harness/journal.go`: `t` (Unix seconds), `time` (RFC 3339, local), `zone`, `event`, `project`, `from`/`from_name`, `to`/`to_name`, `task`, `harness`, `status`, `text`, `file`, `error`, and since 2026-11-19 `id` (a deferred message's ID, and the ID an `ack` entry acks) and `key` (a `msg`'s idempotency key), both omitted when empty.
+`Entry` in `internal/harness/journal.go`: `t` (Unix seconds), `time` (RFC 3339, local), `zone`, `event`, `project`, `from`/`from_name`, `to`/`to_name`, `task`, `scope` (omitted when empty), `harness`, `status`, `text`, `file`, `error`, `id` (a deferred message's ID, and the ID an `ack` entry acks), and `key` (a `msg`'s idempotency key).
 
 | Event | Written by | Holds |
 |---|---|---|
-| `msg` | `Ops.Msg` (msg, task send, a delivered report) | the full text, or the first 200 characters and `file` for a long one; `status: queued` when the target was working; `error` when the submit failed; `key` for a `harness-ops msg` that was typed; `id` for `msg --defer` |
+| `msg` | `Ops.Msg` (msg, task send, delivered report, scope notice) | the full text, or first 200 chars and `file`; `scope` when sent to or delivered for an attached Scope; `status: queued` when target working; `key`/`id` when set |
 | `ack` | `Tasks.Ack` (`harness-ops ack`) | the receiver's note; `task` for a deferred task, `id` for a deferred message; `to` is the owner or the sender |
 | `spawn` | `Ops.Spawn` | the harness and the first prompt (or its file) |
 | `slash`, `interrupt` | `Ops.Slash` (also each `/clear`), `Ops.Interrupt` | the command, the keys |
 | `close` | `Tasks.ClosePane` | `status: forced` with `--force` |
-| `key` | `Tasks.Keys` (`harness-ops key`) | the keys pressed, by their canonical names, space-separated; `status: forced` with `--force`; `error` when a key failed |
-| `answer`, `deny` | `Ops.Answer` (`answer`, `deny`; on a task's worker or a pane the caller started, which has no `task`) | the dialog's question and the choice made (`1. Yes`; a deny is always `Esc`), the dialog's fingerprint as `status` |
+| `key` | `Tasks.Keys` (`harness-ops key`) | the keys pressed, canonical names, space-separated; `scope` when sent to an attached Scope |
+| `answer`, `deny` | `Ops.Answer` (`answer`, `deny`; on a task, Scope, or started pane) | the dialog's question, choice made (`1. Yes` or `Esc`), fingerprint in `status`, and `scope` when on an attached Scope |
+| `scope.attach`, `scope.adopt` | `Tasks.Attach` | `scope` ID, `project`, `to` pane, `text` (`about`), and `status` (`live` or `takeover from <old owner>`) |
+| `scope.detach` | `Tasks.Detach` | `scope` ID, `project`, `to` pane, `status` (`unbound` or `dropped`) |
+| `scope.report` | `Tasks.Report` (`harness-ops report`) | one-line report `text`, `scope` ID, `from` worker pane, `to` lead |
+| `scope.exited`, `scope.lost` | `Tasks.Reconcile` | `scope` ID, `from` crashed pane, `to` lead, `status` (`exited` or `lost`) |
 | `task.new` | `Tasks.New` | the title, the brief's `file`; `status: failed` and the cause when the start failed |
 | `task.done` | `Tasks.Done` | the full summary; `to` is the owner |
 | `task.progress` | `Tasks.Progress` (`task progress`) | the progress line, one line; `status` is the task's status (running) |
@@ -62,9 +66,10 @@ Rules:
 
 # Commands
 
-- `harness-ops log [--project DIR] [--task ID] [--pane ID] [--since 2h|3d|DATE] [-n N] [--json]`: the timeline, oldest first, the last 50 by default. One row per entry: local time, project (when not filtered by project or task), event, `from → to`, task, status, text on one line, file. Unreadable lines are counted on stderr, never hidden.
-- `harness-ops resume TASK-ID --tree` and `resume DIR --tree`: one compact line per task under the task, or under each of the project's open tasks: status, latest progress or summary, open dialog (see [tasks](tasks.md#lead-of-lead)).
-- `harness-ops resume TASK-ID`: the task's state and last report, its brief in full, then every journal entry with its whole text; a long message's file is printed under its entry. `resume DIR` (`.` is the caller's project, the folder its pane started in, which is where its writes go; a shell that changed folder does not change it): the project's tasks that are not closed, its notes, and its last 30 entries (`-n`).
+- `harness-ops log [--project DIR] [--task ID] [--scope NAME|ID] [--pane ID] [--since 2h|3d|DATE] [-n N] [--json]`: the timeline, oldest first, the last 50 by default. Prints `[scope <sID>]` when an entry has `scope` and no `task` (and unscoped). One row per entry: local time, project (when unfiltered), event, `from → to`, task/scope, status, text on one line, file. Unreadable lines are counted on stderr, never hidden.
+- `harness-ops resume (TASK-ID | SCOPE | DIR) [--tree]`:
+  - `TASK-ID` / `SCOPE`: full state, last report/progress, brief or `about`, open child tasks (`--tree`: one compact line per descendant scope/task), and full `Filter{Task}` / `Filter{Scope}` timeline.
+  - `DIR` (`.` is the caller's project): mixed Scopes and open Tasks in the project (`--tree`: Scopes with child tasks nested alongside standalone Tasks), notes, and last `n` (default 30) entries.
 - `harness-ops note WHAT (TEXT... | --file F | stdin)`: files a text in the caller's project folder, journals it, and prints the path. `--file F` may come before or after WHAT; after WHAT it must be the next word, so a text that mentions `--file` stays text. Leads write job briefs with it instead of naming files by hand.
 
 # Not done

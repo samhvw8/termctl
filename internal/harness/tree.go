@@ -48,24 +48,36 @@ func rootOf(l *Lease) string {
 // runningInTree counts the running tasks of tree root.
 func runningInTree(d *Data, root string) int {
 	n := 0
-	for _, j := range d.Jobs {
-		if j.Status == "running" && !j.Closed && rootOf(d.leaseOf(j)) == root {
+	for _, l := range d.Leases {
+		if isRunningJob(d, l) && rootOf(l) == root {
 			n++
 		}
 	}
 	return n
 }
 
-// place checks and fills a new task's depth, sub-depth, tree limit and root (on its lease l) under the task
-// its owner pane holds (pj and its lease pl; nil: a pane that is not a task). sub and treeMax are what the
-// caller asked for (treeMax 0: inherit, or the default at a root).
-func place(d *Data, j *Job, l *Lease, pj *Job, pl *Lease, sub, treeMax, maxDepth int) error {
+func leafRefusal(d *Data, pl *Lease) error {
+	if j := d.jobOf(pl); j != nil {
+		return term.Errf(term.CodeGuard, "task %s is a leaf: it may not start tasks (its lead gave it --sub-depth 0)", j.ID)
+	}
+	if pl != nil && pl.Scope != "" {
+		if s := d.Scopes[pl.Scope]; s != nil {
+			return term.Errf(term.CodeGuard, "scope %s (%s) is a leaf: it may not start tasks or scopes (its lead gave it --sub-depth 0)", s.Name, s.ID)
+		}
+	}
+	return term.Errf(term.CodeGuard, "this pane is a leaf: it may not start tasks, panes, or scopes (its lead gave it --sub-depth 0)")
+}
+
+// placeLease checks and fills a new lease's depth, sub-depth, tree limit, parent and root under the
+// caller's active lease pl (nil for a root). countsTree is true for Jobs (checked against tree_max) and
+// false for Scopes/bare spawns (which consume 0 tree_max slots).
+func placeLease(d *Data, l, pl *Lease, sub, treeMax, maxDepth int, countsTree bool) error {
 	c := capsOf(pl, maxDepth)
 	if sub < 0 || treeMax < 0 {
 		return term.UsageErr("--sub-depth and --tree-max must not be negative")
 	}
 	if pl != nil && c.sub < 1 {
-		return term.Errf(term.CodeGuard, "task %s is a leaf: it may not start tasks (its lead gave it --sub-depth 0)", pj.ID)
+		return leafRefusal(d, pl)
 	}
 	depth := c.depth + 1
 	if depth > maxDepth {
@@ -86,17 +98,29 @@ func place(d *Data, j *Job, l *Lease, pj *Job, pl *Lease, sub, treeMax, maxDepth
 	root := c.root
 	if pl == nil {
 		root = l.ID
-	} else if n := runningInTree(d, root); n >= c.treeMax {
-		return term.Errf(term.CodeGuard, "tree %s already runs %d tasks (limit %d)", treeName(d, root), n, c.treeMax)
+	} else if countsTree {
+		if n := runningInTree(d, root); n >= c.treeMax {
+			return term.Errf(term.CodeGuard, "tree %s already runs %d tasks (limit %d)", treeName(d, root), n, c.treeMax)
+		}
 	}
 	l.Depth, l.SubDepth, l.TreeMax, l.Root = depth, sub, treeMax, root
+	if pl != nil {
+		l.Parent = pl.ID
+	}
 	return nil
 }
 
-// treeName names a tree as v0.10.4 did: by the task at its top.
+// treeName names a tree by the task or scope at its top.
 func treeName(d *Data, root string) string {
-	if j := d.jobOf(d.Leases[root]); j != nil {
-		return j.ID
+	if rl := d.Leases[root]; rl != nil {
+		if j := d.jobOf(rl); j != nil {
+			return j.ID
+		}
+		if rl.Scope != "" {
+			if s := d.Scopes[rl.Scope]; s != nil {
+				return s.Name
+			}
+		}
 	}
 	return root
 }
@@ -141,26 +165,30 @@ type jobLease struct {
 	l *Lease
 }
 
-// descendants lists the tasks under the task whose lease is lid (Parent links between leases), depth first,
-// parents before their children.
-func descendants(d *Data, lid string) []jobLease {
-	kids := map[string][]jobLease{}
+// leaseDescendants lists all leases under lid (Parent links between leases), depth first, parents before children.
+func leaseDescendants(d *Data, lid string) []*Lease {
+	kids := map[string][]*Lease{}
 	for _, l := range d.Leases {
-		if j := d.jobOf(l); j != nil && l.Parent != "" {
-			kids[l.Parent] = append(kids[l.Parent], jobLease{j, l})
+		if l.Parent != "" {
+			kids[l.Parent] = append(kids[l.Parent], l)
 		}
 	}
-	var out []jobLease
+	var out []*Lease
 	seen := map[string]bool{lid: true}
 	var walk func(id string)
 	walk = func(id string) {
 		k := kids[id]
-		sort.Slice(k, func(a, b int) bool { return k[a].j.Started < k[b].j.Started })
+		sort.Slice(k, func(a, b int) bool {
+			if k[a].Started != k[b].Started {
+				return k[a].Started < k[b].Started
+			}
+			return k[a].ID < k[b].ID
+		})
 		for _, c := range k {
-			if !seen[c.l.ID] {
-				seen[c.l.ID] = true
+			if !seen[c.ID] {
+				seen[c.ID] = true
 				out = append(out, c)
-				walk(c.l.ID)
+				walk(c.ID)
 			}
 		}
 	}
@@ -168,9 +196,20 @@ func descendants(d *Data, lid string) []jobLease {
 	return out
 }
 
-// escalate reads the registry (no screen reads) and queues the owner one notice per case: (a) a task below
-// one of its direct tasks has waited on a dialog for escalateAfter seconds; (b) a direct task exited, was
-// lost or closed while tasks under it still run. Alert only: the owner may not answer a grandchild's dialog.
+// descendants lists the tasks under the lease lid, depth first, parents before their children.
+func descendants(d *Data, lid string) []jobLease {
+	var out []jobLease
+	for _, c := range leaseDescendants(d, lid) {
+		if j := d.jobOf(c); j != nil {
+			out = append(out, jobLease{j, c})
+		}
+	}
+	return out
+}
+
+// escalate reads the registry (no screen reads) and queues the owner one notice per case: (a) a lease below
+// one of its direct leases has waited on a dialog for escalateAfter seconds; (b) a direct job or crashed
+// scope/pane has running tasks under it. Alert only: the owner may not answer a grandchild's dialog.
 func (t *Tasks) escalate(owner string) error {
 	// Look on a read first: a round with nothing to tell writes nothing (a write is a lock and two syncs).
 	d, err := t.Reg.Read()
@@ -186,47 +225,109 @@ func (t *Tasks) escalate(owner string) error {
 	})
 }
 
+func leaseRefLabel(d *Data, l *Lease) string {
+	if j := d.jobOf(l); j != nil {
+		return "task " + j.ID
+	}
+	if l.Scope != "" {
+		if s := d.Scopes[l.Scope]; s != nil {
+			return fmt.Sprintf("scope %s (%s)", s.Name, s.ID)
+		}
+		return "scope " + l.Scope
+	}
+	return "pane " + l.Pane
+}
+
+func grandchildDialogNotice(d *Data, xl, g *Lease, m *DialogMark, age int) string {
+	under := "under your " + leaseRefLabel(d, xl)
+	q := term.Cut(m.Question, 120)
+	if gj := d.jobOf(g); gj != nil {
+		return fmt.Sprintf("ESCALATION task %s (%s), %s, has waited %ds on dialog %s that its lead %s has not answered: %q. read it: harness-ops read %s",
+			gj.ID, gj.Title, under, age, m.Fingerprint, g.Owner, q, gj.ID)
+	}
+	if g.Scope != "" {
+		if gs := d.Scopes[g.Scope]; gs != nil {
+			return fmt.Sprintf("ESCALATION scope %s (%s), %s, has waited %ds on dialog %s that its lead %s has not answered: %q. read it: harness-ops read %s",
+				gs.Name, gs.ID, under, age, m.Fingerprint, g.Owner, q, g.Pane)
+		}
+	}
+	return fmt.Sprintf("ESCALATION pane %s, %s, has waited %ds on dialog %s that its lead %s has not answered: %q. read it: harness-ops read %s",
+		g.Pane, under, age, m.Fingerprint, g.Owner, q, g.Pane)
+}
+
 // escalations queues the escalation notices on d and reports whether it queued any.
 func (t *Tasks) escalations(d *Data, owner string) bool {
 	queued := false
 	now := t.clock().Now()
-	for _, x := range d.Jobs {
-		xl := d.leaseOf(x)
+	for _, lid := range sortedLeaseIDs(d) {
+		xl := d.Leases[lid]
 		if xl.Owner != owner || !sameServer(xl.OwnerRef, t.SenderRef) {
 			continue
 		}
-		below := descendants(d, xl.ID)
+		below := leaseDescendants(d, xl.ID)
 		for _, g := range below {
-			m := g.l.Dialog
-			if m == nil || m.Escalated || !dialogOnScreen(g.j, g.l, m.Fingerprint) || now-m.Since < escalateAfter {
+			m := g.Dialog
+			if m == nil || m.Escalated || !leaseDialogOnScreen(d, g, m.Fingerprint) || now-m.Since < escalateAfter {
 				continue
 			}
 			m.Escalated, queued = true, true
-			d.Notices = append(d.Notices, &Notice{ID: newNoticeID(d), Lease: g.l.ID, Owner: xl.Owner, OwnerRef: xl.OwnerRef, Tag: dialogTag(g.j, g.l), Kind: "escalate",
-				Dialog: m.Fingerprint, Created: now,
-				Text: fmt.Sprintf("ESCALATION task %s (%s), under your task %s, has waited %ds on dialog %s that its lead %s has not answered: %q. read it: harness-ops read %s",
-					g.j.ID, g.j.Title, x.ID, int(now-m.Since), m.Fingerprint, g.l.Owner, term.Cut(m.Question, 120), g.j.ID)})
+			d.Notices = append(d.Notices, &Notice{
+				ID: newNoticeID(d), Lease: g.ID, Owner: xl.Owner, OwnerRef: xl.OwnerRef,
+				Tag: leaseTag(d, g), Kind: "escalate", Dialog: m.Fingerprint, Created: now,
+				Text: grandchildDialogNotice(d, xl, g, m, int(now-m.Since)),
+			})
 		}
-		if xl.Orphaned != 0 || !(x.Closed || x.Status == "exited" || x.Status == "lost") {
+		if xl.Orphaned != 0 {
+			continue
+		}
+		x := d.jobOf(xl)
+		deadJob := x != nil && (x.Closed || x.Status == "exited" || x.Status == "lost")
+		// Detach sets State == "ended" and never triggers orphan escalation; only crashes ("exited"/"lost") do.
+		crashedNonJob := x == nil && (xl.State == "exited" || xl.State == "lost")
+		if !deadJob && !crashedNonJob {
 			continue
 		}
 		var running []string
+		runningSet := map[string]bool{}
 		for _, g := range below {
-			if g.j.Status == "running" && !g.j.Closed {
-				running = append(running, g.j.ID)
+			if isRunningJob(d, g) {
+				running = append(running, g.Job)
+				runningSet[g.ID] = true
 			}
 		}
 		if len(running) == 0 {
 			continue
 		}
-		state := x.Status
-		if x.Closed {
-			state = "closed"
-		}
 		xl.Orphaned, queued = now, true
-		d.Notices = append(d.Notices, &Notice{ID: newNoticeID(d), Lease: xl.ID, Owner: xl.Owner, OwnerRef: xl.OwnerRef, Tag: dialogTag(x, xl), Kind: "escalate", Created: now,
-			Text: fmt.Sprintf("ESCALATION task %s (%s) is %s, but tasks under it still run: %s. Close them with: harness-ops task close --tree --force %s",
-				x.ID, x.Title, state, strings.Join(running, ", "), x.ID)})
+		var text string
+		if x != nil {
+			state := x.Status
+			if x.Closed {
+				state = "closed"
+			}
+			text = fmt.Sprintf("ESCALATION task %s (%s) is %s, but tasks under it still run: %s. Close them with: harness-ops task close --tree --force %s",
+				x.ID, x.Title, state, strings.Join(running, ", "), x.ID)
+		} else {
+			var topRunning []string
+			for _, g := range below {
+				if runningSet[g.ID] && !runningSet[g.Parent] {
+					topRunning = append(topRunning, g.Job)
+				}
+			}
+			if len(topRunning) == 0 {
+				topRunning = running
+			}
+			cmds := make([]string, len(topRunning))
+			for i, rid := range topRunning {
+				cmds[i] = "harness-ops task close --tree --force " + rid
+			}
+			text = fmt.Sprintf("ESCALATION %s pane %s is %s, but tasks under it still run: %s. Close them with: %s",
+				leaseRefLabel(d, xl), xl.Pane, xl.State, strings.Join(running, ", "), strings.Join(cmds, "; "))
+		}
+		d.Notices = append(d.Notices, &Notice{
+			ID: newNoticeID(d), Lease: xl.ID, Owner: xl.Owner, OwnerRef: xl.OwnerRef,
+			Tag: leaseTag(d, xl), Kind: "escalate", Created: now, Text: text,
+		})
 	}
 	return queued
 }

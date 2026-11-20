@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -116,6 +117,8 @@ func line(e harness.Entry, withProject bool) string {
 	}
 	if e.Task != "" {
 		b.WriteString("  [" + e.Task + "]")
+	} else if e.Scope != "" {
+		b.WriteString("  [scope " + e.Scope + "]")
 	}
 	if e.Status != "" {
 		b.WriteString("  " + e.Status)
@@ -132,8 +135,37 @@ func line(e harness.Entry, withProject bool) string {
 	return b.String()
 }
 
+func (a *App) resolveScopeArg(target, project string, o *Options) (string, error) {
+	if target == "" {
+		return "", nil
+	}
+	d, err := harness.NewRegistry("").Read()
+	if err != nil {
+		return "", err
+	}
+	callerProj := project
+	if callerProj == "" {
+		callerProj = a.myProject(o)
+	}
+	s, ferr := d.FindScope(target, callerProj)
+	if ferr == nil {
+		return s.ID, nil
+	}
+	if errors.Is(ferr, harness.ErrSeveralScopes) {
+		return "", ferr
+	}
+	if scopeIDRe.MatchString(target) {
+		return target, nil
+	}
+	return "", ferr
+}
+
+var scopeIDRe = regexp.MustCompile(`^s[0-9a-f]{6}$`)
+
+func looksLikeScopeID(s string) bool { return scopeIDRe.MatchString(s) }
+
 func (a *App) logCmd(rest []string, o *Options) error {
-	p, err := parseArgs(rest, []string{"--json"}, []string{"--project", "--task", "--pane", "--since", "-n"}, -1)
+	p, err := parseArgs(rest, []string{"--json"}, []string{"--project", "--task", "--scope", "--pane", "--since", "-n"}, -1)
 	if err != nil {
 		return err
 	}
@@ -141,9 +173,13 @@ func (a *App) logCmd(rest []string, o *Options) error {
 		return err
 	}
 	if len(p.pos) != 0 {
-		return term.UsageErr("usage: log [--project DIR] [--task ID] [--pane ID] [--since 2h|3d|DATE] [-n N] [--json]")
+		return term.UsageErr("usage: log [--project DIR] [--task ID] [--scope NAME|ID] [--pane ID] [--since 2h|3d|DATE] [-n N] [--json]")
 	}
 	project, err := a.projectArg(p.vals["--project"], o)
+	if err != nil {
+		return err
+	}
+	scopeID, err := a.resolveScopeArg(p.vals["--scope"], project, o)
 	if err != nil {
 		return err
 	}
@@ -155,7 +191,7 @@ func (a *App) logCmd(rest []string, o *Options) error {
 	if err != nil {
 		return err
 	}
-	entries, err := a.readJournal(harness.Filter{Project: project, Task: p.vals["--task"], Pane: p.vals["--pane"], Since: since})
+	entries, err := a.readJournal(harness.Filter{Project: project, Task: p.vals["--task"], Scope: scopeID, Pane: p.vals["--pane"], Since: since})
 	if err != nil {
 		return err
 	}
@@ -175,7 +211,7 @@ func (a *App) logCmd(rest []string, o *Options) error {
 		return nil
 	}
 	for _, e := range entries {
-		fmt.Fprintln(a.Out, line(e, project == "" && p.vals["--task"] == ""))
+		fmt.Fprintln(a.Out, line(e, project == "" && p.vals["--task"] == "" && scopeID == ""))
 	}
 	return nil
 }
@@ -201,7 +237,7 @@ func indent(s string) string {
 func (a *App) timeline(w io.Writer, entries []harness.Entry, skip string) {
 	for _, e := range entries {
 		head := line(harness.Entry{T: e.T, Event: e.Event, From: e.From, FromName: e.FromName, To: e.To, ToName: e.ToName,
-			Task: e.Task, Status: e.Status, Error: e.Error}, false)
+			Task: e.Task, Scope: e.Scope, Status: e.Status, Error: e.Error}, false)
 		fmt.Fprintln(w, head)
 		switch {
 		case e.File != "" && e.File == skip:
@@ -223,7 +259,7 @@ func (a *App) resumeCmd(rest []string, o *Options) error {
 		return err
 	}
 	if len(p.pos) != 1 {
-		return term.UsageErr("usage: resume (TASK-ID | DIR) [--tree]   DIR: a project folder, . for your own")
+		return term.UsageErr("usage: resume (TASK-ID | SCOPE | DIR) [--tree]   DIR: a project folder, . for your own")
 	}
 	n, err := p.int("-n", 30)
 	if err != nil {
@@ -243,9 +279,26 @@ func (a *App) resumeCmd(rest []string, o *Options) error {
 		}
 		return a.resumeTask(x)
 	}
+	if arg := p.pos[0]; arg != "." && !strings.HasPrefix(arg, "/") && !strings.HasPrefix(arg, "./") && !strings.HasPrefix(arg, "../") && !strings.HasPrefix(arg, "~") {
+		s, serr := d.FindScope(arg, a.myProject(o))
+		if serr == nil {
+			if p.bools["--tree"] {
+				return a.resumeScopeTree(d, s, tasks)
+			}
+			return a.resumeScope(d, s, tasks)
+		}
+		if errors.Is(serr, harness.ErrSeveralScopes) {
+			return serr
+		}
+	}
 	if looksLikeTaskID(p.pos[0]) {
 		if _, err := os.Stat(p.pos[0]); err != nil {
 			return term.TargetErr("no task %s and no folder %s; see task ls --all", p.pos[0], p.pos[0])
+		}
+	}
+	if looksLikeScopeID(p.pos[0]) {
+		if _, err := os.Stat(p.pos[0]); err != nil {
+			return term.TargetErr("no scope %s and no folder %s; see scope ls --all", p.pos[0], p.pos[0])
 		}
 	}
 	project, err := a.projectArg(p.pos[0], o)
@@ -253,21 +306,146 @@ func (a *App) resumeCmd(rest []string, o *Options) error {
 		return err
 	}
 	if p.bools["--tree"] {
-		return a.resumeProjectTree(project, tasks)
+		return a.resumeProjectTree(project, d, tasks)
 	}
-	return a.resumeProject(project, tasks, n)
+	return a.resumeProject(project, d, tasks, n)
 }
 
-// rollup prints one compact line per task and per task under it, a level deeper each: status, the latest
-// progress (a running task) or summary, and an open dialog. withClosed keeps closed descendants.
+func scopeLatestReport(d *harness.Data, scopeID string) *harness.ProgressNote {
+	var best *harness.ProgressNote
+	for _, l := range d.Leases {
+		if l.Scope == scopeID && l.Progress != nil {
+			if best == nil || l.Progress.At > best.At {
+				best = l.Progress
+			}
+		}
+	}
+	return best
+}
+
+func scopeLeaseIDs(d *harness.Data, scopeID string) map[string]bool {
+	ids := map[string]bool{}
+	for _, l := range d.Leases {
+		if l.Scope == scopeID {
+			ids[l.ID] = true
+		}
+	}
+	return ids
+}
+
+func scopeChildLeases(d *harness.Data, scopeID string) []*harness.Lease {
+	lids := scopeLeaseIDs(d, scopeID)
+	var out []*harness.Lease
+	for _, l := range d.Leases {
+		if lids[l.Parent] {
+			out = append(out, l)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Started != out[j].Started {
+			return out[i].Started < out[j].Started
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+func scopeChildTasks(d *harness.Data, scopeID string, tasks map[string]*harness.Task, withClosed bool) []*harness.Task {
+	var out []*harness.Task
+	for _, l := range scopeChildLeases(d, scopeID) {
+		if l.Job != "" {
+			if x := tasks[l.Job]; x != nil && (withClosed || (!x.Closed && x.Status != "done")) {
+				out = append(out, x)
+			}
+		}
+	}
+	return out
+}
+
+func (a *App) printScopeSubtree(d *harness.Data, tasks map[string]*harness.Task, sv *harness.ScopeView, withClosed bool, indent string, seenScopes, seenTasks map[string]bool) {
+	if sv == nil || seenScopes[sv.ID] {
+		return
+	}
+	seenScopes[sv.ID] = true
+	fmt.Fprintln(a.Out, a.scopeLine(d, sv, indent))
+	for _, l := range scopeChildLeases(d, sv.ID) {
+		if l.Job != "" {
+			if x := tasks[l.Job]; x != nil && (withClosed || (!x.Closed && x.Status != "done")) && !seenTasks[x.ID] {
+				a.rollupSeen(tasks, []*harness.Task{x}, withClosed, indent+"  ", seenTasks)
+			}
+		} else if l.Scope != "" && !seenScopes[l.Scope] {
+			sub := d.ScopeView(l.Scope)
+			if sub != nil && (!sub.Dropped || withClosed) {
+				if sub.Lease == l.ID || (sub.Lease == "" && (l.State == "exited" || l.State == "lost")) {
+					a.printScopeSubtree(d, tasks, sub, withClosed, indent+"  ", seenScopes, seenTasks)
+				}
+			}
+		}
+	}
+}
+
+func (a *App) scopeLine(d *harness.Data, sv *harness.ScopeView, indent string) string {
+	state := scopeStateLabel(sv)
+	line := fmt.Sprintf("%s%s (%s)  %-8s %-8s", indent, sv.Name, sv.ID, state, orDash(sv.Harness))
+	if sv.Pane != "" {
+		line += "  pane " + sv.Pane
+	}
+	if rep := scopeLatestReport(d, sv.ID); rep != nil {
+		line += "  — report: " + term.Cut(harness.OneLine(rep.Text), 100)
+	}
+	if sv.State == "live" && sv.Dialog != nil {
+		line += fmt.Sprintf("  [dialog %s: %s]", sv.Dialog.Fingerprint, term.Cut(sv.Dialog.Question, 60))
+	}
+	return line
+}
+
+func (a *App) resumeScopeTree(d *harness.Data, s *harness.Scope, tasks map[string]*harness.Task) error {
+	sv := d.ScopeView(s.ID)
+	fmt.Fprintf(a.Out, "# Tree of scope %s (%s)\n\n", sv.Name, sv.ID)
+	a.printScopeSubtree(d, tasks, sv, true, "", map[string]bool{}, map[string]bool{})
+	return nil
+}
+
+func (a *App) resumeScope(d *harness.Data, s *harness.Scope, tasks map[string]*harness.Task) error {
+	w := a.Out
+	sv := d.ScopeView(s.ID)
+	fmt.Fprintf(w, "# Scope %s (%s)\n\n", sv.Name, sv.ID)
+	fmt.Fprintf(w, "state %s · harness %s · pane %s · owner %s\n", scopeStateLabel(sv), orDash(sv.Harness), orDash(sv.Pane), orDash(sv.Owner))
+	fmt.Fprintf(w, "project %s · created %s\n", orDash(sv.Project), localTime(sv.Created))
+	if sv.About != "" {
+		fmt.Fprintf(w, "about %s\n", sv.About)
+	}
+	if rep := scopeLatestReport(d, s.ID); rep != nil {
+		fmt.Fprintf(w, "\n## Latest report\n\n%s (%s)\n", rep.Text, localTime(rep.At))
+	}
+	children := scopeChildTasks(d, s.ID, tasks, false)
+	fmt.Fprintf(w, "\n## Open child tasks (%d)\n\n", len(children))
+	for _, x := range children {
+		fmt.Fprintf(w, "%s  %-8s %-8s %s  pane %s  (resume %s)\n", x.ID, x.Status, x.Harness, x.Title, orDash(x.Pane), x.ID)
+	}
+	entries, err := a.readJournal(harness.Filter{Scope: s.ID})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "\n## Timeline (%d entries)\n\n", len(entries))
+	if len(entries) == 0 {
+		fmt.Fprintln(w, "(no journal entries)")
+	}
+	a.timeline(w, entries, "")
+	return nil
+}
+
 func (a *App) rollup(tasks map[string]*harness.Task, roots []*harness.Task, withClosed bool) {
+	a.rollupSeen(tasks, roots, withClosed, "", map[string]bool{})
+}
+
+func (a *App) rollupSeen(tasks map[string]*harness.Task, roots []*harness.Task, withClosed bool, baseIndent string, seen map[string]bool) {
 	kids := map[string][]*harness.Task{}
 	for _, x := range tasks {
 		if x.Parent != "" && (withClosed || !x.Closed) {
 			kids[x.Parent] = append(kids[x.Parent], x)
 		}
 	}
-	seen := map[string]bool{}
 	var walk func(xs []*harness.Task, indent string)
 	walk = func(xs []*harness.Task, indent string) {
 		sort.Slice(xs, func(i, j int) bool { return xs[i].Started < xs[j].Started })
@@ -298,15 +476,62 @@ func (a *App) rollup(tasks map[string]*harness.Task, roots []*harness.Task, with
 			walk(kids[x.ID], indent+"  ")
 		}
 	}
-	walk(roots, "")
+	walk(roots, baseIndent)
 }
 
-// resumeProjectTree is resume DIR --tree: the project's tasks not closed, each with a compact rollup of
-// the tasks under it, whatever their project.
-func (a *App) resumeProjectTree(project string, tasks map[string]*harness.Task) error {
+func projectScopes(d *harness.Data, project string) []*harness.ScopeView {
+	var out []*harness.ScopeView
+	for _, s := range d.Scopes {
+		if !s.Dropped && filepath.Clean(s.Project) == filepath.Clean(project) {
+			out = append(out, d.ScopeView(s.ID))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Created < out[j].Created })
+	return out
+}
+
+func hasParentScopeIn(d *harness.Data, scopeID string, inProj map[string]bool) bool {
+	l := d.Leases[d.Scopes[scopeID].Lease]
+	if l == nil {
+		return false
+	}
+	seen := map[string]bool{l.ID: true}
+	for p := d.Leases[l.Parent]; p != nil && !seen[p.ID]; p = d.Leases[p.Parent] {
+		seen[p.ID] = true
+		if p.Scope != "" && inProj[p.Scope] {
+			return true
+		}
+	}
+	return false
+}
+
+// resumeProjectTree is resume DIR --tree: the project's scopes and non-closed tasks, each with a compact
+// rollup of the tasks under it, whatever their project.
+func (a *App) resumeProjectTree(project string, d *harness.Data, tasks map[string]*harness.Task) error {
 	fmt.Fprintf(a.Out, "# Tree of project %s (%s)\n\n", project, harness.ProjectSlug(project))
+	scopes := projectScopes(d, project)
+	inProj := map[string]bool{}
+	for _, sv := range scopes {
+		inProj[sv.ID] = true
+	}
+	printedScopes := map[string]bool{}
+	printedTasks := map[string]bool{}
+	for _, sv := range scopes {
+		if hasParentScopeIn(d, sv.ID, inProj) {
+			continue
+		}
+		a.printScopeSubtree(d, tasks, sv, false, "", printedScopes, printedTasks)
+	}
+	for _, sv := range scopes {
+		if !printedScopes[sv.ID] {
+			a.printScopeSubtree(d, tasks, sv, false, "", printedScopes, printedTasks)
+		}
+	}
 	var open []*harness.Task
 	for _, x := range tasks {
+		if printedTasks[x.ID] {
+			continue
+		}
 		if filepath.Clean(x.Project) == filepath.Clean(project) && !x.Closed && x.Status != "done" {
 			if p := tasks[x.Parent]; p != nil && filepath.Clean(p.Project) == filepath.Clean(project) && !p.Closed && p.Status != "done" {
 				continue // listed under its parent
@@ -314,11 +539,13 @@ func (a *App) resumeProjectTree(project string, tasks map[string]*harness.Task) 
 			open = append(open, x)
 		}
 	}
-	if len(open) == 0 {
+	if len(scopes) == 0 && len(open) == 0 {
 		fmt.Fprintln(a.Out, "(no tasks open)")
 		return nil
 	}
-	a.rollup(tasks, open, false)
+	if len(open) > 0 {
+		a.rollupSeen(tasks, open, false, "", printedTasks)
+	}
 	return nil
 }
 
@@ -367,9 +594,19 @@ func orDash(s string) string {
 	return s
 }
 
-func (a *App) resumeProject(project string, tasks map[string]*harness.Task, n int) error {
+func (a *App) resumeProject(project string, d *harness.Data, tasks map[string]*harness.Task, n int) error {
 	w := a.Out
 	fmt.Fprintf(w, "# Project %s (%s)\n", project, harness.ProjectSlug(project))
+	scopes := projectScopes(d, project)
+	if len(scopes) > 0 {
+		fmt.Fprintf(w, "\n## Scopes (%d)\n\n", len(scopes))
+		for _, sv := range scopes {
+			fmt.Fprintf(w, "%s  (resume %s)\n", a.scopeLine(d, sv, ""), sv.Name)
+			for _, c := range scopeChildTasks(d, sv.ID, tasks, false) {
+				fmt.Fprintf(w, "  %s  %-8s %-8s %s  pane %s  (resume %s)\n", c.ID, c.Status, c.Harness, c.Title, orDash(c.Pane), c.ID)
+			}
+		}
+	}
 	var open []*harness.Task
 	for _, x := range tasks {
 		if filepath.Clean(x.Project) == filepath.Clean(project) && !x.Closed && x.Status != "done" {

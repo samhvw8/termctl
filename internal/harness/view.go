@@ -52,6 +52,141 @@ func (d *Data) TaskViews() map[string]*Task {
 	return out
 }
 
+// ScopeView is the output-only view of one Scope, combining Scope identity with its active (or latest)
+// Lease runtime state.
+type ScopeView struct {
+	ID         string        `json:"id"`
+	Name       string        `json:"name"`
+	About      string        `json:"about,omitempty"`
+	Project    string        `json:"project"`
+	State      string        `json:"state"` // "live", "exited", "lost", "unbound", "dropped"
+	Lease      string        `json:"lease,omitempty"`
+	Pane       string        `json:"pane,omitempty"`
+	Harness    string        `json:"harness,omitempty"`
+	Owner      string        `json:"owner,omitempty"`
+	Cwd        string        `json:"cwd,omitempty"`
+	Depth      int           `json:"depth,omitempty"`
+	SubDepth   int           `json:"sub_depth,omitempty"`
+	TreeMax    int           `json:"tree_max,omitempty"`
+	Root       string        `json:"root,omitempty"`
+	StallAfter float64       `json:"stall_after,omitempty"`
+	Stall      *StallMark    `json:"stall,omitempty"`
+	Dialog     *DialogMark   `json:"dialog,omitempty"`
+	Progress   *ProgressNote `json:"progress,omitempty"`
+	Told       bool          `json:"told,omitempty"`
+	Dropped    bool          `json:"dropped,omitempty"`
+	Created    float64       `json:"created"`
+}
+
+// TreeNode is one node in a mixed scope + task tree (scope ls --tree).
+type TreeNode struct {
+	Kind     string      `json:"kind"` // "scope" or "task"
+	Scope    *ScopeView  `json:"scope,omitempty"`
+	Task     *Task       `json:"task,omitempty"`
+	Children []*TreeNode `json:"children"`
+}
+
+func latestScopeLease(d *Data, scopeID string) *Lease {
+	var best *Lease
+	for _, l := range d.Leases {
+		if l.Scope != scopeID {
+			continue
+		}
+		if best == nil || l.Started > best.Started || (l.Started == best.Started && l.Ended > best.Ended) ||
+			(l.Started == best.Started && l.Ended == best.Ended && l.ID > best.ID) {
+			best = l
+		}
+	}
+	return best
+}
+
+// ScopeView assembles the output-only ScopeView for scopeID, or nil if unknown.
+func (d *Data) ScopeView(scopeID string) *ScopeView {
+	s := d.Scopes[scopeID]
+	if s == nil {
+		return nil
+	}
+	sv := &ScopeView{
+		ID:         s.ID,
+		Name:       s.Name,
+		About:      s.About,
+		Project:    s.Project,
+		StallAfter: s.StallAfter,
+		Dropped:    s.Dropped,
+		Created:    s.Created,
+	}
+	if s.Lease != "" {
+		if l := d.Leases[s.Lease]; l != nil && l.State == "active" {
+			sv.State = "live"
+			sv.Lease = l.ID
+			sv.Pane = l.Pane
+			sv.Harness = l.Harness
+			sv.Owner = l.Owner
+			sv.Cwd = l.Cwd
+			sv.Depth = l.Depth
+			sv.SubDepth = l.SubDepth
+			sv.TreeMax = l.TreeMax
+			if l.Root != "" {
+				sv.Root = l.Root
+				if rl := d.Leases[l.Root]; rl != nil && rl.Job != "" {
+					sv.Root = rl.Job
+				} else if rl != nil && rl.Scope != "" {
+					sv.Root = rl.Scope
+				}
+			}
+			sv.Stall = l.Stall
+			sv.Dialog = l.Dialog
+			sv.Progress = l.Progress
+			sv.Told = l.Told
+			return sv
+		}
+	}
+	latest := latestScopeLease(d, s.ID)
+	switch {
+	case s.Dropped:
+		sv.State = "dropped"
+	case latest != nil && (latest.State == "exited" || latest.State == "lost"):
+		sv.State = latest.State
+		sv.Pane = latest.Pane
+		sv.Harness = latest.Harness
+		sv.Owner = latest.Owner
+		sv.Cwd = latest.Cwd
+	default:
+		sv.State = "unbound"
+	}
+	if latest != nil {
+		sv.Progress = latest.Progress
+	}
+	return sv
+}
+
+// ScopeViews returns ScopeView for every Scope, keyed by scope ID.
+func (d *Data) ScopeViews() map[string]*ScopeView {
+	out := make(map[string]*ScopeView, len(d.Scopes))
+	for id := range d.Scopes {
+		out[id] = d.ScopeView(id)
+	}
+	return out
+}
+
+func isRunningJob(d *Data, l *Lease) bool {
+	if l == nil || l.Job == "" {
+		return false
+	}
+	j := d.Jobs[l.Job]
+	return j != nil && j.Status == "running" && !j.Closed
+}
+
+func leaseDialogOnScreen(d *Data, l *Lease, fp string) bool {
+	if l == nil {
+		return false
+	}
+	if paneHeld(d, l) {
+		return dialogOnScreen(d.jobOf(l), l, fp)
+	}
+	return paneDialogOnScreen(d, l, fp)
+}
+
 // newID is prefix and 6 random hex characters that taken does not hold.
 func newID(prefix string, taken func(string) bool) string {
 	for {

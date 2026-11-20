@@ -35,6 +35,9 @@ const historyLines = 2000
 // the harness keeps its dialog there; the whole read is taken only when it ends with what the screen showed
 // (the same question, choices and end of the request), else the screen's truncated read stands.
 func readPaneDialog(b term.Backend, p *term.Pane, prof *Profile, screen []string) *Dialog {
+	if prof.ReadDialog == nil {
+		return nil
+	}
 	d := prof.ReadDialog(screen)
 	if d == nil || !d.Truncated || d.Ambiguous || prof.ReadScrollbackDialog == nil {
 		return d
@@ -229,9 +232,13 @@ func (o *Ops) awaitGone(p *term.Pane, d *Dialog, res *Answered) error {
 	}
 }
 
-// answerTarget is the pane of a task the caller owns, or a pane the caller started with spawn or task new.
-func (t *Tasks) answerTarget(target string) (term.Backend, *term.Pane, *Job, *Lease, error) {
+// leaseTarget resolves a task ID, scope name/ID, lease ID, or owned pane to its live backend, pane,
+// optional open Job, and active Lease. Used by answer, deny, and key.
+func (t *Tasks) leaseTarget(target string, forKey bool) (term.Backend, *term.Pane, *Job, *Lease, error) {
 	if t.Sender == nil {
+		if forKey {
+			return nil, nil, nil, nil, term.UsageErr("cannot tell which pane this runs in; key acts only on panes you started with spawn or task new")
+		}
 		return nil, nil, nil, nil, term.UsageErr("cannot tell which pane this runs in; only the owner of a task can answer its dialogs")
 	}
 	if err := t.Reconcile(); err != nil {
@@ -246,14 +253,21 @@ func (t *Tasks) answerTarget(target string) (term.Backend, *term.Pane, *Job, *Le
 		return nil, nil, nil, nil, err
 	}
 	if err == nil {
-		if xl.Owner != t.Sender.ID || !sameServer(xl.OwnerRef, t.callerRef()) { // a pane ID is reused on another server
+		if !t.owns(xl) {
+			if forKey {
+				return nil, nil, nil, nil, notYours("the worker of task " + x.ID)
+			}
 			return nil, nil, nil, nil, term.TargetErr("only the owner of task %s can answer its dialogs", x.ID)
 		}
 		if x.Closed {
 			return nil, nil, nil, nil, term.UsageErr("task %s is closed", x.ID)
 		}
 		if !open(x.Status) || xl.Pane == "" {
-			return nil, nil, nil, nil, term.UsageErr("task %s is %s: there is no harness to answer", x.ID, x.Status)
+			verb := "answer"
+			if forKey {
+				verb = "press keys on"
+			}
+			return nil, nil, nil, nil, term.UsageErr("task %s is %s: there is no harness to %s", x.ID, x.Status, verb)
 		}
 		b, p, err := t.paneByID(xl.Pane, xl.Ref)
 		if err != nil {
@@ -264,22 +278,78 @@ func (t *Tasks) answerTarget(target string) (term.Backend, *term.Pane, *Job, *Le
 		}
 		return b, p, x, xl, nil
 	}
+	if sc, serr := t.findScope(d, target); serr == nil {
+		if sc.Lease == "" {
+			return nil, nil, nil, nil, term.UsageErr("scope %s (%s) is not attached to a live pane", sc.Name, sc.ID)
+		}
+		sl := d.Leases[sc.Lease]
+		if sl == nil || sl.State != "active" || sl.Pane == "" {
+			return nil, nil, nil, nil, term.UsageErr("scope %s (%s) is not attached to a live pane", sc.Name, sc.ID)
+		}
+		if !t.owns(sl) {
+			if forKey {
+				return nil, nil, nil, nil, notYours("scope " + sc.Name)
+			}
+			return nil, nil, nil, nil, term.TargetErr("only the lead of scope %s (%s) can answer its dialogs", sc.Name, sc.ID)
+		}
+		b, p, err := t.paneByID(sl.Pane, sl.Ref)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		if p == nil {
+			return nil, nil, nil, nil, term.UsageErr("scope %s (%s): its pane is gone", sc.Name, sc.ID)
+		}
+		return b, p, nil, sl, nil
+	} else if errors.Is(serr, errSeveralScopes) {
+		return nil, nil, nil, nil, serr
+	}
+	if ls, lerr := t.findLease(d, target); lerr == nil {
+		if ls.State != "active" || ls.Pane == "" {
+			return nil, nil, nil, nil, term.UsageErr("lease %s is %s", ls.ID, ls.State)
+		}
+		if !t.owns(ls) {
+			if forKey {
+				return nil, nil, nil, nil, notYours("lease " + ls.ID)
+			}
+			return nil, nil, nil, nil, term.TargetErr("only the owner of lease %s can answer its dialogs", ls.ID)
+		}
+		b, p, err := t.paneByID(ls.Pane, ls.Ref)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		if p == nil {
+			return nil, nil, nil, nil, term.UsageErr("lease %s: its pane is gone", ls.ID)
+		}
+		var job *Job
+		if j := d.jobOf(ls); j != nil && open(j.Status) && !j.Closed {
+			job = j
+		}
+		return b, p, job, ls, nil
+	} else if errors.Is(lerr, errSeveral) {
+		return nil, nil, nil, nil, lerr
+	}
 	b, p, err := t.paneTarget(d, target)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
 	if p.IsSelf || t.isSelf(p.ID) {
+		if forKey {
+			return nil, nil, nil, nil, term.TargetErr("refusing to press keys on your own pane")
+		}
 		return nil, nil, nil, nil, term.TargetErr("refusing to answer a dialog on your own pane")
 	}
 	l := t.ownsPane(d, p.ID, b.ServerRef())
 	if l == nil {
+		if forKey {
+			return nil, nil, nil, nil, notYours(p.Address())
+		}
 		return nil, nil, nil, nil, term.TargetErr("%s is not a pane you started with spawn or task new; its dialogs are not yours to answer", p.Address())
 	}
-	x = nil
+	var job *Job
 	if j := d.jobOf(l); j != nil && open(j.Status) && !j.Closed {
-		x = j
+		job = j
 	}
-	return b, p, x, l, nil
+	return b, p, job, l, nil
 }
 
 // paneTarget resolves a pane target. A pane ID with a record (the form a notice names) is looked up on
@@ -316,16 +386,13 @@ func (t *Tasks) paneTarget(d *Data, target string) (term.Backend, *term.Pane, er
 	return t.Backend, p, err
 }
 
-// Answer answers the dialog on a task's worker, or on a pane the caller started.
+// Answer answers the dialog on a task's worker, an attached scope, or a pane the caller started.
 func (t *Tasks) Answer(target string, opts AnswerOpts) (*Answered, *term.Pane, error) {
-	b, p, x, xl, err := t.answerTarget(target)
+	b, p, _, xl, err := t.leaseTarget(target, false)
 	if err != nil {
 		return nil, nil, err
 	}
-	ops := t.ops(b, t.Sender)
-	if x != nil {
-		ops = t.taskOps(b, t.Sender, x, xl)
-	}
+	ops := t.leaseOps(b, t.Sender, xl)
 	res, err := ops.Answer(p, opts)
 	if res != nil {
 		// A key was pressed. The answered dialog's mark goes, even when the dialog is still on screen: the
