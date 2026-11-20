@@ -73,9 +73,9 @@ func (t *Tasks) TaskOn(paneID string) string {
 	if err != nil {
 		return ""
 	}
-	for _, x := range d.Tasks {
-		if x.Pane == paneID && !settled(x.Status) && !x.Closed {
-			return x.ID
+	for _, j := range d.Jobs {
+		if d.leaseOf(j).Pane == paneID && !settled(j.Status) && !j.Closed {
+			return j.ID
 		}
 	}
 	return ""

@@ -407,9 +407,9 @@ func TestStoppingWatcherServesATaskCreatedMeanwhile(t *testing.T) {
 		switch n {
 		case 1: // the owner check, after the read that found nothing running
 			r.reg.Update(func(d *Data) error {
-				y := *d.Tasks[x.ID]
+				y := *d.TaskView(x.ID)
 				y.ID, y.Status = "tnew", "running"
-				d.Tasks[y.ID] = &y
+				seedTask(d, &y)
 				return nil
 			})
 			if r.as(r.owner).Watching(r.owner.ID) == 0 {
@@ -483,8 +483,8 @@ func TestDialogNoticesToAnUncalibratedLeadAreHeld(t *testing.T) {
 		t.Fatalf("a dialog notice was typed to an uncalibrated lead: %q", notes)
 	}
 	d := r.data()
-	if len(d.Pending) != 1 || d.Pending[0].Kind != "dialog" || d.Pending[0].Claimed != 0 || d.Tasks[x.ID].Dialog == nil {
-		t.Fatalf("the notice must stay held and the dialog marked: %+v %+v", d.Pending, d.Tasks[x.ID].Dialog)
+	if len(d.Notices) != 1 || d.Notices[0].Kind != "dialog" || d.Notices[0].Claimed != 0 || taskLease(d, x.ID).Dialog == nil {
+		t.Fatalf("the notice must stay held and the dialog marked: %+v %+v", d.Notices, taskLease(d, x.ID).Dialog)
 	}
 	w, err := r.tasks.Wait(x.ID, false, 5)
 	if err != nil || w == nil || w.Dialog == nil {
@@ -550,14 +550,14 @@ func TestWatcherAnnouncesADialogOnASpawnedPane(t *testing.T) {
 			t.Fatalf("notice lacks %q: %s", want, notes[0])
 		}
 	}
-	rec := r.data().Panes[p.ID]
+	rec := paneLease(r.data(), p.ID)
 	if rec.Dialog == nil || rec.Dialog.Fingerprint != fp || !rec.Dialog.Notified {
 		t.Fatalf("the pane's record must carry the mark: %+v", rec.Dialog)
 	}
 	if _, _, err := r.tasks.Answer(p.ID, AnswerOpts{N: 1, Expect: fp}); err != nil {
 		t.Fatal(err)
 	}
-	if rec := r.data().Panes[p.ID]; rec.Dialog != nil || rec.AnsweredAt == 0 {
+	if rec := paneLease(r.data(), p.ID); rec.Dialog != nil || rec.AnsweredAt == 0 {
 		t.Fatalf("an answer drops the pane's mark and stamps the answer: %+v", rec)
 	}
 	r.tasks.Watch(WatchOpts{Rounds: 1}) // the input line is back
@@ -582,8 +582,8 @@ func TestWatcherIgnoresPanesItsOwnerDidNotStart(t *testing.T) {
 	if notes := ownerNotes(r); len(notes) != 0 {
 		t.Fatalf("told of a pane it did not start: %q", notes)
 	}
-	if rec := r.data().Panes[theirs.ID]; rec.Dialog != nil || len(r.data().Pending) != 0 {
-		t.Fatalf("marked another owner's pane: %+v %+v", rec.Dialog, r.data().Pending)
+	if rec := paneLease(r.data(), theirs.ID); rec.Dialog != nil || len(r.data().Notices) != 0 {
+		t.Fatalf("marked another owner's pane: %+v %+v", rec.Dialog, r.data().Notices)
 	}
 }
 
@@ -596,16 +596,16 @@ func TestTwoPaneNoticesOfOneRoundAreBothDelivered(t *testing.T) {
 	b, _ := spawnedDialog(t, r, r.tasks, "bob", "touch b")
 	r.b.State[r.owner.ID].Input = "owner typing"
 	r.tasks.Watch(WatchOpts{Rounds: 1})
-	if d := r.data(); len(d.Pending) != 2 || d.Pending[0].Created != d.Pending[1].Created || d.Pending[0].Task != "" {
-		t.Fatalf("want two held pane notices of one round: %+v", d.Pending)
+	if d := r.data(); len(d.Notices) != 2 || d.Notices[0].Created != d.Notices[1].Created || noticeTask(d, d.Notices[0]) != "" {
+		t.Fatalf("want two held pane notices of one round: %+v", d.Notices)
 	}
 	r.b.State[r.owner.ID].Input = ""
 	if n, err := r.tasks.FlushPending(); err != nil || n != 2 {
 		t.Fatal(n, err)
 	}
 	notes := strings.Join(ownerNotes(r), "\n")
-	if len(ownerNotes(r)) != 2 || !strings.Contains(notes, "pane "+a.ID) || !strings.Contains(notes, "pane "+b.ID) || len(r.data().Pending) != 0 {
-		t.Fatalf("notes %q, pending %+v", ownerNotes(r), r.data().Pending)
+	if len(ownerNotes(r)) != 2 || !strings.Contains(notes, "pane "+a.ID) || !strings.Contains(notes, "pane "+b.ID) || len(r.data().Notices) != 0 {
+		t.Fatalf("notes %q, pending %+v", ownerNotes(r), r.data().Notices)
 	}
 }
 
@@ -621,17 +621,17 @@ func TestStalePaneNoticeIsDroppedAndAGonePaneLosesItsMark(t *testing.T) {
 	r.tasks.Watch(WatchOpts{Rounds: 1})
 	r.b.State[r.owner.ID].Input = ""
 	r.tasks.FlushPending()
-	if len(ownerNotes(r)) != 0 || len(r.data().Pending) != 0 {
-		t.Fatalf("a stale pane notice was delivered: %q %+v", ownerNotes(r), r.data().Pending)
+	if len(ownerNotes(r)) != 0 || len(r.data().Notices) != 0 {
+		t.Fatalf("a stale pane notice was delivered: %q %+v", ownerNotes(r), r.data().Notices)
 	}
 	dlg.Answer, dlg.Selected = 0, 1
 	r.tasks.Watch(WatchOpts{Rounds: 1})
-	if r.data().Panes[p.ID].Dialog == nil {
+	if paneLease(r.data(), p.ID).Dialog == nil {
 		t.Fatal("no mark")
 	}
 	r.b.Panes = r.b.Panes[:len(r.b.Panes)-1] // closed by hand: the record stays, the pane is gone
 	r.tasks.Watch(WatchOpts{Rounds: 1})
-	if rec := r.data().Panes[p.ID]; rec == nil || rec.Dialog != nil {
+	if rec := paneLease(r.data(), p.ID); rec == nil || rec.Dialog != nil {
 		t.Fatalf("a gone pane keeps its mark: %+v", rec)
 	}
 }
@@ -643,13 +643,14 @@ func TestARunningTaskTakesThePaneMark(t *testing.T) {
 	x, dlg := dialogTask(t, r)
 	fp := readFP(t, r, x)
 	r.reg.Update(func(d *Data) error {
-		d.Panes[x.Pane].Dialog = &DialogMark{Fingerprint: "0ld0ld00", Notified: true}
+		paneLease(d, x.Pane).Dialog = &DialogMark{Fingerprint: "0ld0ld00", Notified: true}
 		return nil
 	})
 	r.tasks.Watch(WatchOpts{Rounds: 1})
 	d := r.data()
-	if d.Panes[x.Pane].Dialog != nil || d.Tasks[x.ID].Dialog == nil || d.Tasks[x.ID].Dialog.Fingerprint != fp {
-		t.Fatalf("pane mark %+v, task mark %+v", d.Panes[x.Pane].Dialog, d.Tasks[x.ID].Dialog)
+	// One mark per pane now: the pane's mark is the task's, and it is the dialog on screen, not the old one.
+	if paneLease(d, x.Pane) != taskLease(d, x.ID) || taskLease(d, x.ID).Dialog == nil || taskLease(d, x.ID).Dialog.Fingerprint != fp {
+		t.Fatalf("pane mark %+v, task mark %+v", paneLease(d, x.Pane).Dialog, taskLease(d, x.ID).Dialog)
 	}
 	if notes := ownerNotes(r); len(notes) != 1 || !strings.Contains(notes[0], "task "+x.ID) {
 		t.Fatalf("%q", notes)
@@ -776,11 +777,11 @@ func TestGaveWorkOnlyMarksYourOwnPanes(t *testing.T) {
 	if owned, _ := r.tasks.GaveWork(r.b, r.owner); owned {
 		t.Fatal("your own pane counted as one you started")
 	}
-	if rec := r.data().Panes[p.ID]; rec.Worked != 0 {
+	if rec := paneLease(r.data(), p.ID); rec.Worked != 0 {
 		t.Fatal(rec.Worked)
 	}
-	if owned, _ := r.tasks.GaveWork(r.b, p); !owned || r.data().Panes[p.ID].Worked != r.clock.T {
-		t.Fatal(owned, r.data().Panes[p.ID])
+	if owned, _ := r.tasks.GaveWork(r.b, p); !owned || paneLease(r.data(), p.ID).Worked != r.clock.T {
+		t.Fatal(owned, paneLease(r.data(), p.ID))
 	}
 }
 
@@ -797,8 +798,8 @@ func TestHeldPaneNoticeShowsInOpenDialogs(t *testing.T) {
 	if notes := ownerNotes(r); len(notes) != 0 {
 		t.Fatalf("typed to an uncalibrated lead: %q", notes)
 	}
-	if d := r.data(); len(d.Pending) != 1 || d.Pending[0].Pane != p.ID {
-		t.Fatalf("the pane's notice must stay held: %+v", d.Pending)
+	if d := r.data(); len(d.Notices) != 1 || noticePane(d, d.Notices[0]) != p.ID {
+		t.Fatalf("the pane's notice must stay held: %+v", d.Notices)
 	}
 	open, err := r.tasks.OpenDialogs()
 	if err != nil || len(open) != 1 || open[p.ID] != fp {

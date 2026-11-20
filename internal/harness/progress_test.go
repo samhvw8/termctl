@@ -123,7 +123,7 @@ func TestNewerProgressReplacesAnUnsentNotice(t *testing.T) {
 		}
 	}
 	var held []string
-	for _, p := range r.data().Pending {
+	for _, p := range r.data().Notices {
 		held = append(held, p.Kind+":"+p.Text)
 	}
 	if len(held) != 1 || !strings.HasSuffix(held[0], ": step 3") || !strings.HasPrefix(held[0], "progress:") {
@@ -251,7 +251,7 @@ func TestUncalibratedWorkerNeverStalls(t *testing.T) {
 	x := idleClaudeTask(t, r)
 	p := r.pane(x)
 	prof := *ForProcess("claude")
-	ws := []worker{{task: x, b: r.b, p: p, prof: &prof}}
+	ws := []worker{{lease: leaseOfTask(t, r, x.ID), task: x.ID, b: r.b, p: p, prof: &prof}}
 	if sigs := r.tasks.read(ws, nil); len(sigs) != 1 || !sigs[0].Idle {
 		t.Fatalf("a calibrated idle worker: %+v", sigs)
 	}
@@ -267,14 +267,14 @@ func TestHeldStallNoticeIsDroppedWhenTheWorkerMovesOn(t *testing.T) {
 	x := idleClaudeTask(t, r)
 	r.b.State[r.owner.ID].Input = "owner typing"
 	watchFor(r, stallRounds)
-	if d := r.data(); len(d.Pending) != 1 || d.Pending[0].Kind != "stall" {
-		t.Fatalf("pending %+v", d.Pending)
+	if d := r.data(); len(d.Notices) != 1 || d.Notices[0].Kind != "stall" {
+		t.Fatalf("pending %+v", d.Notices)
 	}
 	r.b.Statuses = map[string]term.ProgramStatus{x.Pane: {State: "working"}}
 	watchFor(r, 1)
 	r.b.State[r.owner.ID].Input = ""
 	r.tasks.FlushPending()
-	if n := stallNotes(r); len(n) != 0 || len(r.data().Pending) != 0 {
+	if n := stallNotes(r); len(n) != 0 || len(r.data().Notices) != 0 {
 		t.Fatalf("a stale stall notice went out: %q", n)
 	}
 }
@@ -290,7 +290,7 @@ func TestALeadWaitingOnAWorkingSubTaskIsNotStalled(t *testing.T) {
 	if n := stallNotes(r); len(n) != 0 {
 		t.Fatalf("a lead waiting on a working sub-task was called stalled: %q", n)
 	}
-	r.reg.Update(func(d *Data) error { d.Tasks[sub.ID].Stall = &StallMark{At: r.clock.T}; return nil })
+	r.reg.Update(func(d *Data) error { taskLease(d, sub.ID).Stall = &StallMark{At: r.clock.T}; return nil })
 	watchFor(r, stallRounds)
 	n := stallNotes(r)
 	if len(n) != 1 || !strings.Contains(n[0], sub.ID) {
@@ -310,7 +310,7 @@ func TestPaneTitleNamesTheRole(t *testing.T) {
 		{Task{ID: "t4", Title: "cleanup", Defer: true, SubDepth: 1}, "t4 · cleanup"},
 		{Task{ID: "t5", ReviewOf: "t1", SubDepth: 1}, "REVIEWER · t5"},
 	} {
-		if got := paneTitle(&c.x); got != c.want {
+		if got := paneTitle(split(&c.x)); got != c.want {
 			t.Errorf("%+v: %q, want %q", c.x, got, c.want)
 		}
 	}

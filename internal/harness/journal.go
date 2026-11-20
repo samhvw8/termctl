@@ -52,6 +52,7 @@ type Entry struct {
 	Error    string `json:"error,omitempty"` // the action failed; the entry records the attempt
 	ID       string `json:"id,omitempty"`    // a deferred message's ID (send --defer), and the ID an ack entry acks
 	Key      string `json:"key,omitempty"`   // a msg's idempotency key: sender, target pane and text; set once typed
+	Scope    string `json:"scope,omitempty"` // the scope (attached workstream) the action belongs to
 }
 
 // Journal writes and reads the journal and the project files under Root.
@@ -229,6 +230,7 @@ type Filter struct {
 	Task    string
 	Pane    string // a full pane address or its start
 	Since   int64  // Unix seconds
+	Scope   string // a scope ID
 }
 
 func (f Filter) match(e Entry) bool {
@@ -236,6 +238,9 @@ func (f Filter) match(e Entry) bool {
 		return false
 	}
 	if f.Task != "" && e.Task != f.Task {
+		return false
+	}
+	if f.Scope != "" && e.Scope != f.Scope {
 		return false
 	}
 	if f.Pane != "" && !strings.HasPrefix(e.From, f.Pane) && !strings.HasPrefix(e.To, f.Pane) &&

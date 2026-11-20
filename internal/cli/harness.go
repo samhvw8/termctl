@@ -385,7 +385,7 @@ func (a *App) deliverPending() {
 		fmt.Fprintf(a.Err, "harness-ops: warning: could not read pending task results: %v\n", err)
 		return
 	}
-	if len(d.Pending) == 0 {
+	if len(d.Notices) == 0 {
 		return
 	}
 	t := &harness.Tasks{Reg: reg, Clock: a.Clock}

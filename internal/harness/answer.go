@@ -230,61 +230,73 @@ func (o *Ops) awaitGone(p *term.Pane, d *Dialog, res *Answered) error {
 }
 
 // answerTarget is the pane of a task the caller owns, or a pane the caller started with spawn or task new.
-func (t *Tasks) answerTarget(target string) (term.Backend, *term.Pane, *Task, error) {
+func (t *Tasks) answerTarget(target string) (term.Backend, *term.Pane, *Job, *Lease, error) {
 	if t.Sender == nil {
-		return nil, nil, nil, term.UsageErr("cannot tell which pane this runs in; only the owner of a task can answer its dialogs")
+		return nil, nil, nil, nil, term.UsageErr("cannot tell which pane this runs in; only the owner of a task can answer its dialogs")
 	}
 	if err := t.Reconcile(); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	d, err := t.Reg.Read()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	x, err := t.find(d.Tasks, target)
+	x, xl, err := t.find(d, target)
 	if errors.Is(err, errSeveral) {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	if err == nil {
-		if x.Owner != t.Sender.ID || !sameServer(x.OwnerRef, t.callerRef()) { // a pane ID is reused on another server
-			return nil, nil, nil, term.TargetErr("only the owner of task %s can answer its dialogs", x.ID)
+		if xl.Owner != t.Sender.ID || !sameServer(xl.OwnerRef, t.callerRef()) { // a pane ID is reused on another server
+			return nil, nil, nil, nil, term.TargetErr("only the owner of task %s can answer its dialogs", x.ID)
 		}
-		if !open(x.Status) || x.Pane == "" {
-			return nil, nil, nil, term.UsageErr("task %s is %s: there is no harness to answer", x.ID, x.Status)
+		if !open(x.Status) || xl.Pane == "" {
+			return nil, nil, nil, nil, term.UsageErr("task %s is %s: there is no harness to answer", x.ID, x.Status)
 		}
-		b, p, err := t.paneByID(x.Pane, x.Ref)
+		b, p, err := t.paneByID(xl.Pane, xl.Ref)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		if p == nil {
-			return nil, nil, nil, term.UsageErr("task %s: its pane is gone", x.ID)
+			return nil, nil, nil, nil, term.UsageErr("task %s: its pane is gone", x.ID)
 		}
-		return b, p, x, nil
+		return b, p, x, xl, nil
 	}
 	b, p, err := t.paneTarget(d, target)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	if p.IsSelf || t.isSelf(p.ID) {
-		return nil, nil, nil, term.TargetErr("refusing to answer a dialog on your own pane")
+		return nil, nil, nil, nil, term.TargetErr("refusing to answer a dialog on your own pane")
 	}
-	if !t.ownsRecord(d.Panes[p.ID], b.ServerRef()) {
-		return nil, nil, nil, term.TargetErr("%s is not a pane you started with spawn or task new; its dialogs are not yours to answer", p.Address())
+	l := t.ownsPane(d, p.ID, b.ServerRef())
+	if l == nil {
+		return nil, nil, nil, nil, term.TargetErr("%s is not a pane you started with spawn or task new; its dialogs are not yours to answer", p.Address())
 	}
-	for _, x := range d.Tasks { // the pane of a task: the answer must reach its dialog mark too
-		if x.Pane == p.ID && open(x.Status) && x.Owner == t.Sender.ID && sameServer(x.Ref, b.ServerRef()) {
-			return b, p, x, nil
-		}
+	x = nil
+	if j := d.jobOf(l); j != nil && open(j.Status) && !j.Closed {
+		x = j
 	}
-	return b, p, nil, nil
+	return b, p, x, l, nil
 }
 
 // paneTarget resolves a pane target. A pane ID with a record (the form a notice names) is looked up on
 // the server its record names, as a task's pane is, so a pane on a private tmux socket is found without -L;
 // any other target is resolved among the panes of the caller's backend.
 func (t *Tasks) paneTarget(d *Data, target string) (term.Backend, *term.Pane, error) {
-	if rec := d.Panes[target]; rec != nil {
-		b, p, err := t.paneByID(target, rec.Ref)
+	var ref map[string]string
+	known := false
+	if c := d.Created[target]; c != nil {
+		ref, known = c.Ref, true
+	} else {
+		for _, id := range sortedLeaseIDs(d) {
+			if l := d.Leases[id]; l.State == "active" && l.Pane == target {
+				ref, known = l.Ref, true
+				break
+			}
+		}
+	}
+	if known {
+		b, p, err := t.paneByID(target, ref)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -301,22 +313,15 @@ func (t *Tasks) paneTarget(d *Data, target string) (term.Backend, *term.Pane, er
 	return t.Backend, p, err
 }
 
-func taskOf(x *Task) string {
-	if x == nil {
-		return ""
-	}
-	return x.ID
-}
-
 // Answer answers the dialog on a task's worker, or on a pane the caller started.
 func (t *Tasks) Answer(target string, opts AnswerOpts) (*Answered, *term.Pane, error) {
-	b, p, x, err := t.answerTarget(target)
+	b, p, x, xl, err := t.answerTarget(target)
 	if err != nil {
 		return nil, nil, err
 	}
 	ops := t.ops(b, t.Sender)
 	if x != nil {
-		ops = t.taskOps(b, t.Sender, x)
+		ops = t.taskOps(b, t.Sender, x, xl)
 	}
 	res, err := ops.Answer(p, opts)
 	if res != nil {
@@ -324,20 +329,21 @@ func (t *Tasks) Answer(target string, opts AnswerOpts) (*Answered, *term.Pane, e
 		// harness may have asked the same request again, and that one must be announced. A mark of another
 		// dialog stays: the watcher marked and announced it after this answer read its dialog. Reads taken
 		// until now are stale.
-		// The pane's own record keeps a mark when no running task holds it: the same rules apply there.
+		// The pane's own lease keeps a mark when no running task holds it: the same rules apply there.
 		if uerr := t.Reg.Update(func(d *Data) error {
 			now := t.clock().Now()
-			if c := d.Tasks[taskOf(x)]; c != nil {
-				if dialogOnScreen(c, res.Dialog.Fingerprint) {
-					c.Dialog = nil
-				}
-				c.AnsweredAt = now
+			var cl *Lease
+			if xl != nil {
+				cl = d.Leases[xl.ID]
 			}
-			if rec := d.Panes[p.ID]; rec != nil {
-				if rec.Dialog != nil && rec.Dialog.Fingerprint == res.Dialog.Fingerprint {
-					rec.Dialog = nil
+			if cl == nil {
+				cl = activeLeaseForPane(d, p.ID, b.ServerRef())
+			}
+			if cl != nil {
+				if cl.Dialog != nil && cl.Dialog.Fingerprint == res.Dialog.Fingerprint {
+					cl.Dialog = nil
 				}
-				rec.AnsweredAt = now
+				cl.AnsweredAt = now
 			}
 			return nil
 		}); uerr != nil {

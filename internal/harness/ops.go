@@ -62,6 +62,7 @@ type Ops struct {
 	Task    string // the task these actions belong to, for the journal; "" for none
 	Project string // the project these actions belong to; "" for the sender's folder
 	From    string // who the journal names as sender when Sender is nil (a report delivered for a worker)
+	Scope   string // the scope these actions belong to, for the journal; "" for none
 }
 
 // NewOps keeps its journal and files under root: the state directory when root is "".
@@ -82,7 +83,7 @@ func (o *Ops) entry(event string, p *term.Pane) Entry {
 		project = ProjectOf(o.Sender)
 	}
 	e := Entry{Event: event, Project: project, From: address(o.Sender), FromName: entryName(o.Sender),
-		To: address(p), ToName: entryName(p), Task: o.Task}
+		To: address(p), ToName: entryName(p), Task: o.Task, Scope: o.Scope}
 	if o.Sender == nil {
 		e.From = o.From
 	}

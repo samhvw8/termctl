@@ -27,7 +27,7 @@ func (e *env) as(t *testing.T, id string) {
 		t.Fatal(err)
 	}
 	for _, p := range e.b.Panes {
-		if p.ID == d.Tasks[id].Pane {
+		if p.ID == d.TaskView(id).Pane {
 			p.Folder = "/w/sub"
 			e.app.OpenSender = func(*Options, term.Backend) (*term.Pane, error) { return p, nil }
 			return
@@ -91,7 +91,7 @@ func TestTaskProgressCommandAndStallInLs(t *testing.T) {
 		t.Fatalf("show:\n%s", out)
 	}
 	if err := harness.NewRegistry("").Update(func(d *harness.Data) error {
-		d.Tasks[id].Stall = &harness.StallMark{At: 1}
+		d.Leases[d.Jobs[id].Lease].Stall = &harness.StallMark{At: 1}
 		return nil
 	}); err != nil {
 		t.Fatal(err)

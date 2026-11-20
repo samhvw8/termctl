@@ -234,10 +234,11 @@ func (a *App) resumeCmd(rest []string, o *Options) error {
 	if err != nil {
 		return err
 	}
-	if x := d.Tasks[p.pos[0]]; x != nil {
+	tasks := d.TaskViews()
+	if x := tasks[p.pos[0]]; x != nil {
 		if p.bools["--tree"] {
 			fmt.Fprintf(a.Out, "# Tree of task %s: %s\n\n", x.ID, x.Title)
-			a.rollup(d, []*harness.Task{x}, true)
+			a.rollup(tasks, []*harness.Task{x}, true)
 			return nil
 		}
 		return a.resumeTask(x)
@@ -252,16 +253,16 @@ func (a *App) resumeCmd(rest []string, o *Options) error {
 		return err
 	}
 	if p.bools["--tree"] {
-		return a.resumeProjectTree(project, d)
+		return a.resumeProjectTree(project, tasks)
 	}
-	return a.resumeProject(project, d, n)
+	return a.resumeProject(project, tasks, n)
 }
 
 // rollup prints one compact line per task and per task under it, a level deeper each: status, the latest
 // progress (a running task) or summary, and an open dialog. withClosed keeps closed descendants.
-func (a *App) rollup(d *harness.Data, roots []*harness.Task, withClosed bool) {
+func (a *App) rollup(tasks map[string]*harness.Task, roots []*harness.Task, withClosed bool) {
 	kids := map[string][]*harness.Task{}
-	for _, x := range d.Tasks {
+	for _, x := range tasks {
 		if x.Parent != "" && (withClosed || !x.Closed) {
 			kids[x.Parent] = append(kids[x.Parent], x)
 		}
@@ -302,12 +303,12 @@ func (a *App) rollup(d *harness.Data, roots []*harness.Task, withClosed bool) {
 
 // resumeProjectTree is resume DIR --tree: the project's tasks not closed, each with a compact rollup of
 // the tasks under it, whatever their project.
-func (a *App) resumeProjectTree(project string, d *harness.Data) error {
+func (a *App) resumeProjectTree(project string, tasks map[string]*harness.Task) error {
 	fmt.Fprintf(a.Out, "# Tree of project %s (%s)\n\n", project, harness.ProjectSlug(project))
 	var open []*harness.Task
-	for _, x := range d.Tasks {
+	for _, x := range tasks {
 		if filepath.Clean(x.Project) == filepath.Clean(project) && !x.Closed && x.Status != "done" {
-			if p := d.Tasks[x.Parent]; p != nil && filepath.Clean(p.Project) == filepath.Clean(project) && !p.Closed && p.Status != "done" {
+			if p := tasks[x.Parent]; p != nil && filepath.Clean(p.Project) == filepath.Clean(project) && !p.Closed && p.Status != "done" {
 				continue // listed under its parent
 			}
 			open = append(open, x)
@@ -317,7 +318,7 @@ func (a *App) resumeProjectTree(project string, d *harness.Data) error {
 		fmt.Fprintln(a.Out, "(no tasks open)")
 		return nil
 	}
-	a.rollup(d, open, false)
+	a.rollup(tasks, open, false)
 	return nil
 }
 
@@ -366,11 +367,11 @@ func orDash(s string) string {
 	return s
 }
 
-func (a *App) resumeProject(project string, d *harness.Data, n int) error {
+func (a *App) resumeProject(project string, tasks map[string]*harness.Task, n int) error {
 	w := a.Out
 	fmt.Fprintf(w, "# Project %s (%s)\n", project, harness.ProjectSlug(project))
 	var open []*harness.Task
-	for _, x := range d.Tasks {
+	for _, x := range tasks {
 		if filepath.Clean(x.Project) == filepath.Clean(project) && !x.Closed && x.Status != "done" {
 			open = append(open, x)
 		}
@@ -379,7 +380,7 @@ func (a *App) resumeProject(project string, d *harness.Data, n int) error {
 	fmt.Fprintf(w, "\n## Tasks not closed (%d)\n\n", len(open))
 	// Under each, the open tasks started from its worker (Parent), whatever their project, a level deeper each.
 	kids := map[string][]*harness.Task{}
-	for _, x := range d.Tasks {
+	for _, x := range tasks {
 		if x.Parent != "" && !x.Closed && x.Status != "done" {
 			kids[x.Parent] = append(kids[x.Parent], x)
 		}

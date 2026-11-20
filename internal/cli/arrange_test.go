@@ -66,8 +66,9 @@ func TestHarnessOpsMoveNamesTheTaskAndKeepsItsRecord(t *testing.T) {
 	e := layoutEnv(t)
 	reg := harness.NewRegistry("")
 	reg.Update(func(d *harness.Data) error {
-		d.Tasks["t-abc"] = &harness.Task{ID: "t-abc", Pane: "fake:1", Status: "running", Round: 1}
-		d.Panes["fake:1"] = &harness.PaneRecord{Harness: "generic", Owner: "fake:9"}
+		d.Jobs["t-abc"] = &harness.Job{ID: "t-abc", Lease: "l-abc", Status: "running", Round: 1}
+		d.Leases["l-abc"] = &harness.Lease{ID: "l-abc", Pane: "fake:1", Job: "t-abc", State: "active", Harness: "generic", Owner: "fake:9"}
+		d.Created["fake:1"] = &harness.CreatedPane{Harness: "generic"}
 		return nil
 	})
 	code, out, stderr := e.run("move", "target", "--to", "T2")
@@ -75,8 +76,8 @@ func TestHarnessOpsMoveNamesTheTaskAndKeepsItsRecord(t *testing.T) {
 		t.Fatal(code, out, stderr)
 	}
 	d, _ := reg.Read()
-	if d.Tasks["t-abc"].Pane != "fake:1" || d.Panes["fake:1"] == nil {
-		t.Fatalf("%+v", d.Tasks["t-abc"])
+	if d.TaskView("t-abc").Pane != "fake:1" || d.Created["fake:1"] == nil {
+		t.Fatalf("%+v", d.TaskView("t-abc"))
 	}
 }
 

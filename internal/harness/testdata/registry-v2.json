@@ -1,0 +1,432 @@
+{
+ "version": 2,
+ "zz_data": true,
+ "tasks": {
+  "t000001": {
+   "id": "t000001",
+   "title": "lead job",
+   "harness": "claude",
+   "pane": "fake:5",
+   "ref": {
+    "pid": "111"
+   },
+   "owner": "fake:9",
+   "owner_ref": {
+    "pid": "111"
+   },
+   "cwd": "/w",
+   "brief": "/s/brief-1",
+   "status": "running",
+   "started": 1001,
+   "ended": 0,
+   "summary": "",
+   "depth": 1,
+   "notify": "none",
+   "closed": false,
+   "owned": true,
+   "seen": false,
+   "round": 1,
+   "launched": true,
+   "dialog": {
+    "fingerprint": "aaaa1111",
+    "question": "Run ls?",
+    "since": 1500,
+    "notified": true,
+    "zz_mark": "m"
+   },
+   "project": "/w",
+   "progress": {
+    "text": "half",
+    "at": 1400
+   },
+   "root": "t000001",
+   "sub_depth": 1,
+   "tree_max": 12,
+   "zz_future": 1
+  },
+  "t000002": {
+   "id": "t000002",
+   "title": "child",
+   "harness": "generic",
+   "pane": "fake:6",
+   "ref": {},
+   "owner": "fake:5",
+   "owner_ref": null,
+   "cwd": "/w/c",
+   "brief": "",
+   "status": "running",
+   "started": 1002,
+   "ended": 0,
+   "summary": "",
+   "depth": 2,
+   "notify": "none",
+   "closed": false,
+   "owned": true,
+   "seen": false,
+   "round": 2,
+   "launched": true,
+   "project": "/w",
+   "parent": "t000001",
+   "root": "t000001",
+   "tree_max": 12,
+   "idle_since": 1600,
+   "stall": {
+    "at": 2300
+   }
+  },
+  "t000003": {
+   "id": "t000003",
+   "title": "legacy ready",
+   "harness": "claude",
+   "pane": "fake:7",
+   "ref": null,
+   "owner": "fake:9",
+   "owner_ref": {
+    "pid": "111"
+   },
+   "cwd": "/w",
+   "brief": "",
+   "status": "ready",
+   "started": 1003,
+   "ended": 1100,
+   "summary": "did it",
+   "depth": 1,
+   "notify": "delivered",
+   "closed": false,
+   "owned": false,
+   "seen": true,
+   "round": 1,
+   "launched": true,
+   "project": "/w"
+  },
+  "t000004": {
+   "id": "t000004",
+   "title": "first on 8",
+   "harness": "generic",
+   "pane": "fake:8",
+   "ref": {
+    "pid": "111"
+   },
+   "owner": "fake:9",
+   "owner_ref": {
+    "pid": "111"
+   },
+   "cwd": "/w",
+   "brief": "",
+   "status": "done",
+   "started": 1004,
+   "ended": 1200,
+   "summary": "ok",
+   "depth": 1,
+   "notify": "seen",
+   "closed": true,
+   "owned": false,
+   "seen": true,
+   "round": 1,
+   "launched": true,
+   "project": "/w",
+   "root": "t000004",
+   "tree_max": 12
+  },
+  "t000005": {
+   "id": "t000005",
+   "title": "second on 8",
+   "harness": "generic",
+   "pane": "fake:8",
+   "ref": {
+    "pid": "111"
+   },
+   "owner": "fake:9",
+   "owner_ref": {
+    "pid": "111"
+   },
+   "cwd": "/w",
+   "brief": "",
+   "status": "running",
+   "started": 1005,
+   "ended": 0,
+   "summary": "",
+   "depth": 1,
+   "notify": "none",
+   "closed": false,
+   "owned": false,
+   "seen": false,
+   "round": 1,
+   "launched": true,
+   "answered_at": 1250,
+   "unreachable": 1700,
+   "project": "/w",
+   "root": "t000005",
+   "tree_max": 12
+  },
+  "t000006": {
+   "id": "t000006",
+   "title": "lost one",
+   "harness": "generic",
+   "pane": "fake:10",
+   "ref": {
+    "pid": "111"
+   },
+   "owner": "fake:9",
+   "owner_ref": {
+    "pid": "111"
+   },
+   "cwd": "/w",
+   "brief": "",
+   "status": "lost",
+   "started": 1006,
+   "ended": 1300,
+   "summary": "its pane is gone",
+   "depth": 1,
+   "notify": "none",
+   "closed": false,
+   "owned": true,
+   "seen": false,
+   "round": 1,
+   "launched": true,
+   "project": "/w",
+   "root": "t000006",
+   "tree_max": 12,
+   "orphaned": 1350
+  },
+  "t000007": {
+   "id": "t000007",
+   "title": "exited",
+   "harness": "generic",
+   "pane": "fake:11",
+   "ref": {
+    "pid": "111"
+   },
+   "owner": "fake:9",
+   "owner_ref": {
+    "pid": "111"
+   },
+   "cwd": "/w",
+   "brief": "",
+   "status": "exited",
+   "started": 1007,
+   "ended": 1310,
+   "summary": "the harness exited with status 3",
+   "depth": 1,
+   "notify": "pending",
+   "closed": false,
+   "owned": true,
+   "seen": false,
+   "round": 1,
+   "launched": true,
+   "exit_code": 3,
+   "project": "/w",
+   "root": "t000007",
+   "tree_max": 12
+  },
+  "t000008": {
+   "id": "t000008",
+   "title": "blind review of t000001",
+   "harness": "claude",
+   "pane": "fake:13",
+   "ref": {
+    "pid": "111"
+   },
+   "owner": "fake:9",
+   "owner_ref": {
+    "pid": "111"
+   },
+   "cwd": "/w",
+   "brief": "",
+   "status": "blocked",
+   "started": 1008,
+   "ended": 1320,
+   "summary": "denied 2 dialogs",
+   "depth": 1,
+   "notify": "none",
+   "closed": false,
+   "owned": true,
+   "seen": false,
+   "round": 1,
+   "launched": true,
+   "review_of": "t000001",
+   "blind": true,
+   "project": "/w",
+   "defer": true,
+   "acked_at": 1010,
+   "ack_note": "on it",
+   "denied": 2,
+   "root": "t000008",
+   "tree_max": 12
+  },
+  "t000009": {
+   "id": "t000009",
+   "title": "reserved",
+   "harness": "generic",
+   "pane": "",
+   "ref": {
+    "pid": "111"
+   },
+   "owner": "fake:9",
+   "owner_ref": {
+    "pid": "111"
+   },
+   "cwd": "/w",
+   "brief": "",
+   "status": "failed",
+   "started": 1009,
+   "ended": 1011,
+   "summary": "could not start: x",
+   "depth": 1,
+   "notify": "none",
+   "closed": false,
+   "owned": true,
+   "seen": false,
+   "round": 1,
+   "launched": false,
+   "project": "/w",
+   "root": "t000009",
+   "tree_max": 12
+  }
+ },
+ "panes": {
+  "fake:5": {
+   "harness": "claude",
+   "label": "t000001",
+   "cwd": "/w",
+   "ref": {
+    "pid": "111"
+   },
+   "owner": "fake:9",
+   "owner_ref": {
+    "pid": "111"
+   },
+   "created": 1001,
+   "worked": 1450,
+   "zz_rec": "r"
+  },
+  "fake:6": {
+   "harness": "generic",
+   "label": "t000002",
+   "cwd": "/w/c",
+   "ref": {},
+   "owner": "fake:5",
+   "created": 1002
+  },
+  "fake:7": {
+   "harness": "claude",
+   "label": "hand",
+   "cwd": "/w",
+   "ref": {
+    "pid": "111"
+   },
+   "owner": "fake:9",
+   "owner_ref": {
+    "pid": "111"
+   },
+   "created": 1003,
+   "dialog": {
+    "fingerprint": "bbbb2222",
+    "question": "Edit?",
+    "since": 1150
+   },
+   "adopted": true
+  },
+  "fake:8": {
+   "harness": "generic",
+   "label": "worker",
+   "cwd": "/w",
+   "ref": {
+    "pid": "111"
+   },
+   "owner": "fake:9",
+   "owner_ref": {
+    "pid": "111"
+   },
+   "created": 900,
+   "worked": 1240
+  },
+  "fake:11": {
+   "harness": "generic",
+   "label": "t000007",
+   "cwd": "/w",
+   "ref": {
+    "pid": "111"
+   },
+   "owner": "fake:9",
+   "owner_ref": {
+    "pid": "111"
+   },
+   "created": 1007
+  },
+  "fake:12": {
+   "harness": "claude",
+   "label": "spare",
+   "cwd": "/w",
+   "ref": {
+    "pid": "111"
+   },
+   "owner": "fake:9",
+   "owner_ref": {
+    "pid": "111"
+   },
+   "created": 950,
+   "dialog": {
+    "fingerprint": "cccc3333",
+    "question": "Fetch?",
+    "since": 1700,
+    "notified": true
+   },
+   "answered_at": 1600
+  },
+  "fake:13": {
+   "harness": "claude",
+   "label": "t000008",
+   "cwd": "/w",
+   "ref": {
+    "pid": "111"
+   },
+   "owner": "fake:9",
+   "owner_ref": {
+    "pid": "111"
+   },
+   "created": 1008
+  }
+ },
+ "pending": [
+  {
+   "task": "t000007",
+   "owner": "fake:9",
+   "owner_ref": {
+    "pid": "111"
+   },
+   "tag": "[agent-ops from t000007 (generic) id=fake:11 folder=/w]",
+   "text": "RE: task t000007 (exited) exited: ...",
+   "created": 1310,
+   "claimed": 0
+  },
+  {
+   "task": "",
+   "owner": "fake:9",
+   "owner_ref": {
+    "pid": "111"
+   },
+   "tag": "[agent-ops from spare (claude) id=fake:12 folder=/w]",
+   "text": "pane fake:12 (spare) DIALOG cccc3333: Fetch?",
+   "created": 1700,
+   "claimed": 0,
+   "kind": "dialog",
+   "fingerprint": "cccc3333",
+   "pane": "fake:12"
+  },
+  {
+   "task": "t000002",
+   "owner": "fake:5",
+   "owner_ref": null,
+   "tag": "[t]",
+   "text": "PROGRESS task t000002 (child) round 2: x",
+   "created": 1650,
+   "claimed": 1660,
+   "claim_pid": 4242,
+   "kind": "progress",
+   "zz_p": [
+    1
+   ]
+  }
+ ]
+}

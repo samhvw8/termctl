@@ -16,7 +16,7 @@ func TestMoveTaskPaneKeepsTaskAndRecord(t *testing.T) {
 	if err != nil || m.Pane.Tab != "O" || m.Pane.ID != x.Pane {
 		t.Fatal(err, m)
 	}
-	if got := r.get(t, x.ID); got.Pane != p.ID || got.Status != "running" || r.data().Panes[p.ID] == nil {
+	if got := r.get(t, x.ID); got.Pane != p.ID || got.Status != "running" || r.data().Created[p.ID] == nil {
 		t.Fatalf("%+v", got)
 	}
 	if r.tasks.TaskOn(p.ID) != x.ID || r.tasks.TaskOn(r.other.ID) != "" {

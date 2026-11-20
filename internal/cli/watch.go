@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -43,19 +44,36 @@ func (a *App) watch(rest []string, o *Options) error {
 	if p := pathBinary(); p != "" && !startedFromPath(exe) {
 		say(fmt.Sprintf("started from %s, not from the harness-ops on PATH (%s): restarts only into a new build of %s", exe, p, exe))
 	}
-	err = tasks.Watch(harness.WatchOpts{Interval: interval, Log: say, Restart: func() bool { target = check(); return target != "" }})
+	err = tasks.Watch(harness.WatchOpts{Interval: interval, Log: say, Wake: wakeSignal(), Restart: func() bool { target = check(); return target != "" }})
 	if errors.Is(err, harness.ErrRestart) {
 		// Same arguments and environment: an upgraded binary must not keep serving old fingerprints and parsers.
 		say("restarting into " + target)
 		err = a.reexec(target)
 		say("restart failed, going on with the old executable: " + err.Error())
-		err = tasks.Watch(harness.WatchOpts{Interval: interval, Log: say})
+		err = tasks.Watch(harness.WatchOpts{Interval: interval, Log: say, Wake: wakeSignal()})
 	}
 	if errors.Is(err, harness.ErrWatching) {
 		fmt.Fprintf(a.Out, "a watcher already runs for %s (pid %d)\n", tasks.Sender.Address(), tasks.Watching(tasks.Sender.ID))
 		return nil
 	}
 	return err
+}
+
+// wakeSignal turns SIGUSR1 into a wake of the watcher's wait between rounds (harness.Tasks.WakeWatcher).
+// A wake that comes while one is still unread is dropped: one is enough.
+func wakeSignal() <-chan struct{} {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGUSR1)
+	wake := make(chan struct{}, 1)
+	go func() {
+		for range sig {
+			select {
+			case wake <- struct{}{}:
+			default:
+			}
+		}
+	}()
+	return wake
 }
 
 // Exec replaces the process (syscall.Exec); a test can stub it.

@@ -1,8 +1,6 @@
 package harness
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,20 +50,20 @@ func footer(id string) string {
 
 // taskFooter ends a task's brief: its capability card, then how to report (a deferred job acks once and
 // never replies). running is how many tasks of its tree run, itself included.
-func taskFooter(x *Task, running int) string {
-	how := footer(x.ID)
-	if x.Defer {
-		how = deferFooter(x.ID)
+func taskFooter(j *Job, l *Lease, running int) string {
+	how := footer(j.ID)
+	if j.Defer {
+		how = deferFooter(j.ID)
 	}
-	return roleCard(x, running) + " " + how
+	return roleCard(l, running) + " " + how
 }
 
 // sendFooter ends a task send: how to report this round. A deferred worker is reminded not to reply.
-func sendFooter(x *Task) string {
-	if x.Defer {
-		return fmt.Sprintf(`deferred: do not reply; when finished, run: harness-ops task done %s --status ok|failed|blocked --summary "<one line result>"`, x.ID)
+func sendFooter(j *Job) string {
+	if j.Defer {
+		return fmt.Sprintf(`deferred: do not reply; when finished, run: harness-ops task done %s --status ok|failed|blocked --summary "<one line result>"`, j.ID)
 	}
-	return footer(x.ID)
+	return footer(j.ID)
 }
 
 func envInt(name string, def int) (int, error) {
@@ -117,28 +115,28 @@ func (t *Tasks) ops(b term.Backend, sender *term.Pane) *Ops {
 }
 
 // taskOps is ops whose journal entries belong to task x.
-func (t *Tasks) taskOps(b term.Backend, sender *term.Pane, x *Task) *Ops {
+func (t *Tasks) taskOps(b term.Backend, sender *term.Pane, j *Job, l *Lease) *Ops {
 	ops := t.ops(b, sender)
-	ops.Task, ops.Project = x.ID, x.Project
+	ops.Task, ops.Project = j.ID, l.Project
 	return ops
 }
 
 func (t *Tasks) journal() *Journal { return &Journal{Root: t.Reg.Root, Clock: t.clock()} }
 
 // logTask logs a task event from this sender, in the task's project.
-func (t *Tasks) logTask(event string, x *Task, status, text string) {
-	if x == nil {
+func (t *Tasks) logTask(event string, j *Job, l *Lease, status, text string) {
+	if j == nil || l == nil {
 		return
 	}
-	project := x.Project
+	project := l.Project
 	if project == "" {
 		project = ProjectOf(t.Sender)
 	}
-	e := Entry{Event: event, Project: project, From: address(t.Sender), FromName: entryName(t.Sender), Task: x.ID,
-		Harness: x.Harness, Status: status, Text: text}
-	e.To = x.Pane
-	if t.Sender != nil && t.Sender.ID == x.Pane {
-		e.To = x.Owner // the worker reports to its owner
+	e := Entry{Event: event, Project: project, From: address(t.Sender), FromName: entryName(t.Sender), Task: j.ID,
+		Harness: l.Harness, Status: status, Text: text}
+	e.To = l.Pane
+	if t.Sender != nil && t.Sender.ID == l.Pane {
+		e.To = l.Owner // the worker reports to its owner
 	}
 	t.journal().Record(e)
 }
@@ -167,24 +165,24 @@ func (e *findError) Unwrap() []error {
 	return []error{e.err}
 }
 
-func (t *Tasks) find(tasks map[string]*Task, id string) (*Task, error) {
-	if x, ok := tasks[id]; ok {
-		return x, nil
+func (t *Tasks) find(d *Data, id string) (*Job, *Lease, error) {
+	if j, ok := d.Jobs[id]; ok {
+		return j, d.leaseOf(j), nil
 	}
-	var hits []*Task
-	for k, x := range tasks {
+	var hits []*Job
+	for k, j := range d.Jobs {
 		if len(id) >= 3 && strings.HasPrefix(k, id) {
-			hits = append(hits, x)
+			hits = append(hits, j)
 		}
 	}
 	if len(hits) == 1 {
-		return hits[0], nil
+		return hits[0], d.leaseOf(hits[0]), nil
 	}
 	word := "no task"
 	if len(hits) > 1 {
 		word = "several tasks"
 	}
-	return nil, &findError{term.TargetErr("%s match '%s'", word, id), len(hits) > 1}
+	return nil, nil, &findError{term.TargetErr("%s match '%s'", word, id), len(hits) > 1}
 }
 
 // sameServer: a pane ID only means something on the server it was recorded on. Backends with a core_id
@@ -239,24 +237,24 @@ func (t *Tasks) owner() (*term.Pane, error) {
 }
 
 // owns: the caller is the task's owner pane, on the owner's server.
-func (t *Tasks) owns(x *Task) bool {
-	return t.Sender != nil && x.Owner == t.Sender.ID && sameServer(x.OwnerRef, t.callerRef())
+func (t *Tasks) owns(l *Lease) bool {
+	return t.Sender != nil && l != nil && l.Owner == t.Sender.ID && sameServer(l.OwnerRef, t.callerRef())
 }
 
 // warnDownOnce warns once per process that another owner's task cannot be checked. Only the owner
 // records an unreachable server: a process in another context may not reach a server the owner does, and
 // must not lose a live task it does not own (round-5 review D4).
-func (t *Tasks) warnDownOnce(x *Task, cause error) {
+func (t *Tasks) warnDownOnce(id string, cause error) {
 	t.downMu.Lock()
 	defer t.downMu.Unlock()
-	if t.downSeen[x.ID] {
+	if t.downSeen[id] {
 		return
 	}
 	if t.downSeen == nil {
 		t.downSeen = map[string]bool{}
 	}
-	t.downSeen[x.ID] = true
-	Warn(fmt.Sprintf("cannot check task %s: %v; only its owner records that its server does not answer", x.ID, cause))
+	t.downSeen[id] = true
+	Warn(fmt.Sprintf("cannot check task %s: %v; only its owner records that its server does not answer", id, cause))
 }
 
 // Reconcile marks active tasks whose pane is gone as lost. Unknown is not gone: a server that does not
@@ -276,152 +274,168 @@ func (t *Tasks) Reconcile() error {
 	down := map[string]error{} // tasks whose server does not answer, and the first time or past the TTL
 	restarted := map[string]bool{}
 	now := t.clock().Now()
-	for _, x := range d.Tasks {
-		if x.Status == "exited" && !x.Closed && x.Pane != "" {
-			if otherTaskOnPane(d, x) != nil {
-				if x.Restarted {
-					restarted[x.ID] = false
+	for _, j := range d.Jobs {
+		l := d.leaseOf(j)
+		if j.Status == "exited" && !j.Closed && l.Pane != "" {
+			if oj, _ := otherTaskOnPane(d, j, l); oj != nil {
+				if l.Restarted {
+					restarted[j.ID] = false
 				}
 				continue
 			}
-			_, p, err := t.paneByID(x.Pane, x.Ref)
+			_, p, err := t.paneByID(l.Pane, l.Ref)
 			if err != nil {
 				continue
 			}
-			if want := p != nil && harnessBack(x, p); want != x.Restarted {
-				restarted[x.ID] = want
+			if want := p != nil && harnessBack(l, p); want != l.Restarted {
+				restarted[j.ID] = want
 			}
 			continue
 		}
-		if !open(x.Status) {
+		if !open(j.Status) {
 			continue
 		}
-		if x.Defer && x.Closed {
+		if j.Defer && j.Closed {
 			continue // the watcher closed its pane on ok: gone on purpose, not lost
 		}
-		if x.Pane == "" {
-			if now-x.Started > reservationTTL {
-				lost = append(lost, x.ID)
+		if l.Pane == "" {
+			if now-j.Started > reservationTTL {
+				lost = append(lost, j.ID)
 			}
 			continue
 		}
-		_, p, err := t.paneByID(x.Pane, x.Ref)
-		if err != nil && !t.owns(x) {
-			t.warnDownOnce(x, err)
+		_, p, err := t.paneByID(l.Pane, l.Ref)
+		if err != nil && !t.owns(l) {
+			t.warnDownOnce(j.ID, err)
 			continue
 		}
 		if err != nil {
-			if x.Unreachable == 0 || now-x.Unreachable > unreachableTTL {
-				down[x.ID] = err
+			if l.Unreachable == 0 || now-l.Unreachable > unreachableTTL {
+				down[j.ID] = err
 			}
 			continue
 		}
-		if x.Unreachable != 0 && t.owns(x) {
-			back = append(back, x.ID)
+		if l.Unreachable != 0 && t.owns(l) {
+			back = append(back, j.ID)
 		}
 		switch {
 		case p == nil:
-			lost = append(lost, x.ID)
-		case x.Launched && isShell(p.Process):
-			exited = append(exited, x.ID)
+			lost = append(lost, j.ID)
+		case l.Launched && isShell(p.Process):
+			exited = append(exited, j.ID)
 		}
 	}
 	if len(lost)+len(exited)+len(back)+len(down)+len(restarted) == 0 {
 		return nil
 	}
 	return t.Reg.Update(func(d *Data) error {
-		lose := func(x *Task, why string) {
-			x.Status, x.Ended, x.Dialog = "lost", t.clock().Now(), nil
-			if x.Summary == "" {
-				x.Summary = why
+		lose := func(j *Job, l *Lease, why string) {
+			now := t.clock().Now()
+			j.Status, j.Ended, l.Dialog = "lost", now, nil
+			if j.Summary == "" {
+				j.Summary = why
 			}
-			delete(d.Panes, x.Pane)
+			if l.State == "active" {
+				l.State, l.Ended = "lost", now
+			}
+			if l.Pane != "" {
+				delete(d.Created, l.Pane)
+			}
 		}
 		for _, id := range lost {
-			if x := d.Tasks[id]; x != nil && open(x.Status) {
-				lose(x, "its pane is gone")
+			if j := d.Jobs[id]; j != nil && open(j.Status) {
+				lose(j, d.leaseOf(j), "its pane is gone")
 			}
 		}
 		for _, id := range exited {
 			t.markExited(d, id, nil)
 		}
 		for id, want := range restarted {
-			if x := d.Tasks[id]; x != nil && x.Status == "exited" && !x.Closed {
-				x.Restarted = want
+			if j := d.Jobs[id]; j != nil && j.Status == "exited" && !j.Closed {
+				d.leaseOf(j).Restarted = want
 			}
 		}
 		for _, id := range back {
-			if x := d.Tasks[id]; x != nil && x.Unreachable != 0 {
-				x.Unreachable = 0
-				Warn(fmt.Sprintf("task %s: its server answers again", x.ID))
+			if j := d.Jobs[id]; j != nil && d.leaseOf(j).Unreachable != 0 {
+				d.leaseOf(j).Unreachable = 0
+				Warn(fmt.Sprintf("task %s: its server answers again", j.ID))
 			}
 		}
 		for id, cause := range down { // under the lock, so two processes warn about one task once
-			x := d.Tasks[id]
+			j := d.Jobs[id]
+			if j == nil || !open(j.Status) {
+				continue
+			}
+			l := d.leaseOf(j)
 			switch {
-			case x == nil || !open(x.Status):
-			case x.Unreachable == 0:
-				x.Unreachable = now
-				Warn(fmt.Sprintf("cannot check task %s: %v; it is lost if its server does not answer for %gs", x.ID, cause, unreachableTTL))
-			case now-x.Unreachable > unreachableTTL:
-				lose(x, fmt.Sprintf("its server has not answered for %gs: %v", unreachableTTL, cause))
+			case l.Unreachable == 0:
+				l.Unreachable = now
+				Warn(fmt.Sprintf("cannot check task %s: %v; it is lost if its server does not answer for %gs", j.ID, cause, unreachableTTL))
+			case now-l.Unreachable > unreachableTTL:
+				lose(j, l, fmt.Sprintf("its server has not answered for %gs: %v", unreachableTTL, cause))
 			}
 		}
 		return nil
 	})
 }
 
-// harnessBack reports whether pane p is running task x's harness again after x was marked exited.
-func harnessBack(x *Task, p *term.Pane) bool {
+// harnessBack reports whether pane p is running lease l's harness again after its job was marked exited.
+func harnessBack(l *Lease, p *term.Pane) bool {
 	if p == nil || p.Process == "" || isShell(p.Process) {
 		return false
 	}
-	if x.Harness == "" || x.Harness == "generic" {
+	if l.Harness == "" || l.Harness == "generic" {
 		return true
 	}
-	return HarnessName(p) == x.Harness
+	return HarnessName(p) == l.Harness
 }
 
 // markExited records that the harness is gone from a live pane, and queues the owner's notice.
 func (t *Tasks) markExited(d *Data, id string, code *int) {
-	x := d.Tasks[id]
-	if x == nil || !open(x.Status) {
+	j := d.Jobs[id]
+	if j == nil || !open(j.Status) {
 		return
 	}
-	x.Status, x.Ended, x.ExitCode, x.Notify, x.Dialog, x.Restarted = "exited", t.clock().Now(), code, "pending", nil, false
+	l := d.leaseOf(j)
+	now := t.clock().Now()
+	j.Status, j.Ended, j.ExitCode, j.Notify, l.Dialog, l.Restarted = "exited", now, code, "pending", nil, false
+	if l.State == "active" {
+		l.State, l.Ended = "exited", now
+	}
 	why := "the harness exited"
 	if code != nil {
 		why = fmt.Sprintf("the harness exited with status %d", *code)
 	}
-	if x.Summary == "" {
-		x.Summary = why
+	if j.Summary == "" {
+		j.Summary = why
 	}
-	d.Pending = append(d.Pending, &Pending{Task: x.ID, Owner: x.Owner, OwnerRef: x.OwnerRef,
-		Tag:     fmt.Sprintf("[agent-ops from %s (%s) id=%s folder=%s]", x.ID, x.Harness, x.Pane, x.Cwd),
-		Text:    fmt.Sprintf("RE: task %s (%s) exited: %s; its pane stays open, see it with: harness-ops read %s", x.ID, x.Title, why, x.ID),
-		Created: t.clock().Now()})
+	d.Notices = append(d.Notices, &Notice{ID: newNoticeID(d), Lease: l.ID, Owner: l.Owner, OwnerRef: l.OwnerRef, Kind: "result",
+		Tag:     fmt.Sprintf("[agent-ops from %s (%s) id=%s folder=%s]", j.ID, l.Harness, l.Pane, l.Cwd),
+		Text:    fmt.Sprintf("RE: task %s (%s) exited: %s; its pane stays open, see it with: harness-ops read %s", j.ID, j.Title, why, j.ID),
+		Created: now})
 }
 
 // Exited is called from the worker's pane when its harness ends. Reconcile is the fallback.
 func (t *Tasks) Exited(id string, code int) (*Task, error) {
 	var tid string
 	err := t.Reg.Update(func(d *Data) error {
-		x, err := t.find(d.Tasks, id)
+		j, l, err := t.find(d, id)
 		if err != nil {
 			return err
 		}
-		if t.Sender != nil && t.Sender.ID != x.Pane && t.Sender.ID != x.Owner {
-			return term.TargetErr("%s is neither the worker nor the owner of task %s", t.Sender.Address(), x.ID)
+		if t.Sender != nil && t.Sender.ID != l.Pane && t.Sender.ID != l.Owner {
+			return term.TargetErr("%s is neither the worker nor the owner of task %s", t.Sender.Address(), j.ID)
 		}
-		tid = x.ID
-		t.markExited(d, x.ID, &code)
+		tid = j.ID
+		t.markExited(d, j.ID, &code)
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	if d, err := t.Reg.Read(); err == nil {
-		t.logTask("task.exited", d.Tasks[tid], d.Tasks[tid].Status, fmt.Sprintf("the harness exited with status %d", code))
+		j := d.Jobs[tid]
+		t.logTask("task.exited", j, d.leaseOf(j), j.Status, fmt.Sprintf("the harness exited with status %d", code))
 	}
 	if _, err := t.FlushPending(); err != nil {
 		return nil, err
@@ -430,7 +444,7 @@ func (t *Tasks) Exited(id string, code int) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	return d.Tasks[tid], nil
+	return d.TaskView(tid), nil
 }
 
 // NewOpts are options of New.
@@ -444,15 +458,9 @@ type NewOpts struct {
 	SubDepth, TreeMax                                            int  // levels below it may start (0: a leaf); running tasks in its tree (0: inherit)
 }
 
-func newID() string {
-	b := make([]byte, 3)
-	rand.Read(b)
-	return "t" + hex.EncodeToString(b)
-}
-
 func holdsTask(d *Data, paneID string) bool {
-	for _, x := range d.Tasks {
-		if open(x.Status) && x.Pane == paneID {
+	for _, j := range d.Jobs {
+		if open(j.Status) && d.leaseOf(j).Pane == paneID {
 			return true
 		}
 	}
@@ -461,28 +469,29 @@ func holdsTask(d *Data, paneID string) bool {
 
 // reserve takes a slot under the lock, before the spawn, so parallel calls cannot exceed the cap. It
 // returns the task and how many tasks of its tree run, itself included (for its capability card).
-func (t *Tasks) reserve(owner *term.Pane, o NewOpts, pane *term.Pane) (*Task, int, error) {
+func (t *Tasks) reserve(owner *term.Pane, o NewOpts, pane *term.Pane) (string, int, error) {
 	limit := o.MaxTasks
 	if limit == 0 {
 		var err error
 		if limit, err = envInt("TERMCTL_MAX_TASKS", defaultMaxTasks); err != nil {
-			return nil, 0, err
+			return "", 0, err
 		}
 	}
 	depthLimit, err := envInt("TERMCTL_MAX_DEPTH", defaultMaxDepth)
 	if err != nil {
-		return nil, 0, err
+		return "", 0, err
 	}
-	var task *Task
+	var id string
 	inTree := 0
 	err = t.Reg.Update(func(d *Data) error {
 		running := 0
-		var parent *Task
-		for _, x := range d.Tasks {
-			if x.Status == "running" && x.Owner == owner.ID {
+		var parent *Job
+		for _, x := range d.Jobs {
+			xl := d.leaseOf(x)
+			if x.Status == "running" && xl.Owner == owner.ID {
 				running++
 			}
-			if open(x.Status) && x.Pane == owner.ID {
+			if open(x.Status) && xl.Pane == owner.ID {
 				parent = x
 			}
 		}
@@ -492,30 +501,42 @@ func (t *Tasks) reserve(owner *term.Pane, o NewOpts, pane *term.Pane) (*Task, in
 		if pane != nil && holdsTask(d, pane.ID) {
 			return term.Errf(term.CodeGuard, "%s already holds a running task", pane.Address())
 		}
-		task = &Task{
-			ID: newID(), Title: o.Title, Harness: o.Harness, Ref: t.Backend.ServerRef(), Owner: owner.ID, OwnerRef: t.SenderRef,
-			Cwd: o.Cwd, Status: "running", Started: t.clock().Now(), Notify: "none", Owned: pane == nil,
-			Round: 1, ReviewOf: o.ReviewOf, Blind: o.Blind, Project: ProjectOf(owner), Defer: o.Defer,
+		now := t.clock().Now()
+		j := &Job{ID: newJobID(d), Title: o.Title, Status: "running", Started: now, Notify: "none", Owned: pane == nil, Round: 1, ReviewOf: o.ReviewOf,
+			Blind: o.Blind, Defer: o.Defer}
+		l := &Lease{ID: newLeaseID(d), Owner: owner.ID, OwnerRef: t.SenderRef, Ref: t.Backend.ServerRef(), Harness: o.Harness, Cwd: o.Cwd,
+			Project: ProjectOf(owner), Job: j.ID, State: "active", Started: now}
+		j.Lease = l.ID
+		var pl *Lease
+		if parent != nil {
+			pl = d.leaseOf(parent)
 		}
-		if err := place(d, task, parent, o.SubDepth, o.TreeMax, depthLimit); err != nil {
+		if err := place(d, j, l, parent, pl, o.SubDepth, o.TreeMax, depthLimit); err != nil {
 			return err
 		}
-		if parent != nil {
-			task.Parent = parent.ID
+		if pl != nil {
+			l.Parent = pl.ID
 		}
 		if pane != nil {
-			task.Pane = pane.ID
+			// The pane's supervision passes to this task: a lease left on it ends (one active lease per pane).
+			for _, lid := range sortedLeaseIDs(d) {
+				if old := d.Leases[lid]; old.State == "active" && old.Pane == pane.ID && sameServer(old.Ref, l.Ref) {
+					endLease(old, now)
+				}
+			}
+			l.Pane = pane.ID
 		}
-		d.Tasks[task.ID] = task
-		inTree = runningInTree(d, task.Root)
+		d.Jobs[j.ID], d.Leases[l.ID] = j, l
+		id = j.ID
+		inTree = runningInTree(d, rootOf(l))
 		return nil
 	})
-	return task, inTree, err
+	return id, inTree, err
 }
 
 // writeBrief files the brief in the task's project folder of the journal, with the footer typed after it.
-func (t *Tasks) writeBrief(x *Task, text, foot string) (string, error) {
-	return t.journal().WriteFile(x.Project, "brief", x.ID, strings.TrimRight(text, " \n\t")+"\n\n"+foot)
+func (t *Tasks) writeBrief(j *Job, l *Lease, text, foot string) (string, error) {
+	return t.journal().WriteFile(l.Project, "brief", j.ID, strings.TrimRight(text, " \n\t")+"\n\n"+foot)
 }
 
 func prompt(id string, owner *term.Pane, text, brief, foot string) string {
@@ -536,8 +557,8 @@ func prompt(id string, owner *term.Pane, text, brief, foot string) string {
 func (t *Tasks) fail(id string, cause error) {
 	msg := strings.SplitN("could not start: "+cause.Error(), "\n", 2)[0]
 	if err := t.Reg.Update(func(d *Data) error {
-		x := d.Tasks[id]
-		x.Status, x.Ended, x.Summary = "failed", t.clock().Now(), msg
+		j := d.Jobs[id]
+		j.Status, j.Ended, j.Summary = "failed", t.clock().Now(), msg
 		return nil
 	}); err != nil {
 		Warn(err.Error())
@@ -623,55 +644,60 @@ func (t *Tasks) New(o NewOpts) (*Task, error) {
 			return nil, err
 		}
 	}
-	task, inTree, err := t.reserve(owner, o, pane)
+	id, inTree, err := t.reserve(owner, o, pane)
 	if err != nil {
 		return nil, err
 	}
-	id := task.ID
-	ops.Task, ops.Project = id, task.Project
-	if err := t.start(ops, owner, o, task, brief, taskFooter(task, inTree), pane); err != nil {
-		t.fail(id, err)
-		t.logTask("task.new", task, "failed", err.Error())
-		return nil, err
-	}
-	t.WarnUncalibratedLead()
 	d, err := t.Reg.Read()
 	if err != nil {
 		return nil, err
 	}
-	x := d.Tasks[id]
-	text := x.Title
-	if x.ReviewOf != "" {
-		text += " (reviews " + x.ReviewOf + ")"
+	j := d.Jobs[id]
+	l := d.leaseOf(j)
+	ops.Task, ops.Project = id, l.Project
+	if err := t.start(ops, owner, o, j, l, brief, taskFooter(j, l, inTree), pane); err != nil {
+		t.fail(id, err)
+		t.logTask("task.new", j, l, "failed", err.Error())
+		return nil, err
 	}
-	e := Entry{Event: "task.new", Project: x.Project, From: address(owner), FromName: entryName(owner), To: x.Pane, ToName: id,
-		Task: id, Harness: x.Harness, Status: x.Status, Text: text, File: x.Brief}
+	t.WarnUncalibratedLead()
+	if d, err = t.Reg.Read(); err != nil {
+		return nil, err
+	}
+	j = d.Jobs[id]
+	l = d.leaseOf(j)
+	text := j.Title
+	if j.ReviewOf != "" {
+		text += " (reviews " + j.ReviewOf + ")"
+	}
+	e := Entry{Event: "task.new", Project: l.Project, From: address(owner), FromName: entryName(owner), To: l.Pane, ToName: id,
+		Task: id, Harness: l.Harness, Status: j.Status, Text: text, File: j.Brief}
 	t.journal().Record(e)
-	return x, nil
+	return d.TaskView(id), nil
 }
 
-func (t *Tasks) start(ops *Ops, owner *term.Pane, o NewOpts, task *Task, brief, foot string, pane *term.Pane) error {
-	id := task.ID
-	path, err := t.writeBrief(task, brief, foot)
+func (t *Tasks) start(ops *Ops, owner *term.Pane, o NewOpts, j *Job, l *Lease, brief, foot string, pane *term.Pane) error {
+	id, lid := j.ID, l.ID
+	path, err := t.writeBrief(j, l, brief, foot)
 	if err != nil {
 		return err
 	}
-	if err := t.Reg.Update(func(d *Data) error { d.Tasks[id].Brief = path; return nil }); err != nil {
+	if err := t.Reg.Update(func(d *Data) error { d.Jobs[id].Brief = path; return nil }); err != nil {
 		return err
 	}
 	spawned := pane == nil
 	if pane == nil {
 		ref := t.Backend.ServerRef()
 		pane, err = ops.Spawn(o.Harness, o.Where, o.Cwd, SpawnOpts{
-			Label: id, Title: paneTitle(task), Command: o.Command, Timeout: o.Timeout, Owned: t.owned(),
+			Label: id, Title: paneTitle(j, l), Command: o.Command, Timeout: o.Timeout, Owned: t.owned(),
 			Wrap: func(cmd string) string { return SurvivingCommand(cmd, t.exitHook(id)) },
 			OnCreated: func(p *term.Pane) error {
 				if t.spawnHook != nil {
 					t.spawnHook(p)
 				}
 				return t.Reg.Update(func(d *Data) error {
-					t.record(d, p, o.Harness, id, o.Cwd, ref)
-					d.Tasks[id].Pane = p.ID
+					t.record(d, p, o.Harness, id, o.Cwd, ref, lid)
+					d.Leases[lid].Pane = p.ID
 					return nil
 				})
 			},
@@ -684,7 +710,7 @@ func (t *Tasks) start(ops *Ops, owner *term.Pane, o NewOpts, task *Task, brief, 
 		if err := t.Backend.SetLabel(pane, id); err != nil { // teammates address a task by its ID
 			return err
 		}
-		if err := term.SetTitle(t.Backend, pane, paneTitle(task)); err != nil {
+		if err := term.SetTitle(t.Backend, pane, paneTitle(j, l)); err != nil {
 			return err
 		}
 		if err := ops.Clear(pane, false, o.Timeout); err != nil {
@@ -705,7 +731,7 @@ func (t *Tasks) start(ops *Ops, owner *term.Pane, o NewOpts, task *Task, brief, 
 	if err := submit(pane, prompt(id, owner, brief, path, foot), prof); err != nil {
 		return err
 	}
-	return t.Reg.Update(func(d *Data) error { d.Tasks[id].Launched = true; return nil })
+	return t.Reg.Update(func(d *Data) error { d.Leases[lid].Launched = true; return nil })
 }
 
 // exitHook is the command the pane's shell runs when the harness ends. It must reach the same registry.
@@ -721,19 +747,18 @@ func (t *Tasks) exitHook(id string) string {
 	return env + term.ShellQuote(exe) + " task exited " + id
 }
 
-func (t *Tasks) record(d *Data, p *term.Pane, harness, label, cwd string, ref map[string]string) {
-	owner := ""
-	if t.Sender != nil {
-		owner = t.Sender.ID
-	}
-	d.Panes[p.ID] = &PaneRecord{Harness: harness, Label: label, Cwd: cwd, Ref: ref, Owner: owner, OwnerRef: t.SenderRef, Created: t.clock().Now()}
+func (t *Tasks) record(d *Data, p *term.Pane, harness, label, cwd string, ref map[string]string, lease string) {
+	d.Created[p.ID] = &CreatedPane{Ref: ref, Harness: harness, Label: label, Cwd: cwd, ForLease: lease, CreatedAt: t.clock().Now()}
 }
 
-// ownsRecord: the caller started the pane the record is of: the record names the caller's pane on the
-// caller's server, and the pane's server (paneRef) is the one recorded, so a record from before a terminal
-// server restart (a reused pane ID) counts for nothing.
-func (t *Tasks) ownsRecord(rec *PaneRecord, paneRef map[string]string) bool {
-	return rec != nil && t.Sender != nil && rec.Owner == t.Sender.ID && sameServer(rec.OwnerRef, t.callerRef()) && sameServer(rec.Ref, paneRef)
+// ownsPane is the active lease on a pane when the caller holds it (it started the pane, or a task of its holds
+// it): the lease names the caller's pane on the caller's server, and the pane's server (paneRef) is the one
+// recorded, so a lease from before a terminal server restart (a reused pane ID) counts for nothing.
+func (t *Tasks) ownsPane(d *Data, pane string, paneRef map[string]string) *Lease {
+	if l := activeLeaseForPane(d, pane, paneRef); t.owns(l) {
+		return l
+	}
+	return nil
 }
 
 // Spawn starts a harness and records the pane, so close may act on it later.
@@ -742,7 +767,24 @@ func (t *Tasks) Spawn(harness, where, cwd string, opts SpawnOpts) (*term.Pane, e
 	opts.Owned = t.owned()
 	opts.Wrap = func(cmd string) string { return SurvivingCommand(cmd, "") }
 	opts.OnCreated = func(p *term.Pane) error {
-		return t.Reg.Update(func(d *Data) error { t.record(d, p, harness, opts.Label, cwd, ref); return nil })
+		return t.Reg.Update(func(d *Data) error {
+			owner := ""
+			if t.Sender != nil {
+				owner = t.Sender.ID
+			}
+			now := t.clock().Now()
+			l := &Lease{ID: newLeaseID(d), Owner: owner, OwnerRef: t.SenderRef, Pane: p.ID, Ref: ref, Harness: harness, Label: opts.Label,
+				Cwd: cwd, Project: ProjectOf(t.Sender), Depth: 1, TreeMax: defaultTreeMax, State: "active", Launched: true, Started: now}
+			l.Root = l.ID
+			for _, lid := range sortedLeaseIDs(d) { // a lease left from an earlier pane of this ID on this server
+				if old := d.Leases[lid]; old.State == "active" && old.Pane == p.ID && sameServer(old.Ref, ref) {
+					endLease(old, now)
+				}
+			}
+			d.Leases[l.ID] = l
+			t.record(d, p, harness, opts.Label, cwd, ref, l.ID)
+			return nil
+		})
 	}
 	return t.ops(t.Backend, t.Sender).Spawn(harness, where, cwd, opts)
 }
@@ -760,12 +802,12 @@ func (t *Tasks) GaveWork(b term.Backend, p *term.Pane) (bool, error) {
 		return false, err
 	}
 	ref := b.ServerRef()
-	if !t.ownsRecord(d.Panes[p.ID], ref) {
+	if t.ownsPane(d, p.ID, ref) == nil {
 		return false, nil
 	}
 	if err := t.Reg.Update(func(d *Data) error {
-		if rec := d.Panes[p.ID]; t.ownsRecord(rec, ref) {
-			rec.Worked = t.clock().Now()
+		if l := t.ownsPane(d, p.ID, ref); l != nil {
+			l.Worked = t.clock().Now()
 		}
 		return nil
 	}); err != nil {
@@ -784,17 +826,10 @@ func (t *Tasks) OpenDialogs() (map[string]string, error) {
 		return nil, err
 	}
 	out := map[string]string{}
-	for id, rec := range d.Panes {
-		if !t.ownsRecord(rec, t.Backend.ServerRef()) {
-			continue
-		}
-		if rec.Dialog != nil && !paneHeld(d, id) {
-			out[id] = rec.Dialog.Fingerprint
-		}
-	}
-	for _, x := range d.Tasks {
-		if x.Dialog != nil && dialogOnScreen(x, x.Dialog.Fingerprint) && t.ownsRecord(d.Panes[x.Pane], t.Backend.ServerRef()) {
-			out[x.Pane] = x.Dialog.Fingerprint
+	ref := t.Backend.ServerRef()
+	for _, l := range d.Leases {
+		if l.State == "active" && l.Dialog != nil && sameServer(l.Ref, ref) && t.owns(l) {
+			out[l.Pane] = l.Dialog.Fingerprint
 		}
 	}
 	return out, nil
@@ -808,7 +843,7 @@ func (t *Tasks) Mine(panes []*term.Pane) ([]*term.Pane, error) {
 	}
 	var out []*term.Pane
 	for _, p := range panes {
-		if t.ownsRecord(d.Panes[p.ID], t.Backend.ServerRef()) {
+		if t.ownsPane(d, p.ID, t.Backend.ServerRef()) != nil {
 			out = append(out, p)
 		}
 	}
@@ -826,9 +861,9 @@ func (t *Tasks) owned() func(*term.Pane) bool {
 		return nil
 	}
 	mine := map[string]bool{}
-	for id, rec := range d.Panes {
-		if rec.Owner == t.Sender.ID {
-			mine[id] = true
+	for _, l := range d.Leases {
+		if l.State == "active" && l.Owner == t.Sender.ID {
+			mine[l.Pane] = true
 		}
 	}
 	return func(p *term.Pane) bool { return mine[p.ID] }
@@ -864,16 +899,16 @@ func (t *Tasks) ClosePane(target string, force bool) (*term.Pane, error) {
 	if err != nil {
 		return nil, err
 	}
-	rec := d.Panes[p.ID]
-	owned := rec != nil && !rec.Adopted // an adopted pane was started by hand, not by harness-ops
-	if owned && !sameServer(rec.Ref, t.Backend.ServerRef()) {
-		owned = false // the record is from before a terminal server restart
-	}
-	var task *Task
-	for _, x := range d.Tasks {
-		if !settled(x.Status) && !x.Closed && x.Pane == p.ID && sameServer(x.Ref, t.Backend.ServerRef()) {
-			if task == nil || newerTask(x, task) {
-				task = x
+	ref := t.Backend.ServerRef()
+	c := d.Created[p.ID] // an adopted pane was started by hand, not by harness-ops: it has none
+	owned := c != nil && sameServer(c.Ref, ref) // a record from before a terminal server restart counts for nothing
+	var task *Job
+	var taskLease *Lease
+	for _, j := range d.Jobs {
+		jl := d.leaseOf(j)
+		if !settled(j.Status) && !j.Closed && jl.Pane == p.ID && sameServer(jl.Ref, ref) {
+			if task == nil || newerTask(j, jl, task, taskLease) {
+				task, taskLease = j, jl
 			}
 		}
 	}
@@ -898,7 +933,7 @@ func (t *Tasks) ClosePane(target string, force bool) (*term.Pane, error) {
 	e := Entry{Event: "close", Project: ProjectOf(t.Sender), From: address(t.Sender), FromName: entryName(t.Sender),
 		To: p.Address(), ToName: entryName(p), Harness: HarnessName(p)}
 	if task != nil {
-		e.Task, e.Project = task.ID, task.Project
+		e.Task, e.Project = task.ID, d.leaseOf(task).Project
 		if e.Project == "" {
 			e.Project = ProjectOf(t.Sender)
 		}
@@ -908,12 +943,18 @@ func (t *Tasks) ClosePane(target string, force bool) (*term.Pane, error) {
 	}
 	t.journal().Record(e)
 	return p, t.Reg.Update(func(d *Data) error {
-		delete(d.Panes, p.ID)
-		for _, x := range d.Tasks {
-			if x.Pane == p.ID && sameServer(x.Ref, t.Backend.ServerRef()) && !settled(x.Status) && !x.Closed {
-				x.Closed, x.Restarted = true, false
-				if x.Status == "running" {
-					x.Status, x.Ended, x.Summary = "failed", t.clock().Now(), "its pane was closed with --force"
+		now := t.clock().Now()
+		delete(d.Created, p.ID)
+		for _, l := range d.Leases { // the pane is gone: its supervision ends
+			if l.Pane == p.ID && sameServer(l.Ref, ref) {
+				endLease(l, now)
+			}
+		}
+		for _, j := range d.Jobs {
+			if jl := d.leaseOf(j); jl.Pane == p.ID && sameServer(jl.Ref, ref) && !settled(j.Status) && !j.Closed {
+				j.Closed, jl.Restarted = true, false
+				if j.Status == "running" {
+					j.Status, j.Ended, j.Summary = "failed", now, "its pane was closed with --force"
 				}
 			}
 		}
@@ -926,9 +967,9 @@ func (t *Tasks) reviewedBySender(d *Data) string {
 	if t.Sender == nil {
 		return ""
 	}
-	for _, x := range d.Tasks {
-		if x.Blind && x.Pane == t.Sender.ID && open(x.Status) {
-			return x.ReviewOf
+	for _, j := range d.Jobs {
+		if j.Blind && d.leaseOf(j).Pane == t.Sender.ID && open(j.Status) {
+			return j.ReviewOf
 		}
 	}
 	return ""
@@ -945,9 +986,10 @@ func (t *Tasks) Ls(all bool) ([]*Task, error) {
 	}
 	hidden := t.reviewedBySender(d)
 	var out []*Task
-	for _, x := range d.Tasks {
-		if x.ID != hidden && (all || (!x.Closed && (t.Sender == nil || x.Owner == t.Sender.ID))) {
-			out = append(out, x)
+	for _, j := range d.Jobs {
+		l := d.leaseOf(j)
+		if j.ID != hidden && (all || (!j.Closed && (t.Sender == nil || l.Owner == t.Sender.ID))) {
+			out = append(out, d.TaskView(j.ID))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Started < out[j].Started })
@@ -956,65 +998,77 @@ func (t *Tasks) Ls(all bool) ([]*Task, error) {
 
 // Get finds one task by ID or unique prefix.
 func (t *Tasks) Get(id string) (*Task, error) {
-	if err := t.Reconcile(); err != nil {
-		return nil, err
-	}
-	d, err := t.Reg.Read()
+	d, j, _, err := t.getJob(id)
 	if err != nil {
 		return nil, err
 	}
-	return t.find(d.Tasks, id)
+	return d.TaskView(j.ID), nil
+}
+
+// getJob is Get for engine code: the registry as read, the job and its lease.
+func (t *Tasks) getJob(id string) (*Data, *Job, *Lease, error) {
+	if err := t.Reconcile(); err != nil {
+		return nil, nil, nil, err
+	}
+	d, err := t.Reg.Read()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	j, l, err := t.find(d, id)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return d, j, l, nil
 }
 
 // Show is Get for the caller's eyes: a blind reviewer cannot read the task it reviews.
 func (t *Tasks) Show(id string) (*Task, error) {
-	x, err := t.Get(id)
+	d, j, _, err := t.getJob(id)
 	if err != nil {
 		return nil, err
 	}
-	d, err := t.Reg.Read()
-	if err != nil {
-		return nil, err
+	if j.ID == t.reviewedBySender(d) {
+		return nil, term.TargetErr("a blind reviewer cannot read task %s", j.ID)
 	}
-	if x.ID == t.reviewedBySender(d) {
-		return nil, term.TargetErr("a blind reviewer cannot read task %s", x.ID)
-	}
-	return x, nil
+	return d.TaskView(j.ID), nil
 }
 
 // Send messages a task's pane. New work on a finished task reopens it: the worker must report again.
 func (t *Tasks) Send(id, text string, force bool) error {
-	x, err := t.Get(id)
+	_, j, l, err := t.getJob(id)
 	if err != nil {
 		return err
 	}
-	if x.Closed {
-		return term.UsageErr("task %s is closed", x.ID)
+	if j.Closed {
+		return term.UsageErr("task %s is closed", j.ID)
 	}
-	if x.Status == "lost" || x.Status == "exited" {
-		return term.UsageErr("task %s is %s: there is no harness to receive this", x.ID, x.Status)
+	if j.Status == "lost" || j.Status == "exited" {
+		return term.UsageErr("task %s is %s: there is no harness to receive this", j.ID, j.Status)
 	}
-	b, p, err := t.paneByID(x.Pane, x.Ref)
+	b, p, err := t.paneByID(l.Pane, l.Ref)
 	if err != nil {
 		return err
 	}
 	if p == nil {
-		return term.UsageErr("task %s: its pane is gone", x.ID)
+		return term.UsageErr("task %s: its pane is gone", j.ID)
 	}
-	sent, err := t.taskOps(b, t.Sender, x).Msg(p, fmt.Sprintf("task %s: %s (%s)", x.ID, text, sendFooter(x)), MsgOpts{Force: force})
+	sent, err := t.taskOps(b, t.Sender, j, l).Msg(p, fmt.Sprintf("task %s: %s (%s)", j.ID, text, sendFooter(j)), MsgOpts{Force: force})
 	if err != nil && !sent.Typed {
 		return err
 	}
 	// Typed but not confirmed (exit 5) may still arrive: open the round anyway, or the worker's
 	// task done for it would be refused as already reported.
 	t.WarnUncalibratedLead()
-	if x.Status == "running" {
+	if j.Status == "running" {
 		return err
 	}
 	if uerr := t.Reg.Update(func(d *Data) error {
-		c := d.Tasks[x.ID]
+		c := d.Jobs[j.ID]
 		c.Status, c.Ended, c.Notify, c.Seen = "running", 0, "none", false
 		c.Round++
+		// A mark on the lease now is its pane's, taken while the task did not run; the task's own mark
+		// starts empty, as it did when the two were kept apart.
+		d.leaseOf(c).Dialog = nil
 		return nil
 	}); uerr != nil {
 		return uerr
@@ -1022,14 +1076,14 @@ func (t *Tasks) Send(id, text string, force bool) error {
 	return err
 }
 
-func unseen(tasks map[string]*Task, owner string) []*Task {
-	var out []*Task
-	for _, x := range tasks {
-		if x.Owner == owner && x.Status != "running" && !x.Closed && !x.Seen {
-			out = append(out, x)
+func unseen(d *Data, owner string) []*Job {
+	var out []*Job
+	for _, j := range d.Jobs {
+		if d.leaseOf(j).Owner == owner && j.Status != "running" && !j.Closed && !j.Seen {
+			out = append(out, j)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Ended < out[j].Ended })
+	sort.Slice(out, func(i, k int) bool { return out[i].Ended < out[k].Ended })
 	return out
 }
 
@@ -1051,15 +1105,15 @@ func (t *Tasks) Wait(id string, any bool, timeout float64) (*Waited, error) {
 		}
 		me = o.ID
 	} else {
-		x, err := t.Get(id)
+		_, j, l, err := t.getJob(id)
 		if err != nil {
 			return nil, err
 		}
 		// Waiting marks a result seen and a dialog returned, which the owner then never hears of.
-		if t.Sender == nil || x.Owner != t.Sender.ID || !sameServer(x.OwnerRef, t.callerRef()) {
-			return nil, term.TargetErr("only the owner of task %s can wait for it", x.ID)
+		if t.Sender == nil || l.Owner != t.Sender.ID || !sameServer(l.OwnerRef, t.callerRef()) {
+			return nil, term.TargetErr("only the owner of task %s can wait for it", j.ID)
 		}
-		id = x.ID
+		id = j.ID
 	}
 	deadline := t.clock().Now() + timeout
 	for {
@@ -1073,27 +1127,27 @@ func (t *Tasks) Wait(id string, any bool, timeout float64) (*Waited, error) {
 		if err != nil {
 			return nil, err
 		}
-		var found *Task
+		found := ""
 		if any {
-			if u := unseen(d.Tasks, me); len(u) > 0 {
-				found = u[0]
+			if u := unseen(d, me); len(u) > 0 {
+				found = u[0].ID
 			} else {
 				running := false
-				for _, x := range d.Tasks {
-					running = running || (x.Status == "running" && x.Owner == me)
+				for _, j := range d.Jobs {
+					running = running || (j.Status == "running" && d.leaseOf(j).Owner == me)
 				}
 				if !running {
 					return nil, term.UsageErr("no running tasks and no uncollected results to wait for")
 				}
 			}
-		} else if d.Tasks[id].Status != "running" {
-			found = d.Tasks[id]
+		} else if d.Jobs[id].Status != "running" {
+			found = id
 		}
-		if found != nil {
+		if found != "" {
 			var result *Task
 			err := t.Reg.Update(func(d *Data) error {
-				d.Tasks[found.ID].Seen = true
-				result = d.Tasks[found.ID]
+				d.Jobs[found].Seen = true
+				result = d.TaskView(found)
 				return nil
 			})
 			return &Waited{Task: result}, err
@@ -1116,17 +1170,17 @@ func (t *Tasks) Wait(id string, any bool, timeout float64) (*Waited, error) {
 // a watcher serves the caller it reads every screen each round and keeps the marks, so only a worker whose
 // mark shows a dialog not returned yet is read, to get that dialog in full.
 func (t *Tasks) waitDialog(d *Data, owner, id string) (*Waited, error) {
-	var watch []*Task
+	var watch []*Lease
 	if id != "" {
-		watch = []*Task{d.Tasks[id]}
+		watch = []*Lease{d.leaseOf(d.Jobs[id])}
 	} else {
-		watch = runningTasks(d, owner, t.SenderRef)
+		watch = runningLeases(d, owner, t.SenderRef)
 	}
 	if t.Sender != nil && t.Watching(t.Sender.ID) != 0 {
-		var marked []*Task
-		for _, x := range watch {
-			if x.Dialog != nil && !x.Dialog.Returned && !noticeDelivered(d, x) {
-				marked = append(marked, x)
+		var marked []*Lease
+		for _, l := range watch {
+			if l.Dialog != nil && !l.Dialog.Returned && !noticeDelivered(d, l) {
+				marked = append(marked, l)
 			}
 		}
 		watch = marked
@@ -1136,24 +1190,25 @@ func (t *Tasks) waitDialog(d *Data, owner, id string) (*Waited, error) {
 		return nil, err
 	}
 	for _, s := range sigs {
-		if s.Kind != "dialog" {
+		if s.Kind != "dialog" || s.Task == "" {
 			continue
 		}
 		var result *Task
 		if err := t.Reg.Update(func(d *Data) error {
-			x := d.Tasks[s.Task]
-			if x != nil && dialogOnScreen(x, s.Dialog.Fingerprint) && !x.Dialog.Returned && !noticeDelivered(d, x) {
+			j := d.Jobs[s.Task]
+			l := d.leaseOf(j)
+			if j != nil && dialogOnScreen(j, l, s.Dialog.Fingerprint) && !l.Dialog.Returned && !noticeDelivered(d, l) {
 				// The lead has it from task wait: the watcher must not tell it again, and a notice
 				// already queued would arrive stale.
-				x.Dialog.Returned, x.Dialog.Notified = true, true
-				keep := d.Pending[:0]
-				for _, p := range d.Pending {
-					if p.Kind != "dialog" || p.Task != x.ID || p.Dialog != s.Dialog.Fingerprint {
-						keep = append(keep, p)
+				l.Dialog.Returned, l.Dialog.Notified = true, true
+				keep := d.Notices[:0]
+				for _, n := range d.Notices {
+					if n.Kind != "dialog" || n.Lease != l.ID || n.Dialog != s.Dialog.Fingerprint {
+						keep = append(keep, n)
 					}
 				}
-				d.Pending = keep
-				result = x
+				d.Notices = keep
+				result = d.TaskView(j.ID)
 			}
 			return nil
 		}); err != nil {
@@ -1168,12 +1223,12 @@ func (t *Tasks) waitDialog(d *Data, owner, id string) (*Waited, error) {
 
 // noticeDelivered: the owner was told of the task's marked dialog, and no notice of it is still queued. The
 // lead has it from the watcher, so task wait does not return it again.
-func noticeDelivered(d *Data, x *Task) bool {
-	if x.Dialog == nil || !x.Dialog.Notified {
+func noticeDelivered(d *Data, l *Lease) bool {
+	if l.Dialog == nil || !l.Dialog.Notified {
 		return false
 	}
-	for _, p := range d.Pending {
-		if p.Kind == "dialog" && p.Task == x.ID && p.Dialog == x.Dialog.Fingerprint {
+	for _, n := range d.Notices {
+		if n.Kind == "dialog" && n.Lease == l.ID && n.Dialog == l.Dialog.Fingerprint {
 			return false
 		}
 	}
@@ -1187,11 +1242,11 @@ func roundNote(round int) string {
 	return ""
 }
 
-func (t *Tasks) doneTag(x *Task, b term.Backend) (string, error) {
+func (t *Tasks) doneTag(j *Job, l *Lease, b term.Backend) (string, error) {
 	if t.Sender != nil {
 		return t.ops(b, t.Sender).Tag()
 	}
-	return fmt.Sprintf("[agent-ops from %s (%s) id=%s folder=%s]", x.ID, x.Harness, x.Pane, x.Cwd), nil
+	return fmt.Sprintf("[agent-ops from %s (%s) id=%s folder=%s]", j.ID, l.Harness, l.Pane, l.Cwd), nil
 }
 
 // Done records a task's result and tells its owner, or leaves the result pending.
@@ -1212,40 +1267,41 @@ func (t *Tasks) Done(id, status, summary, summaryFile string) (*Task, error) {
 		return nil, term.UsageErr("task done needs --summary or --summary-file")
 	}
 	var tid string
-	var done Task
+	var doneJob Job
+	var doneLease Lease
 	err := t.Reg.Update(func(d *Data) error {
-		x, err := t.find(d.Tasks, id)
+		j, l, err := t.find(d, id)
 		if err != nil {
 			return err
 		}
-		if t.Sender != nil && t.Sender.ID != x.Pane && t.Sender.ID != x.Owner {
-			return term.TargetErr("%s is neither the worker nor the owner of task %s", t.Sender.Address(), x.ID)
+		if t.Sender != nil && t.Sender.ID != l.Pane && t.Sender.ID != l.Owner {
+			return term.TargetErr("%s is neither the worker nor the owner of task %s", t.Sender.Address(), j.ID)
 		}
-		if x.Status != "running" && x.Status != "blocked" {
-			return term.UsageErr("task %s is already %s", x.ID, x.Status)
+		if j.Status != "running" && j.Status != "blocked" {
+			return term.UsageErr("task %s is already %s", j.ID, j.Status)
 		}
-		x.Status, x.Ended, x.Summary, x.Notify = stored, t.clock().Now(), summary, "pending"
-		x.Dialog = nil // the worker is reporting, so nothing waits on screen
-		x.IdleSince, x.Stall = 0, nil
-		tid = x.ID
-		if x.Defer { // nobody reads a deferred job's result: recorded and journaled, never typed
-			x.Notify = "none"
-			done = *x
+		j.Status, j.Ended, j.Summary, j.Notify = stored, t.clock().Now(), summary, "pending"
+		l.Dialog = nil // the worker is reporting, so nothing waits on screen
+		l.IdleSince, l.Stall = 0, nil
+		tid = j.ID
+		if j.Defer { // nobody reads a deferred job's result: recorded and journaled, never typed
+			j.Notify = "none"
+			doneJob, doneLease = *j, *l
 			return nil
 		}
-		done = *x
-		tag, err := t.doneTag(x, t.Backend)
+		doneJob, doneLease = *j, *l
+		tag, err := t.doneTag(j, l, t.Backend)
 		if err != nil {
 			return err
 		}
-		d.Pending = append(d.Pending, &Pending{Task: tid, Owner: x.Owner, OwnerRef: x.OwnerRef, Tag: tag,
-			Text: fmt.Sprintf("RE: task %s (%s) %s%s: %s", tid, x.Title, x.Status, roundNote(x.Round), summary), Created: t.clock().Now()})
+		d.Notices = append(d.Notices, &Notice{ID: newNoticeID(d), Lease: l.ID, Owner: l.Owner, OwnerRef: l.OwnerRef, Tag: tag, Kind: "result",
+			Text: fmt.Sprintf("RE: task %s (%s) %s%s: %s", tid, j.Title, j.Status, roundNote(j.Round), summary), Created: t.clock().Now()})
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	t.logTask("task.done", &done, done.Status, summary)
+	t.logTask("task.done", &doneJob, &doneLease, doneJob.Status, summary)
 	deadline := t.clock().Now() + notifyRetry
 	for {
 		if _, err := t.FlushPending(); err != nil {
@@ -1255,8 +1311,8 @@ func (t *Tasks) Done(id, status, summary, summaryFile string) (*Task, error) {
 		if err != nil {
 			return nil, err
 		}
-		if d.Tasks[tid].Notify != "pending" || t.clock().Now() >= deadline {
-			return d.Tasks[tid], nil
+		if d.Jobs[tid].Notify != "pending" || t.clock().Now() >= deadline {
+			return d.TaskView(tid), nil
 		}
 		t.sleep(notifyPoll)
 	}
@@ -1271,53 +1327,55 @@ func (t *Tasks) Progress(id, text string, notify bool) (*Task, error) {
 	if text == "" {
 		return nil, term.UsageErr("task progress needs --summary")
 	}
-	var out Task
+	var out *Task
+	var outJob Job
+	var outLease Lease
 	err := t.Reg.Update(func(d *Data) error {
-		x, err := t.find(d.Tasks, id)
+		j, l, err := t.find(d, id)
 		if err != nil {
 			return err
 		}
-		if t.Sender == nil || (t.Sender.ID != x.Pane && t.Sender.ID != x.Owner) {
-			return term.TargetErr("only the worker or the owner of task %s can report its progress", x.ID)
+		if t.Sender == nil || (t.Sender.ID != l.Pane && t.Sender.ID != l.Owner) {
+			return term.TargetErr("only the worker or the owner of task %s can report its progress", j.ID)
 		}
-		if x.Closed {
-			return term.UsageErr("task %s is closed", x.ID)
+		if j.Closed {
+			return term.UsageErr("task %s is closed", j.ID)
 		}
-		if x.Status != "running" {
-			return term.UsageErr("task %s is %s: progress is for a running task", x.ID, x.Status)
+		if j.Status != "running" {
+			return term.UsageErr("task %s is %s: progress is for a running task", j.ID, j.Status)
 		}
 		now := t.clock().Now()
-		x.Progress = &ProgressNote{Text: text, At: now}
-		x.IdleSince, x.Stall = 0, nil
+		l.Progress = &ProgressNote{Text: text, At: now}
+		l.IdleSince, l.Stall = 0, nil
 		if notify {
-			keep := d.Pending[:0]
-			for _, p := range d.Pending {
-				if p.Kind == "progress" && p.Task == x.ID && p.Claimed == 0 {
+			keep := d.Notices[:0]
+			for _, n := range d.Notices {
+				if n.Kind == "progress" && n.Lease == l.ID && n.Claimed == 0 {
 					continue // not being typed: the newer line replaces it
 				}
-				keep = append(keep, p)
+				keep = append(keep, n)
 			}
-			d.Pending = keep
-			tag, err := t.doneTag(x, t.Backend)
+			d.Notices = keep
+			tag, err := t.doneTag(j, l, t.Backend)
 			if err != nil {
 				return err
 			}
-			d.Pending = append(d.Pending, &Pending{Task: x.ID, Owner: x.Owner, OwnerRef: x.OwnerRef, Tag: tag, Kind: "progress",
-				Text: fmt.Sprintf("PROGRESS task %s (%s)%s: %s", x.ID, x.Title, roundNote(x.Round), text), Created: now})
+			d.Notices = append(d.Notices, &Notice{ID: newNoticeID(d), Lease: l.ID, Owner: l.Owner, OwnerRef: l.OwnerRef, Tag: tag, Kind: "progress",
+				Text: fmt.Sprintf("PROGRESS task %s (%s)%s: %s", j.ID, j.Title, roundNote(j.Round), text), Created: now})
 		}
-		out = *x
+		out, outJob, outLease = d.TaskView(j.ID), *j, *l
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	t.logTask("task.progress", &out, out.Status, text)
+	t.logTask("task.progress", &outJob, &outLease, outJob.Status, text)
 	if notify {
 		if _, err := t.FlushPending(); err != nil {
 			return nil, err
 		}
 	}
-	return &out, nil
+	return out, nil
 }
 
 // TaskNode is a task with the tasks started from its worker's pane (their Parent), for task ls --tree.
@@ -1358,8 +1416,9 @@ func (t *Tasks) Tree(all bool) ([]*TaskNode, error) {
 		return nil, err
 	}
 	hidden := t.reviewedBySender(d)
+	views := d.TaskViews()
 	kids := map[string][]*Task{}
-	for _, x := range d.Tasks {
+	for _, x := range views {
 		if x.Parent != "" && x.ID != hidden && (all || !x.Closed) {
 			kids[x.Parent] = append(kids[x.Parent], x)
 		}
@@ -1370,7 +1429,7 @@ func (t *Tasks) Tree(all bool) ([]*TaskNode, error) {
 	if all {
 		var top []*Task
 		for _, x := range roots {
-			if p := d.Tasks[x.Parent]; p == nil || p.ID == hidden {
+			if p := views[x.Parent]; p == nil || p.ID == hidden {
 				top = append(top, x)
 			}
 		}
@@ -1424,72 +1483,73 @@ func claimerDead(pid int) bool {
 // FlushPending delivers held-back results. A claim under the lock stops two processes delivering the same one.
 func (t *Tasks) FlushPending() (int, error) {
 	d, err := t.Reg.Read()
-	if err != nil || len(d.Pending) == 0 {
+	if err != nil || len(d.Notices) == 0 {
 		return 0, err
 	}
 	now := t.clock().Now()
-	var claimed []Pending
+	var claimed []Notice
 	if err := t.Reg.Update(func(d *Data) error {
-		keep := d.Pending[:0]
-		for _, p := range d.Pending {
-			liveClaim := p.Claimed != 0 && now-p.Claimed <= claimTTL && !claimerDead(p.ClaimPid)
-			if now-p.Created > PendingTTL && !liveClaim { // expiring a notice being typed would announce it again
-				if x := d.Tasks[p.Task]; x != nil && p.Kind == "" {
-					x.Notify = "expired"
+		keep := d.Notices[:0]
+		for _, n := range d.Notices {
+			liveClaim := n.Claimed != 0 && now-n.Claimed <= claimTTL && !claimerDead(n.ClaimPid)
+			j := d.jobOf(d.Leases[n.Lease])
+			if now-n.Created > PendingTTL && !liveClaim { // expiring a notice being typed would announce it again
+				if j != nil && n.Kind == "result" {
+					j.Notify = "expired"
 				}
-				untold(d, p)
+				untold(d, n)
 				continue
 			}
-			if !noticeLive(d, p) && (p.Kind == "dialog" || !liveClaim) {
+			if !noticeLive(d, n) && (n.Kind == "dialog" || !liveClaim) {
 				continue // answered, ended or gone before its notice got through: telling the owner now would mislead
 			}
-			if x := d.Tasks[p.Task]; p.Kind == "" && x != nil && (x.Seen || x.Closed) && !liveClaim {
-				x.Notify = "seen" // the owner took the result with task wait: the notice would wake it for nothing
+			if n.Kind == "result" && j != nil && (j.Seen || j.Closed) && !liveClaim {
+				j.Notify = "seen" // the owner took the result with task wait: the notice would wake it for nothing
 				continue
 			}
-			if p.Claimed == 0 || now-p.Claimed > claimTTL || claimerDead(p.ClaimPid) {
-				p.Claimed, p.ClaimPid = now, os.Getpid()
-				claimed = append(claimed, *p)
+			if n.Claimed == 0 || now-n.Claimed > claimTTL || claimerDead(n.ClaimPid) {
+				n.Claimed, n.ClaimPid = now, os.Getpid()
+				claimed = append(claimed, *n)
 			}
-			keep = append(keep, p)
+			keep = append(keep, n)
 		}
-		d.Pending = keep
+		d.Notices = keep
 		return nil
 	}); err != nil {
 		return 0, err
 	}
 	delivered := 0
-	for _, p := range claimed {
+	for _, n := range claimed {
 		// Each delivery takes a second or more, so a dialog claimed above can be answered or gone by now.
-		if p.Kind != "" {
-			if stale, err := t.dropStaleNotice(p); err != nil || stale {
+		if n.Kind != "result" {
+			if stale, err := t.dropStaleNotice(n); err != nil || stale {
 				if err != nil {
 					return delivered, err
 				}
 				continue
 			}
 		}
-		outcome := t.deliver(p)
+		outcome := t.deliver(n)
 		if outcome == "delivered" {
 			delivered++
 		}
 		if err := t.Reg.Update(func(d *Data) error {
-			for i, q := range d.Pending {
-				if q.Task == p.Task && q.Pane == p.Pane && q.Created == p.Created {
-					if outcome == "retry" || outcome == "held" {
-						q.Claimed, q.ClaimPid = 0, 0
-					} else {
-						if x := d.Tasks[p.Task]; x != nil && p.Kind == "" {
-							x.Notify = outcome
-						}
-						if outcome != "delivered" {
-							untold(d, q)
-						}
-						d.Pending = append(d.Pending[:i], d.Pending[i+1:]...)
-					}
-					break
-				}
+			i := d.findNotice(n.ID)
+			if i < 0 {
+				return nil
 			}
+			q := d.Notices[i]
+			if outcome == "retry" || outcome == "held" {
+				q.Claimed, q.ClaimPid = 0, 0
+				return nil
+			}
+			if j := d.jobOf(d.Leases[q.Lease]); j != nil && q.Kind == "result" {
+				j.Notify = outcome
+			}
+			if outcome != "delivered" {
+				untold(d, q)
+			}
+			d.Notices = append(d.Notices[:i], d.Notices[i+1:]...)
 			return nil
 		}); err != nil {
 			return delivered, err
@@ -1501,35 +1561,33 @@ func (t *Tasks) FlushPending() (int, error) {
 // noticeLive: what a notice is about still holds. A dialog notice: its dialog is still marked on screen. A
 // progress or stall notice: its task still runs, and for a stall, its stall mark is still there (the worker
 // was not seen at work again, and reported no progress). A task result always holds.
-func noticeLive(d *Data, p *Pending) bool {
-	switch p.Kind {
+func noticeLive(d *Data, n *Notice) bool {
+	l := d.Leases[n.Lease]
+	switch n.Kind {
 	case "dialog":
-		return noticeOnScreen(d, p)
+		return noticeOnScreen(d, n)
 	case "progress", "stall":
-		x := d.Tasks[p.Task]
-		return x != nil && x.Status == "running" && !x.Closed && (p.Kind == "progress" || x.Stall != nil)
+		j := d.jobOf(l)
+		return j != nil && j.Status == "running" && !j.Closed && (n.Kind == "progress" || l.Stall != nil)
 	case "escalate": // of a dialog: it still waits; of ended tasks with running sub-tasks: always
-		return p.Dialog == "" || dialogOnScreen(d.Tasks[p.Task], p.Dialog)
+		return n.Dialog == "" || dialogOnScreen(d.jobOf(l), l, n.Dialog)
 	}
 	return true
 }
 
 // dropStaleNotice reads the registry right before a notice is sent, and drops the notice when what it is
 // about no longer holds: a dialog answered or gone, a task that ended, a stall that ended, since it was claimed.
-func (t *Tasks) dropStaleNotice(p Pending) (bool, error) {
+func (t *Tasks) dropStaleNotice(n Notice) (bool, error) {
 	d, err := t.Reg.Read()
 	if err != nil {
 		return false, err
 	}
-	if noticeLive(d, &p) {
+	if noticeLive(d, &n) {
 		return false, nil
 	}
 	return true, t.Reg.Update(func(d *Data) error {
-		for i, q := range d.Pending {
-			if q.Task == p.Task && q.Pane == p.Pane && q.Created == p.Created {
-				d.Pending = append(d.Pending[:i], d.Pending[i+1:]...)
-				break
-			}
+		if i := d.findNotice(n.ID); i >= 0 {
+			d.Notices = append(d.Notices[:i], d.Notices[i+1:]...)
 		}
 		return nil
 	})
@@ -1537,41 +1595,48 @@ func (t *Tasks) dropStaleNotice(p Pending) (bool, error) {
 
 // untold clears the mark's notified flag when a dialog notice is dropped before it reached the owner,
 // so the watcher announces the dialog again while it stays on screen. One task wait returned stays told.
-func untold(d *Data, p *Pending) {
-	if p.Kind != "dialog" || !noticeOnScreen(d, p) {
+func untold(d *Data, n *Notice) {
+	if n.Kind != "dialog" || !noticeOnScreen(d, n) {
 		return
 	}
-	if p.Task == "" {
-		d.Panes[p.Pane].Dialog.Notified = false
-	} else if x := d.Tasks[p.Task]; !x.Dialog.Returned {
-		x.Dialog.Notified = false
+	l := d.Leases[n.Lease]
+	if !(dialogOnScreen(d.jobOf(l), l, n.Dialog) && l.Dialog.Returned) {
+		l.Dialog.Notified = false
 	}
 }
 
 // about names what a notice is about, for warnings.
-func (p Pending) about() string {
-	if p.Task == "" && p.Pane != "" {
-		return "pane " + p.Pane
+func (n Notice) about(d *Data) string {
+	l := d.Leases[n.Lease]
+	switch {
+	case l == nil:
+		return "lease " + n.Lease
+	case l.Job == "":
+		return "pane " + l.Pane
 	}
-	return "task " + p.Task
+	return "task " + l.Job
 }
 
-func (t *Tasks) deliver(p Pending) string {
-	b, pane, err := t.paneByID(p.Owner, p.OwnerRef)
+func (t *Tasks) deliver(n Notice) string {
+	d, rerr := t.Reg.Read()
+	if rerr != nil {
+		d = emptyData()
+	}
+	about := n.about(d)
+	b, pane, err := t.paneByID(n.Owner, n.OwnerRef)
 	if err != nil {
-		Warn(fmt.Sprintf("could not notify the owner of %s: %v", p.about(), err))
+		Warn(fmt.Sprintf("could not notify the owner of %s: %v", about, err))
 		return "retry"
 	}
 	if pane == nil {
 		return "owner-gone"
 	}
-	if p.Kind == "dialog" && !ForProcess(pane.Process).Calibrated {
+	if n.Kind == "dialog" && !ForProcess(pane.Process).Calibrated {
 		return "held" // typed blind, its letters could land in the lead's own menus: task wait returns it
 	}
 	ops := t.ops(b, nil)
-	ops.Task = p.Task
-	if d, err := t.Reg.Read(); err == nil && d.Tasks[p.Task] != nil {
-		ops.Project, ops.From = d.Tasks[p.Task].Project, d.Tasks[p.Task].Pane // the worker's report
+	if l := d.Leases[n.Lease]; l != nil { // the worker's report: filed under its lease's project, task and scope
+		ops.Task, ops.Project, ops.From, ops.Scope = l.Job, l.Project, l.Pane, l.Scope
 	}
 	// A notice goes only to an idle owner, for up to idleWait: typed into a busy Claude Code it is queued
 	// on the input line, and before v0.7.2 each later look read it as unsent and typed it again (2026-11-19:
@@ -1580,8 +1645,8 @@ func (t *Tasks) deliver(p Pending) string {
 	// busy pattern left in its last output, a status stuck on working) must still hear, once.
 	// A dialog notice goes at once, busy or not: the worker is stalled until the owner answers, and a lead
 	// that heard nothing polled read/ls in a loop to find its dialogs (2026-11-19). It is typed once (v0.7.2).
-	idleOnly := p.Kind != "dialog" && t.clock().Now()-p.Created < idleWait
-	if sent, err := ops.Msg(pane, p.Text, MsgOpts{Tag: p.Tag, Retry: true, IdleOnly: idleOnly}); err != nil {
+	idleOnly := n.Kind != "dialog" && t.clock().Now()-n.Created < idleWait
+	if sent, err := ops.Msg(pane, n.Text, MsgOpts{Tag: n.Tag, Retry: true, IdleOnly: idleOnly}); err != nil {
 		if errors.Is(err, ErrBusy) {
 			return "retry"
 		}
@@ -1590,50 +1655,52 @@ func (t *Tasks) deliver(p Pending) string {
 			// Typed, but not confirmed (still on the input line, or a backend error after typing): a busy
 			// harness can hold a queued message there and deliver it later. A retry could type it a second
 			// time, so it counts as delivered.
-			Warn(fmt.Sprintf("the notice about %s was typed but not confirmed; not sent again: %v", p.about(), err))
+			Warn(fmt.Sprintf("the notice about %s was typed but not confirmed; not sent again: %v", about, err))
 			return "delivered"
 		}
 		if !errors.As(err, &te) || te.Code != term.CodeDraft {
-			Warn(fmt.Sprintf("could not notify the owner of %s: %v", p.about(), err))
+			Warn(fmt.Sprintf("could not notify the owner of %s: %v", about, err))
 		}
 		return "retry"
 	}
 	return "delivered"
 }
 
-// otherTaskOnPane returns another task on x's pane (same server) that still holds it (not closed, not
-// settled) or was started after x; open holders come before newer settled/closed tasks.
-func otherTaskOnPane(d *Data, x *Task) *Task {
-	if x.Pane == "" {
-		return nil
+// otherTaskOnPane returns another task on l's pane (same server) that still holds it (not closed, not
+// settled) or was started after j; open holders come before newer settled/closed tasks.
+func otherTaskOnPane(d *Data, j *Job, l *Lease) (*Job, *Lease) {
+	if l.Pane == "" {
+		return nil, nil
 	}
-	var openOther, newer *Task
-	for _, y := range d.Tasks {
-		if y.ID == x.ID || y.Pane != x.Pane || !sameServer(y.Ref, x.Ref) {
+	var openOther, newer *Job
+	var openOtherL, newerL *Lease
+	for _, y := range d.Jobs {
+		yl := d.leaseOf(y)
+		if y.ID == j.ID || yl.Pane != l.Pane || !sameServer(yl.Ref, l.Ref) {
 			continue
 		}
-		if !y.Closed && !settled(y.Status) && (openOther == nil || newerTask(y, openOther)) {
-			openOther = y
+		if !y.Closed && !settled(y.Status) && (openOther == nil || newerTask(y, yl, openOther, openOtherL)) {
+			openOther, openOtherL = y, yl
 		}
-		if y.Started > x.Started && (newer == nil || newerTask(y, newer)) {
-			newer = y
+		if y.Started > j.Started && (newer == nil || newerTask(y, yl, newer, newerL)) {
+			newer, newerL = y, yl
 		}
 	}
 	if openOther != nil {
-		return openOther
+		return openOther, openOtherL
 	}
-	return newer
+	return newer, newerL
 }
 
-// paneKeepReason reports why closing task x must leave its pane open, or "" when x may close it.
-func paneKeepReason(d *Data, x *Task) string {
-	if x.Pane == "" {
+// paneKeepReason reports why closing task j (on lease l) must leave its pane open, or "" when it may close it.
+func paneKeepReason(d *Data, j *Job, l *Lease) string {
+	if l.Pane == "" {
 		return ""
 	}
-	if !x.Owned {
+	if !createdFor(d, l) {
 		return "it was not created for this task"
 	}
-	if other := otherTaskOnPane(d, x); other != nil {
+	if other, _ := otherTaskOnPane(d, j, l); other != nil {
 		if !other.Closed && !settled(other.Status) {
 			return fmt.Sprintf("task %s (%s) holds it", other.ID, other.Status)
 		}
@@ -1651,23 +1718,19 @@ func (t *Tasks) Close(id string, force bool) (*Task, error) {
 
 // CloseWithNote closes a task and returns why its pane stayed open, or "" when it closed (or had none).
 func (t *Tasks) CloseWithNote(id string, force bool) (*Task, string, error) {
-	x, err := t.Get(id)
+	d, j, l, err := t.getJob(id)
 	if err != nil {
 		return nil, "", err
 	}
-	if t.isSelf(x.Pane) {
+	if t.isSelf(l.Pane) {
 		return nil, "", term.TargetErr("refusing to close your own pane")
 	}
-	if !settled(x.Status) && !force {
-		return nil, "", term.Errf(term.CodeGuard, "task %s is %s, not accepted; use task accept, or --force", x.ID, x.Status)
+	if !settled(j.Status) && !force {
+		return nil, "", term.Errf(term.CodeGuard, "task %s is %s, not accepted; use task accept, or --force", j.ID, j.Status)
 	}
-	d, err := t.Reg.Read()
-	if err != nil {
-		return nil, "", err
-	}
-	kept := paneKeepReason(d, x)
-	if kept == "" && x.Pane != "" {
-		b, p, err := t.paneByID(x.Pane, x.Ref)
+	kept := paneKeepReason(d, j, l)
+	if kept == "" && l.Pane != "" {
+		b, p, err := t.paneByID(l.Pane, l.Ref)
 		if err != nil {
 			return nil, "", err
 		}
@@ -1678,52 +1741,73 @@ func (t *Tasks) CloseWithNote(id string, force bool) (*Task, string, error) {
 		}
 	}
 	var result *Task
+	var cj Job
+	var cl Lease
 	err = t.Reg.Update(func(d *Data) error {
-		c := d.Tasks[x.ID]
-		kept = paneKeepReason(d, c)
-		c.Closed, c.Dialog, c.Restarted = true, nil, false
+		c := d.Jobs[j.ID]
+		l := d.leaseOf(c)
+		now := t.clock().Now()
+		kept = paneKeepReason(d, c, l)
+		c.Closed, l.Dialog, l.Restarted = true, nil, false
 		if c.Status == "running" {
-			c.Status, c.Ended, c.Summary = "failed", t.clock().Now(), "closed by its owner before it finished"
+			c.Status, c.Ended, c.Summary = "failed", now, "closed by its owner before it finished"
 		}
-		if kept == "" && c.Pane != "" {
-			delete(d.Panes, c.Pane)
+		wasActive := l.State == "active"
+		if kept == "" && l.Pane != "" {
+			delete(d.Created, l.Pane)
+			endLease(l, now)
+			for _, ol := range d.Leases {
+				if ol.State == "active" && ol.Pane == l.Pane && sameServer(ol.Ref, l.Ref) {
+					endLease(ol, now)
+				}
+			}
+		} else {
+			endLease(l, now)
+			// A pane harness-ops created that this task reused (or adopted) stays open, and stays its lead's:
+			// a bare lease takes over, so ls --mine, answer and key go on working on it.
+			if cp := d.Created[l.Pane]; wasActive && cp != nil && sameServer(cp.Ref, l.Ref) && activeLeaseForPane(d, l.Pane, l.Ref) == nil {
+				bare := &Lease{ID: newLeaseID(d), Owner: l.Owner, OwnerRef: l.OwnerRef, Pane: l.Pane, Ref: l.Ref, Harness: l.Harness,
+					Label: l.Label, Cwd: l.Cwd, Project: l.Project, Parent: l.Parent, Root: l.Root, Depth: l.Depth, SubDepth: l.SubDepth,
+					TreeMax: l.TreeMax, State: "active", Launched: true, Started: now}
+				d.Leases[bare.ID] = bare
+			}
 		}
-		result = c
+		result, cj, cl = d.TaskView(c.ID), *c, *l
 		return nil
 	})
 	if err == nil {
 		note := ""
-		if kept != "" && result.Pane != "" {
+		if kept != "" && cl.Pane != "" {
 			note = "pane left open: " + kept
 		}
-		t.logTask("task.close", result, result.Status, note)
+		t.logTask("task.close", &cj, &cl, cj.Status, note)
 	}
 	return result, kept, err
 }
 
 // Accept is the lead's verdict: only it makes a task done.
 func (t *Tasks) Accept(id string, closeIt bool) (*Task, error) {
-	x, err := t.Get(id)
+	_, j, l, err := t.getJob(id)
 	if err != nil {
 		return nil, err
 	}
-	if t.Sender == nil || t.Sender.ID != x.Owner {
-		return nil, term.TargetErr("only the owner of task %s can accept it", x.ID)
+	if t.Sender == nil || t.Sender.ID != l.Owner {
+		return nil, term.TargetErr("only the owner of task %s can accept it", j.ID)
 	}
-	if x.Status != "ready" {
-		return nil, term.UsageErr("task %s is %s; only a ready task can be accepted", x.ID, x.Status)
+	if j.Status != "ready" {
+		return nil, term.UsageErr("task %s is %s; only a ready task can be accepted", j.ID, j.Status)
 	}
 	if err := t.Reg.Update(func(d *Data) error {
-		d.Tasks[x.ID].Status = "done"
+		d.Jobs[j.ID].Status = "done"
 		return nil
 	}); err != nil {
 		return nil, err
 	}
-	t.logTask("task.accept", x, "done", "")
+	t.logTask("task.accept", j, l, "done", "")
 	if closeIt {
-		return t.Close(x.ID, false)
+		return t.Close(j.ID, false)
 	}
-	return t.Get(x.ID)
+	return t.Get(j.ID)
 }
 
 // ReviewOpts are options of Review.
@@ -1743,10 +1827,10 @@ func stripFooter(brief, id string) string {
 	return strings.TrimSpace(strings.TrimSuffix(brief, footer(id)))
 }
 
-func (t *Tasks) blindBrief(x *Task) string {
+func (t *Tasks) blindBrief(j *Job) string {
 	requirements := "(the original brief is not available; review against what the code claims to do)"
-	if data, err := os.ReadFile(x.Brief); err == nil {
-		requirements = stripFooter(string(data), x.ID)
+	if data, err := os.ReadFile(j.Brief); err == nil {
+		requirements = stripFooter(string(data), j.ID)
 	}
 	return "Blind review. You do not have the worker's report, and you must not look for it.\n" +
 		"Inspect the changes in this folder (start with `git status` and `git diff`) against the requirements below.\n" +
@@ -1766,12 +1850,12 @@ func (t *Tasks) Review(o ReviewOpts) (*Task, error) {
 	if !known && o.Command == "" {
 		return nil, term.UsageErr("unknown harness '%s'; pass --command", o.Harness)
 	}
-	x, err := t.Get(o.ID)
+	_, j, l, err := t.getJob(o.ID)
 	if err != nil {
 		return nil, err
 	}
-	if x.Status == "running" {
-		return nil, term.UsageErr("task %s is still running; review it after the worker reports", x.ID)
+	if j.Status == "running" {
+		return nil, term.UsageErr("task %s is still running; review it after the worker reports", j.ID)
 	}
 	cmd := o.Command
 	if cmd == "" {
@@ -1785,7 +1869,7 @@ func (t *Tasks) Review(o ReviewOpts) (*Task, error) {
 			Warn(fmt.Sprintf("%s has no verified read-only mode; this reviewer can change files", o.Harness))
 		}
 	}
-	brief := t.blindBrief(x)
+	brief := t.blindBrief(j)
 	if o.BriefFile != "" {
 		data, err := os.ReadFile(ExpandHome(o.BriefFile))
 		if err != nil {
@@ -1793,6 +1877,6 @@ func (t *Tasks) Review(o ReviewOpts) (*Task, error) {
 		}
 		brief = string(data)
 	}
-	return t.New(NewOpts{Harness: o.Harness, Title: "blind review of " + x.ID, Brief: brief, Cwd: x.Cwd, Where: o.Where,
-		Command: cmd, Timeout: o.Timeout, ReviewOf: x.ID, Blind: true})
+	return t.New(NewOpts{Harness: o.Harness, Title: "blind review of " + j.ID, Brief: brief, Cwd: l.Cwd, Where: o.Where,
+		Command: cmd, Timeout: o.Timeout, ReviewOf: j.ID, Blind: true})
 }

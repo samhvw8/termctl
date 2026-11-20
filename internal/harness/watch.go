@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/samhvw8/termctl/internal/term"
 )
@@ -23,6 +24,7 @@ import (
 // itself blocked; it rides along with a dialog and is never a dialog on its own.
 type Signal struct {
 	Task   string
+	Lease  string // the lease of the pane, task or not
 	Pane   string
 	Kind   string
 	Dialog *Dialog
@@ -36,9 +38,9 @@ type Signal struct {
 	Idle bool
 }
 
-// Source finds signals for tasks. The screen source reads each worker's screen.
+// Source finds signals for the panes of leases. The screen source reads each worker's screen.
 type Source interface {
-	Signals(tasks []*Task) []Signal
+	Signals(leases []*Lease) []Signal
 }
 
 const (
@@ -52,8 +54,9 @@ const (
 // worker is a watched live pane, resolved once per round: a running task's worker, or (task nil) a pane
 // the owner started that no running task holds.
 type worker struct {
-	task *Task
-	b    term.Backend
+	lease *Lease
+	task  string // the running job the lease carries, "" for a pane no running task holds
+	b     term.Backend
 	p    *term.Pane
 	prof *Profile
 }
@@ -63,25 +66,25 @@ type worker struct {
 // into the notice; on its own it is never taken as a dialog.
 type screenSource struct{ t *Tasks }
 
-func (s screenSource) Signals(tasks []*Task) []Signal {
-	ws := s.t.workers(tasks)
+func (s screenSource) Signals(leases []*Lease) []Signal {
+	ws := s.t.workers(leases)
 	return s.t.read(ws, programStatuses(ws, nil))
 }
 
 // workers resolves the panes of launched tasks whose harness has a dialog reader. Panes are listed once
 // per backend for the whole round.
-func (t *Tasks) workers(tasks []*Task) []worker {
+func (t *Tasks) workers(leases []*Lease) []worker {
 	memo := t.memo == nil
 	if memo {
 		t.startMemo()
 		defer t.stopMemo()
 	}
 	var out []worker
-	for _, x := range tasks {
-		if x.Pane == "" || !x.Launched {
+	for _, l := range leases {
+		if l == nil || l.Pane == "" || !l.Launched {
 			continue
 		}
-		b, p, err := t.paneByID(x.Pane, x.Ref)
+		b, p, err := t.paneByID(l.Pane, l.Ref)
 		if err != nil || p == nil {
 			continue
 		}
@@ -89,7 +92,7 @@ func (t *Tasks) workers(tasks []*Task) []worker {
 		if prof.ReadDialog == nil {
 			continue
 		}
-		out = append(out, worker{task: x, b: b, p: p, prof: prof})
+		out = append(out, worker{lease: l, task: l.Job, b: b, p: p, prof: prof})
 	}
 	return out
 }
@@ -97,29 +100,35 @@ func (t *Tasks) workers(tasks []*Task) []worker {
 // paneWorkers resolves the panes the owner started (spawn or task new) on its server that no running task
 // holds, and whose harness has a dialog reader: a dialog there is marked on the pane's record. gone lists
 // the recorded panes whose server answered without them that still carry a mark, so the mark can go.
-func (t *Tasks) paneWorkers(d *Data, owner string, ref map[string]string) (out []worker, gone []string) {
+func (t *Tasks) paneWorkers(d *Data, owner string, ref map[string]string) (out []worker, gone []*Lease) {
 	memo := t.memo == nil
 	if memo {
 		t.startMemo()
 		defer t.stopMemo()
 	}
-	ids := make([]string, 0, len(d.Panes))
-	for id := range d.Panes {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		rec := d.Panes[id]
-		if rec.Owner != owner || id == owner || !sameServer(rec.OwnerRef, ref) || paneHeld(d, id) {
+	byPane := map[string]*Lease{}
+	var panes []string
+	for _, l := range d.Leases {
+		if l.State != "active" || l.Pane == "" || l.Owner != owner || l.Pane == owner || !sameServer(l.OwnerRef, ref) || paneHeld(d, l) {
 			continue
 		}
-		b, p, err := t.paneByID(id, rec.Ref)
+		if byPane[l.Pane] == nil {
+			panes = append(panes, l.Pane)
+		}
+		if o := byPane[l.Pane]; o == nil || l.ID < o.ID {
+			byPane[l.Pane] = l
+		}
+	}
+	sort.Strings(panes)
+	for _, id := range panes {
+		l := byPane[id]
+		b, p, err := t.paneByID(id, l.Ref)
 		if err != nil { // unknown is not gone
 			continue
 		}
 		if p == nil {
-			if rec.Dialog != nil {
-				gone = append(gone, id)
+			if l.Dialog != nil {
+				gone = append(gone, l)
 			}
 			continue
 		}
@@ -127,28 +136,11 @@ func (t *Tasks) paneWorkers(d *Data, owner string, ref map[string]string) (out [
 		if prof.ReadDialog == nil {
 			continue
 		}
-		out = append(out, worker{b: b, p: p, prof: prof})
+		out = append(out, worker{lease: l, b: b, p: p, prof: prof})
 	}
 	return out, gone
 }
 
-// paneHeld: a running task holds the pane, so a dialog on it is that task's.
-func paneHeld(d *Data, pane string) bool {
-	for _, x := range d.Tasks {
-		if x.Pane == pane && x.Status == "running" && !x.Closed {
-			return true
-		}
-	}
-	return false
-}
-
-// taskID is the worker's task, or "" for a pane no running task holds.
-func (w worker) taskID() string {
-	if w.task == nil {
-		return ""
-	}
-	return w.task.ID
-}
 
 // programStatuses asks each backend with a StatusReader once for the status of its workers' panes (tmux
 // and Ghostty have none). A failed read keeps what was read, and its error goes to warn when given.
@@ -230,16 +222,16 @@ func (t *Tasks) read(ws []worker, status map[string]term.ProgramStatus) []Signal
 		switch {
 		case screens[i] == nil:
 		case dialogs[i] != nil:
-			sig := Signal{Task: w.taskID(), Pane: w.p.ID, Kind: "dialog", Dialog: dialogs[i], At: ats[i]}
+			sig := Signal{Task: w.task, Lease: w.lease.ID, Pane: w.p.ID, Kind: "dialog", Dialog: dialogs[i], At: ats[i]}
 			if st := status[w.p.ID]; st.Blocked() {
 				sig.Status = st.Msg
 			}
 			out = append(out, sig)
 		case w.prof.ReadInput(screens[i]) != nil:
 			idle := w.prof.Calibrated && !working && *w.prof.ReadInput(screens[i]) == ""
-			out = append(out, Signal{Task: w.taskID(), Pane: w.p.ID, Kind: "clear", At: ats[i], Working: working, Idle: idle})
+			out = append(out, Signal{Task: w.task, Lease: w.lease.ID, Pane: w.p.ID, Kind: "clear", At: ats[i], Working: working, Idle: idle})
 		default: // no dialog and no input line: a turn in progress, or a screen this reader does not know
-			out = append(out, Signal{Task: w.taskID(), Pane: w.p.ID, Kind: "busy", At: ats[i], Working: working})
+			out = append(out, Signal{Task: w.task, Lease: w.lease.ID, Pane: w.p.ID, Kind: "busy", At: ats[i], Working: working})
 		}
 	}
 	return out
@@ -247,10 +239,10 @@ func (t *Tasks) read(ws []worker, status map[string]term.ProgramStatus) []Signal
 
 func (t *Tasks) sources() []Source { return []Source{screenSource{t}} }
 
-func (t *Tasks) signals(tasks []*Task) []Signal {
+func (t *Tasks) signals(leases []*Lease) []Signal {
 	var out []Signal
 	for _, s := range t.sources() {
-		out = append(out, s.Signals(tasks)...)
+		out = append(out, s.Signals(leases)...)
 	}
 	return out
 }
@@ -309,64 +301,70 @@ func (t *Tasks) listPanes(paneID string, ref map[string]string) (term.Backend, [
 
 // dialogOnScreen: the task's worker still waits on dialog fp. A task that is no longer running (lost,
 // exited, reported) or was closed waits on nothing, whatever mark it kept.
-func dialogOnScreen(x *Task, fp string) bool {
-	return x != nil && x.Status == "running" && !x.Closed && x.Dialog != nil && x.Dialog.Fingerprint == fp
+func dialogOnScreen(j *Job, l *Lease, fp string) bool {
+	return j != nil && l != nil && j.Status == "running" && !j.Closed && l.Dialog != nil && l.Dialog.Fingerprint == fp
 }
 
-// paneDialogOnScreen: the pane's record still marks dialog fp, and no running task holds the pane (the
+// paneDialogOnScreen: the lease still marks dialog fp on its pane, and no running task holds the pane (the
 // mark is the task's then).
-func paneDialogOnScreen(d *Data, pane, fp string) bool {
-	rec := d.Panes[pane]
-	return rec != nil && rec.Dialog != nil && rec.Dialog.Fingerprint == fp && !paneHeld(d, pane)
+func paneDialogOnScreen(d *Data, l *Lease, fp string) bool {
+	return l != nil && l.State == "active" && l.Dialog != nil && l.Dialog.Fingerprint == fp && !paneHeld(d, l)
 }
 
-// noticeOnScreen: the dialog a dialog notice is about is still marked on screen, on the task's worker or
-// on the pane's record.
-func noticeOnScreen(d *Data, p *Pending) bool {
-	if p.Task == "" && p.Pane != "" {
-		return paneDialogOnScreen(d, p.Pane, p.Dialog)
+// noticeOnScreen: the dialog a dialog notice is about is still marked on screen: on its lease, by its task
+// while the task runs, else as the mark of the pane. A closed task's lease marks nothing.
+func noticeOnScreen(d *Data, n *Notice) bool {
+	l := d.Leases[n.Lease]
+	if l == nil || l.State != "active" {
+		return false
 	}
-	return dialogOnScreen(d.Tasks[p.Task], p.Dialog)
+	if paneHeld(d, l) {
+		return dialogOnScreen(d.jobOf(l), l, n.Dialog)
+	}
+	return paneDialogOnScreen(d, l, n.Dialog)
 }
 
 // signalMarked: the dialog of a signal is already the mark of its task or pane.
 func signalMarked(d *Data, s Signal) bool {
-	if s.Task == "" {
-		return paneDialogOnScreen(d, s.Pane, s.Dialog.Fingerprint)
+	if s.Task != "" {
+		j := d.Jobs[s.Task]
+		return dialogOnScreen(j, d.leaseOf(j), s.Dialog.Fingerprint)
 	}
-	return dialogOnScreen(d.Tasks[s.Task], s.Dialog.Fingerprint)
+	return paneDialogOnScreen(d, d.Leases[s.Lease], s.Dialog.Fingerprint)
 }
 
 // paneName names a pane in a notice: its label, set by the owner at spawn, else its ID. Never its title,
 // which the program in the pane sets.
-func paneName(id string, rec *PaneRecord) string {
-	if rec.Label != "" {
-		return rec.Label
+func paneName(id, label string) string {
+	if label != "" {
+		return label
 	}
 	return id
 }
 
-func paneTag(id string, rec *PaneRecord) string {
-	return fmt.Sprintf("[agent-ops from %s (%s) id=%s folder=%s]", paneName(id, rec), rec.Harness, id, rec.Cwd)
+func paneTag(d *Data, l *Lease) string {
+	label, harness, cwd := paneInfo(d, l)
+	return fmt.Sprintf("[agent-ops from %s (%s) id=%s folder=%s]", paneName(l.Pane, label), harness, l.Pane, cwd)
 }
 
 // paneNotice is the owner's notice of a dialog on a pane it started that no running task holds. The
 // commands it suggests name the pane by its ID, which answer looks up on the server its record names.
-func paneNotice(id string, rec *PaneRecord, s Signal) string {
-	name := id
-	if rec.Label != "" {
-		name += " (" + rec.Label + ")"
+func paneNotice(d *Data, l *Lease, s Signal) string {
+	label, _, _ := paneInfo(d, l)
+	name := l.Pane
+	if label != "" {
+		name += " (" + label + ")"
 	}
-	return fmt.Sprintf("pane %s %s", name, dialogLine(id, s.Dialog, s.Status))
+	return fmt.Sprintf("pane %s %s", name, dialogLine(l.Pane, s.Dialog, s.Status))
 }
 
-func dialogTag(x *Task) string {
-	return fmt.Sprintf("[agent-ops from %s (%s) id=%s folder=%s]", x.ID, x.Harness, x.Pane, x.Cwd)
+func dialogTag(j *Job, l *Lease) string {
+	return fmt.Sprintf("[agent-ops from %s (%s) id=%s folder=%s]", j.ID, l.Harness, l.Pane, l.Cwd)
 }
 
 // dialogNotice is the owner's notice of a dialog, with the harness's own reason when its terminal kept one.
-func dialogNotice(x *Task, s Signal) string {
-	return fmt.Sprintf("task %s (%s) %s", x.ID, x.Title, dialogLine(x.ID, s.Dialog, s.Status))
+func dialogNotice(j *Job, s Signal) string {
+	return fmt.Sprintf("task %s (%s) %s", j.ID, j.Title, dialogLine(j.ID, s.Dialog, s.Status))
 }
 
 // apply records signals under the lock: a new dialog replaces the mark, "clear" drops it. With notify,
@@ -376,90 +374,125 @@ func (t *Tasks) apply(sigs []Signal, notify bool) error {
 	if len(sigs) == 0 {
 		return nil
 	}
+	now := t.clock().Now()
+	// Look on a read first, as escalate does: a round whose signals change no mark, idle time or notice
+	// writes nothing (a write is a lock and two syncs, every few seconds per watcher).
+	d, err := t.Reg.Read()
+	if err != nil {
+		return err
+	}
+	if !t.applyOn(d, sigs, notify, now) {
+		return nil
+	}
 	return t.Reg.Update(func(d *Data) error {
-		now := t.clock().Now()
-		for _, s := range sigs {
-			if s.Task == "" {
-				t.applyPane(d, s, notify, now)
-				continue
-			}
-			x := d.Tasks[s.Task]
-			if x == nil || !open(x.Status) || (s.At > 0 && s.At < x.AnsweredAt) {
-				continue
-			}
-			if rec := d.Panes[x.Pane]; rec != nil && rec.Dialog != nil && x.Status == "running" {
-				rec.Dialog = nil // a running task holds the pane now: the mark is the task's
-			}
-			if notify && x.Status == "running" && !x.Closed {
-				trackIdle(d, x, s, now)
-			}
-			switch s.Kind {
-			case "clear":
-				x.Dialog = nil
-			case "dialog":
-				if x.Dialog == nil || x.Dialog.Fingerprint != s.Dialog.Fingerprint {
-					x.Dialog = &DialogMark{Fingerprint: s.Dialog.Fingerprint, Question: s.Dialog.Question, Since: now}
-				}
-				if notify && !x.Dialog.Notified && !x.Defer { // a deferred job's dialogs are denied, never told (denyDeferred)
-					x.Dialog.Notified = true
-					d.Pending = append(d.Pending, &Pending{Task: x.ID, Owner: x.Owner, OwnerRef: x.OwnerRef, Tag: dialogTag(x),
-						Text: dialogNotice(x, s), Created: now, Kind: "dialog", Dialog: s.Dialog.Fingerprint})
-				}
-			}
-		}
+		t.applyOn(d, sigs, notify, now)
 		return nil
 	})
+}
+
+// applyOn is apply on d and reports whether d changed.
+func (t *Tasks) applyOn(d *Data, sigs []Signal, notify bool, now float64) bool {
+	changed := false
+	for _, s := range sigs {
+		if s.Task == "" {
+			if t.applyPane(d, s, notify, now) {
+				changed = true
+			}
+			continue
+		}
+		j := d.Jobs[s.Task]
+		if j == nil || !open(j.Status) {
+			continue
+		}
+		l := d.leaseOf(j)
+		if s.At > 0 && s.At < l.AnsweredAt {
+			continue
+		}
+		if notify && j.Status == "running" && !j.Closed {
+			if trackIdle(d, j, l, s, now) {
+				changed = true
+			}
+		}
+		switch s.Kind {
+		case "clear":
+			if l.Dialog != nil {
+				l.Dialog = nil
+				changed = true
+			}
+		case "dialog":
+			if l.Dialog == nil || l.Dialog.Fingerprint != s.Dialog.Fingerprint {
+				l.Dialog = &DialogMark{Fingerprint: s.Dialog.Fingerprint, Question: s.Dialog.Question, Since: now}
+				changed = true
+			}
+			if notify && !l.Dialog.Notified && !j.Defer { // a deferred job's dialogs are denied, never told (denyDeferred)
+				l.Dialog.Notified = true
+				d.Notices = append(d.Notices, &Notice{ID: newNoticeID(d), Lease: l.ID, Owner: l.Owner, OwnerRef: l.OwnerRef, Tag: dialogTag(j, l),
+					Text: dialogNotice(j, s), Created: now, Kind: "dialog", Dialog: s.Dialog.Fingerprint})
+				changed = true
+			}
+		}
+	}
+	return changed
 }
 
 // trackIdle times a running task's idle stretch from the watcher's own screen reads (no extra backend call).
 // A look that is not idle ends the stretch and its stall mark. Once the worker has looked idle for stallAfter,
 // counted from the later of the stretch's start and its last progress, the task gets a stall mark and its
 // owner one notice (kind "stall"); the mark keeps a second one from going out in the same stretch.
-func trackIdle(d *Data, x *Task, s Signal, now float64) {
+func trackIdle(d *Data, j *Job, l *Lease, s Signal, now float64) bool {
 	if !s.Idle {
-		x.IdleSince, x.Stall = 0, nil
-		return
-	}
-	if x.IdleSince == 0 {
-		x.IdleSince = now
-		if s.At > 0 {
-			x.IdleSince = s.At
+		if l.IdleSince != 0 || l.Stall != nil {
+			l.IdleSince, l.Stall = 0, nil
+			return true
 		}
-		return
+		return false
+	}
+	if l.IdleSince == 0 {
+		v := now
+		if s.At > 0 {
+			v = s.At
+		}
+		l.IdleSince = v
+		return v != 0
 	}
 	// A lead that waits on a working sub-task is not stalled (2026-11-19: a lead flagged twice while its
 	// worker built). Its idle stretch starts again once no sub-task works. A sub-task that is stalled itself
 	// does not cover for it: then the lead's notice names it.
-	working, stalled := childWork(d, x.ID)
+	working, stalled := childWork(d, l.ID)
 	if working {
-		x.IdleSince = now
-		return
+		if l.IdleSince != now {
+			l.IdleSince = now
+			return true
+		}
+		return false
 	}
-	since := x.IdleSince
-	if x.Progress != nil && x.Progress.At > since {
-		since = x.Progress.At
+	since := l.IdleSince
+	if l.Progress != nil && l.Progress.At > since {
+		since = l.Progress.At
 	}
-	if x.Stall != nil || now-since < stallAfter {
-		return
+	if l.Stall != nil || now-since < stallAfter {
+		return false
 	}
-	x.Stall = &StallMark{At: now}
+	l.Stall = &StallMark{At: now}
 	text := fmt.Sprintf("task %s (%s) looks stalled: idle for %d min without task done or progress. read it: harness-ops read %s",
-		x.ID, x.Title, int(stallAfter/60), x.ID)
+		j.ID, j.Title, int(stallAfter/60), j.ID)
 	if len(stalled) > 0 {
 		text += "; its sub-tasks look stalled too: " + strings.Join(stalled, ", ")
 	}
-	d.Pending = append(d.Pending, &Pending{Task: x.ID, Owner: x.Owner, OwnerRef: x.OwnerRef, Tag: dialogTag(x), Kind: "stall", Created: now, Text: text})
+	d.Notices = append(d.Notices, &Notice{ID: newNoticeID(d), Lease: l.ID, Owner: l.Owner, OwnerRef: l.OwnerRef, Tag: dialogTag(j, l), Kind: "stall", Created: now, Text: text})
+	return true
 }
 
-// childWork: whether a running, not closed sub-task of id is not marked stalled (so its parent waits on it),
-// and the IDs of the running sub-tasks that are.
-func childWork(d *Data, id string) (working bool, stalled []string) {
-	for _, c := range d.Tasks {
-		if c.Parent != id || c.Status != "running" || c.Closed {
+// childWork: whether a running, not closed sub-task of the lead's lease is not marked stalled (so the lead
+// waits on it), and the IDs of the running sub-tasks that are.
+func childWork(d *Data, parentLease string) (working bool, stalled []string) {
+	for _, c := range d.Leases {
+		j := d.jobOf(c)
+		if c.Parent != parentLease || j == nil || j.Status != "running" || j.Closed {
 			continue
 		}
 		if c.Stall != nil {
-			stalled = append(stalled, c.ID)
+			stalled = append(stalled, j.ID)
 		} else {
 			working = true
 		}
@@ -468,37 +501,45 @@ func childWork(d *Data, id string) (working bool, stalled []string) {
 	return working, stalled
 }
 
-// applyPane records a signal of a pane no running task holds on the pane's record, as apply does on a task.
-func (t *Tasks) applyPane(d *Data, s Signal, notify bool, now float64) {
-	rec := d.Panes[s.Pane]
-	if rec == nil || paneHeld(d, s.Pane) || (s.At > 0 && s.At < rec.AnsweredAt) {
-		return
+// applyPane records a signal of a pane no running task holds on the pane's lease, as apply does on a task.
+func (t *Tasks) applyPane(d *Data, s Signal, notify bool, now float64) bool {
+	l := d.Leases[s.Lease]
+	if l == nil || l.State != "active" || paneHeld(d, l) || (s.At > 0 && s.At < l.AnsweredAt) {
+		return false
 	}
+	changed := false
 	switch s.Kind {
 	case "clear":
-		rec.Dialog = nil
-	case "dialog":
-		if rec.Dialog == nil || rec.Dialog.Fingerprint != s.Dialog.Fingerprint {
-			rec.Dialog = &DialogMark{Fingerprint: s.Dialog.Fingerprint, Question: s.Dialog.Question, Since: now}
+		if l.Dialog != nil {
+			l.Dialog = nil
+			changed = true
 		}
-		if notify && !rec.Dialog.Notified {
-			rec.Dialog.Notified = true
-			ref := rec.OwnerRef
-			if ref == nil { // a record from before owner_ref: the watcher serves its owner on its own server
+	case "dialog":
+		if l.Dialog == nil || l.Dialog.Fingerprint != s.Dialog.Fingerprint {
+			l.Dialog = &DialogMark{Fingerprint: s.Dialog.Fingerprint, Question: s.Dialog.Question, Since: now}
+			changed = true
+		}
+		if notify && !l.Dialog.Notified {
+			l.Dialog.Notified = true
+			ref := l.OwnerRef
+			if ref == nil { // a lease from before owner_ref: the watcher serves its owner on its own server
 				ref = t.SenderRef
 			}
-			d.Pending = append(d.Pending, &Pending{Pane: s.Pane, Owner: rec.Owner, OwnerRef: ref, Tag: paneTag(s.Pane, rec),
-				Text: paneNotice(s.Pane, rec, s), Created: now, Kind: "dialog", Dialog: s.Dialog.Fingerprint})
+			d.Notices = append(d.Notices, &Notice{ID: newNoticeID(d), Lease: l.ID, Owner: l.Owner, OwnerRef: ref, Tag: paneTag(d, l),
+				Text: paneNotice(d, l, s), Created: now, Kind: "dialog", Dialog: s.Dialog.Fingerprint})
+			changed = true
 		}
 	}
+	return changed
 }
 
-// runningTasks lists the owner's running tasks. Only these can show a live dialog: a ready, failed or
-// blocked worker has reported, and task send makes it running again.
-func runningTasks(d *Data, owner string, ref map[string]string) (running []*Task) {
-	for _, x := range d.Tasks {
-		if x.Owner == owner && sameServer(x.OwnerRef, ref) && !x.Closed && x.Status == "running" {
-			running = append(running, x)
+// runningLeases lists the leases of the owner's running tasks. Only these can show a live dialog: a ready,
+// failed or blocked worker has reported, and task send makes it running again.
+func runningLeases(d *Data, owner string, ref map[string]string) (running []*Lease) {
+	for _, j := range d.Jobs {
+		l := d.leaseOf(j)
+		if l.Owner == owner && sameServer(l.OwnerRef, ref) && !j.Closed && j.Status == "running" {
+			running = append(running, l)
 		}
 	}
 	return running
@@ -506,8 +547,8 @@ func runningTasks(d *Data, owner string, ref map[string]string) (running []*Task
 
 // holdsNotice reports whether a notice for the owner is still waiting to be delivered.
 func holdsNotice(d *Data, owner string, ref map[string]string) bool {
-	for _, p := range d.Pending {
-		if p.Owner == owner && sameServer(p.OwnerRef, ref) {
+	for _, n := range d.Notices {
+		if n.Owner == owner && sameServer(n.OwnerRef, ref) {
 			return true
 		}
 	}
@@ -618,6 +659,17 @@ func (t *Tasks) Watching(owner string) int {
 	return pid
 }
 
+// WakeWatcher asks the watcher that serves owner, if one runs, to start its next round now (SIGUSR1; a
+// watcher of v0.10.x has no handler for it, and SIGUSR1 ends a process by default: wake only a watcher
+// started by this build). It reports whether a signal was sent.
+func (t *Tasks) WakeWatcher(owner string) bool {
+	pid := t.Watching(owner)
+	if pid <= 0 {
+		return false
+	}
+	return syscall.Kill(pid, syscall.SIGUSR1) == nil
+}
+
 // WatchOpts are options of Watch. Rounds stops after that many screen rounds (tests); 0 runs until no
 // task is open. StatusEvery is how often, between rounds, backends with a status source are asked
 // (0: the default; negative: never). Restart, checked each round, makes Watch return ErrRestart.
@@ -627,6 +679,8 @@ type WatchOpts struct {
 	Rounds      int
 	Log         func(string)
 	Restart     func() bool
+	// Wake, when set, ends the wait between two rounds at once (harness-ops watch: SIGUSR1, see WakeWatcher).
+	Wake <-chan struct{}
 }
 
 // Watch polls the owner's running workers, tells the owner of each new dialog through the pending path
@@ -665,7 +719,7 @@ func (t *Tasks) Watch(o WatchOpts) error {
 	if note := uncalibratedLead(owner); note != "" {
 		say(note)
 	}
-	w := &watchState{t: t, say: say, seen: map[string]term.ProgramStatus{}}
+	w := &watchState{t: t, say: say, seen: map[string]term.ProgramStatus{}, wake: o.Wake}
 	for round := 1; ; round++ {
 		start := t.clock().Now()
 		if o.Restart != nil && o.Restart() {
@@ -702,7 +756,7 @@ func (t *Tasks) Watch(o WatchOpts) error {
 				say("the owner pane is gone; staying for its deferred tasks")
 			}
 		}
-		running := runningTasks(d, owner.ID, t.SenderRef)
+		running := runningLeases(d, owner.ID, t.SenderRef)
 		panes, gone := t.paneWorkers(d, owner.ID, t.SenderRef)
 		idle := len(running) == 0 && len(panes) == 0 && len(gone) == 0 && !t.keepOn(d, owner.ID)
 		if !idle {
@@ -710,8 +764,8 @@ func (t *Tasks) Watch(o WatchOpts) error {
 			status := programStatuses(w.ws, w.statusErr)
 			w.remember(status)
 			sigs := t.read(w.ws, status)
-			for _, id := range gone {
-				sigs = append(sigs, Signal{Pane: id, Kind: "clear"})
+			for _, l := range gone {
+				sigs = append(sigs, Signal{Lease: l.ID, Pane: l.Pane, Kind: "clear"})
 			}
 			w.handle(d, sigs)
 			atWork := panesAtWork(sigs)
@@ -763,12 +817,12 @@ func (t *Tasks) keepOn(d *Data, owner string) bool {
 			return true
 		}
 	}
-	if len(runningTasks(d, owner, t.SenderRef)) > 0 || holdsNotice(d, owner, t.SenderRef) || deferredLeft(d, owner, t.SenderRef) {
+	if len(runningLeases(d, owner, t.SenderRef)) > 0 || holdsNotice(d, owner, t.SenderRef) || deferredLeft(d, owner, t.SenderRef) {
 		return true
 	}
 	now := t.clock().Now()
-	for id, rec := range d.Panes {
-		if rec.Owner == owner && id != owner && sameServer(rec.OwnerRef, t.SenderRef) && rec.Worked > 0 && now-rec.Worked < workGrace {
+	for _, l := range d.Leases {
+		if l.State == "active" && l.Owner == owner && l.Pane != owner && sameServer(l.OwnerRef, t.SenderRef) && l.Worked > 0 && now-l.Worked < workGrace {
 			return true
 		}
 	}
@@ -817,6 +871,33 @@ type watchState struct {
 	quiet     int  // rounds in a row with no running task and no pane at work
 	worked    bool // a pane of the owner's was seen at work since the watcher started
 	ownerGone bool // said once: the owner pane is gone, the watcher stays for deferred tasks
+	wake      <-chan struct{}
+}
+
+// nap sleeps s seconds, and reports false when a wake (WatchOpts.Wake) cut it short. Only the real clock
+// can be cut short; with another clock a wake already sent ends the wait before it starts.
+func (w *watchState) nap(s float64) bool {
+	if w.wake == nil {
+		w.t.clock().Sleep(s)
+		return true
+	}
+	select {
+	case <-w.wake:
+		return false
+	default:
+	}
+	if _, real := w.t.clock().(RealClock); !real {
+		w.t.clock().Sleep(s)
+		return true
+	}
+	timer := time.NewTimer(time.Duration(s * float64(time.Second)))
+	defer timer.Stop()
+	select {
+	case <-w.wake:
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 // statusErr logs a failed status read once, until a different one comes: the read repeats every second.
@@ -867,7 +948,7 @@ func (w *watchState) between(interval, statusEvery float64) {
 		}
 	}
 	if statusEvery < 0 || len(polled) == 0 || statusEvery >= interval {
-		clock.Sleep(interval)
+		w.nap(interval)
 		return
 	}
 	end := clock.Now() + interval // a deadline: time spent reading and announcing between polls counts too
@@ -876,7 +957,9 @@ func (w *watchState) between(interval, statusEvery float64) {
 		if left <= 0 {
 			return
 		}
-		clock.Sleep(min(statusEvery, left))
+		if !w.nap(min(statusEvery, left)) {
+			return
+		}
 		if clock.Now() >= end {
 			return
 		}

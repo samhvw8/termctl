@@ -138,8 +138,8 @@ func TestDeferredDoneTellsNobody(t *testing.T) {
 		if d.Status != stored || d.Notify != "none" || d.Summary != "built" {
 			t.Fatalf("%s: %+v", reported, d)
 		}
-		if len(r.data().Pending) != 0 || len(r.b.Texts(r.owner.ID)) != 0 {
-			t.Fatalf("%s: a notice went out: %+v %q", reported, r.data().Pending, r.b.Texts(r.owner.ID))
+		if len(r.data().Notices) != 0 || len(r.b.Texts(r.owner.ID)) != 0 {
+			t.Fatalf("%s: a notice went out: %+v %q", reported, r.data().Notices, r.b.Texts(r.owner.ID))
 		}
 		if ev := journalEvents(t, r, Filter{Task: x.ID}); !termtest.Contains(ev, "task.done:"+stored+":built") {
 			t.Fatalf("%s: %q", reported, ev)
@@ -219,8 +219,9 @@ func TestWatcherDeniesADeferredWorkersDialogs(t *testing.T) {
 	if err := r.tasks.apply([]Signal{{Task: y.ID, Kind: "dialog", Dialog: &Dialog{Fingerprint: "ffff0000", Question: "Run?"}}}, true); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range r.data().Pending {
-		if p.Task == y.ID {
+	d := r.data()
+	for _, p := range d.Notices {
+		if noticeTask(d, p) == y.ID {
 			t.Fatalf("a notice was queued for a deferred worker's dialog: %+v", p)
 		}
 	}
@@ -356,7 +357,7 @@ func TestEscalationOfADialogBelowYourTasks(t *testing.T) {
 	sub := r.mustNew(t, r.as(r.pane(lead)), NewOpts{Title: "deploy"})
 	mark := func(since float64) {
 		r.reg.Update(func(d *Data) error {
-			d.Tasks[sub.ID].Dialog = &DialogMark{Fingerprint: "abcd1234", Question: "Run deploy?", Since: since}
+			taskLease(d, sub.ID).Dialog = &DialogMark{Fingerprint: "abcd1234", Question: "Run deploy?", Since: since}
 			return nil
 		})
 	}
@@ -433,7 +434,7 @@ func TestAdoptATask(t *testing.T) {
 	if err != nil || res.Task.Owner != r.owner.ID || res.OldOwner != r.other.ID || res.New {
 		t.Fatalf("%+v %v", res, err)
 	}
-	if rec := r.data().Panes[x.Pane]; rec.Owner != r.owner.ID {
+	if rec := paneLease(r.data(), x.Pane); rec.Owner != r.owner.ID {
 		t.Fatalf("pane record owner %s", rec.Owner)
 	}
 	if texts := r.b.Texts(r.other.ID); len(texts) != 1 || !strings.Contains(texts[0], "task "+x.ID+" (port) was adopted by "+r.owner.Address()) {
@@ -498,7 +499,7 @@ func TestAdoptAPaneWithNoTask(t *testing.T) {
 		termtest.Contains(typed, "/clear") {
 		t.Fatalf("typed %q", typed)
 	}
-	if rec := r.data().Panes[r.other.ID]; rec == nil || rec.Owner != r.owner.ID {
+	if rec := paneLease(r.data(), r.other.ID); rec == nil || rec.Owner != r.owner.ID {
 		t.Fatalf("%+v", rec)
 	}
 	_, err = r.tasks.Adopt(r.owner.ID, true)
@@ -728,8 +729,8 @@ func TestCloseLeavesPaneOpenWhenAnotherOrNewerTaskExists(t *testing.T) {
 	if r.b.Has("close", t1.Pane) {
 		t.Fatal("closed a pane held by another open task")
 	}
-	if r.data().Panes[t1.Pane] == nil {
-		t.Fatal("deleted the PaneRecord of a live held pane")
+	if r.data().Created[t1.Pane] == nil {
+		t.Fatal("deleted the CreatedPane of a live held pane")
 	}
 
 	// 2. Even after the newer task is settled and closed, closing the older task still leaves the pane open.
@@ -792,8 +793,8 @@ func TestAdoptReopensExitedOrLostTaskOnLivePane(t *testing.T) {
 	if g.Status != "running" || g.Owner != r.owner.ID || g.Round != 2 || g.Ended != 0 || g.ExitCode != nil || g.Restarted {
 		t.Fatalf("reopened: %+v", g)
 	}
-	if len(r.data().Tasks) != 1 {
-		t.Fatalf("created second task: %d", len(r.data().Tasks))
+	if len(r.data().Jobs) != 1 {
+		t.Fatalf("created second task: %d", len(r.data().Jobs))
 	}
 	if ev := journalEvents(t, r, Filter{Task: x.ID}); !termtest.Contains(ev, "task.adopt:running:") {
 		t.Fatalf("%q", ev)
@@ -814,14 +815,16 @@ func TestAdoptReopensExitedOrLostTaskOnLivePane(t *testing.T) {
 		t.Fatalf("self reopen: %+v %v", res, err)
 	}
 
-	// 3. Lost task whose pane still lives (and PaneRecord was deleted when lost): reopens and restores PaneRecord.
+	// 3. Lost task whose pane still lives (and CreatedPane was deleted when lost): reopens and restores CreatedPane + active Lease.
 	r = newRig(t)
 	lost := r.mustNew(t, nil, NewOpts{})
 	if err := r.reg.Update(func(d *Data) error {
-		d.Tasks[lost.ID].Status = "lost"
-		d.Tasks[lost.ID].Ended = r.clock.T
-		d.Tasks[lost.ID].Summary = "its server has not answered"
-		delete(d.Panes, lost.Pane)
+		d.Jobs[lost.ID].Status = "lost"
+		d.Jobs[lost.ID].Ended = r.clock.T
+		d.Jobs[lost.ID].Summary = "its server has not answered"
+		l := taskLease(d, lost.ID)
+		l.State, l.Ended = "lost", r.clock.T
+		delete(d.Created, lost.Pane)
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -830,8 +833,8 @@ func TestAdoptReopensExitedOrLostTaskOnLivePane(t *testing.T) {
 	if err != nil || res.New || res.Task.ID != lost.ID || res.Task.Status != "running" || res.Task.Round != 2 || res.Task.Summary != "" {
 		t.Fatalf("lost reopen: %+v %v", res, err)
 	}
-	if rec := r.data().Panes[lost.Pane]; rec == nil || rec.Owner != r.owner.ID {
-		t.Fatalf("pane record not restored: %+v", rec)
+	if d := r.data(); paneLease(d, lost.Pane) == nil || paneLease(d, lost.Pane).Owner != r.owner.ID || d.Created[lost.Pane] == nil {
+		t.Fatalf("pane lease or created record not restored: lease=%+v created=%+v", paneLease(d, lost.Pane), d.Created[lost.Pane])
 	}
 
 	// 4. A pane whose latest task is done (accepted) keeps today's behaviour: creates a new task record.

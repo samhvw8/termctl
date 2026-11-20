@@ -119,7 +119,7 @@ func TestNewSpawnsAndSubmitsBriefWithFooter(t *testing.T) {
 		!strings.Contains(line, "harness-ops task done "+x.ID+" --status ok|failed|blocked") || strings.Contains(line, "\n") {
 		t.Fatal(line)
 	}
-	if r.pane(x).Label != x.ID || r.data().Panes[x.Pane] == nil {
+	if r.pane(x).Label != x.ID || r.data().Created[x.Pane] == nil {
 		t.Fatal("label or pane record missing")
 	}
 	if b, _ := os.ReadFile(x.Brief); !strings.Contains(string(b), "do the thing") {
@@ -222,7 +222,7 @@ func TestHarnessNotReadyMarksFailedAndKeepsPaneClosable(t *testing.T) {
 	_, err := r.new(t, nil, NewOpts{Timeout: 5})
 	wantCode(t, err, 5)
 	all, _ := r.tasks.Ls(false)
-	if all[0].Status != "failed" || r.data().Panes[all[0].Pane] == nil {
+	if all[0].Status != "failed" || r.data().Created[all[0].Pane] == nil {
 		t.Fatalf("%+v", all[0])
 	}
 }
@@ -248,7 +248,7 @@ func TestStartupPromptFailsFastAndThePaneCanBeReused(t *testing.T) {
 		t.Fatalf("took %gs", took)
 	}
 	all, _ := r.tasks.Ls(false)
-	if all[0].Status != "failed" || r.data().Panes[pane.ID] == nil {
+	if all[0].Status != "failed" || r.data().Created[pane.ID] == nil {
 		t.Fatalf("%+v", all[0])
 	}
 	r.b.State[pane.ID].Busy = 0 // the user answered: the harness is at its input line
@@ -419,7 +419,7 @@ func TestGonePaneBecomesLost(t *testing.T) {
 	r := newRig(t)
 	x := r.mustNew(t, nil, NewOpts{})
 	r.b.Close(r.pane(x))
-	if r.get(t, x.ID).Status != "lost" || r.data().Tasks[x.ID].Status != "lost" {
+	if r.get(t, x.ID).Status != "lost" || r.data().TaskView(x.ID).Status != "lost" {
 		t.Fatal()
 	}
 }
@@ -436,7 +436,7 @@ func TestBackendFailureIsNotLost(t *testing.T) {
 func TestRestartedServerMeansLost(t *testing.T) {
 	r := newRig(t)
 	x := r.mustNew(t, nil, NewOpts{})
-	r.reg.Update(func(d *Data) error { d.Tasks[x.ID].Ref = map[string]string{"pid": "111"}; return nil })
+	r.reg.Update(func(d *Data) error { taskLease(d, x.ID).Ref = map[string]string{"pid": "111"}; return nil })
 	r.b.Ref = map[string]string{"pid": "222"}
 	if r.get(t, x.ID).Status != "lost" {
 		t.Fatal()
@@ -467,7 +467,7 @@ func TestReadyTaskWithGonePaneIsLost(t *testing.T) {
 func TestStaleReservationBecomesLost(t *testing.T) {
 	r := newRig(t)
 	r.reg.Update(func(d *Data) error {
-		d.Tasks["tabc"] = &Task{ID: "tabc", Status: "running", Owner: r.owner.ID, Started: r.clock.T}
+		seedTask(d, &Task{ID: "tabc", Status: "running", Owner: r.owner.ID, Started: r.clock.T})
 		return nil
 	})
 	if r.get(t, "tabc").Status != "running" {
@@ -487,7 +487,7 @@ func TestDoneNotifiesOwner(t *testing.T) {
 	if len(texts) != 1 || !strings.HasPrefix(texts[0], "[agent-ops from ") || !strings.Contains(texts[0], "RE: task "+x.ID) || !strings.Contains(texts[0], "all good") {
 		t.Fatal(texts)
 	}
-	if r.get(t, x.ID).Notify != "delivered" || len(r.data().Pending) != 0 {
+	if r.get(t, x.ID).Notify != "delivered" || len(r.data().Notices) != 0 {
 		t.Fatal()
 	}
 }
@@ -501,7 +501,7 @@ func TestDraftOnOwnerKeepsNotificationPending(t *testing.T) {
 	if len(r.b.Texts(r.owner.ID)) != 0 || r.b.State[r.owner.ID].Input != "owner typing" {
 		t.Fatal("joined the draft")
 	}
-	if d.Notify != "pending" || d.Status != "ready" || len(r.data().Pending) != 1 {
+	if d.Notify != "pending" || d.Status != "ready" || len(r.data().Notices) != 1 {
 		t.Fatalf("%+v", d)
 	}
 	if e := r.clock.T - start; e <= 0 || e > 15 {
@@ -538,7 +538,7 @@ func TestClaimedNotificationIsNotDeliveredTwice(t *testing.T) {
 	st.Input = "owner typing"
 	r.done(t, x, "ok", "finished")
 	st.Input = ""
-	r.reg.Update(func(d *Data) error { d.Pending[0].Claimed = r.clock.T; return nil })
+	r.reg.Update(func(d *Data) error { d.Notices[0].Claimed = r.clock.T; return nil })
 	if n, _ := r.tasks.FlushPending(); n != 0 || len(r.b.Texts(r.owner.ID)) != 0 {
 		t.Fatal(n)
 	}
@@ -605,7 +605,7 @@ func TestNotificationToGoneOwner(t *testing.T) {
 	w := r.as(r.pane(x))
 	r.b.Close(r.owner)
 	d, _ := w.Done(x.ID, "ok", "x", "")
-	if d.Notify != "owner-gone" || d.Status != "ready" || len(r.data().Pending) != 0 {
+	if d.Notify != "owner-gone" || d.Status != "ready" || len(r.data().Notices) != 0 {
 		t.Fatalf("%+v", d)
 	}
 }
@@ -617,7 +617,7 @@ func TestPendingExpires(t *testing.T) {
 	r.done(t, x, "ok", "x")
 	r.clock.T += PendingTTL + 1
 	r.tasks.FlushPending()
-	if len(r.data().Pending) != 0 || r.get(t, x.ID).Notify != "expired" {
+	if len(r.data().Notices) != 0 || r.get(t, x.ID).Notify != "expired" {
 		t.Fatal()
 	}
 }
@@ -753,7 +753,7 @@ func TestCloseAfterAcceptIgnoresBusy(t *testing.T) {
 	if _, err := r.tasks.Close(x.ID, false); err != nil {
 		t.Fatal(err)
 	}
-	if !r.b.Has("close", x.Pane) || r.data().Panes[x.Pane] != nil {
+	if !r.b.Has("close", x.Pane) || r.data().Created[x.Pane] != nil {
 		t.Fatal()
 	}
 }
@@ -845,13 +845,13 @@ func spawned(t *testing.T, r *rig) *term.Pane {
 func TestCloseOwnedIdlePane(t *testing.T) {
 	r := newRig(t)
 	p := spawned(t, r)
-	if r.data().Panes[p.ID] == nil {
+	if r.data().Created[p.ID] == nil {
 		t.Fatal("not recorded")
 	}
 	if _, err := r.tasks.ClosePane("made", false); err != nil {
 		t.Fatal(err)
 	}
-	if !r.b.Has("close", p.ID) || r.data().Panes[p.ID] != nil {
+	if !r.b.Has("close", p.ID) || r.data().Created[p.ID] != nil {
 		t.Fatal()
 	}
 }
@@ -904,7 +904,7 @@ func TestCloseRefusesPaneOfRunningTask(t *testing.T) {
 func TestCloseStaleRecordIsNotOwned(t *testing.T) {
 	r := newRig(t)
 	p := spawned(t, r)
-	r.reg.Update(func(d *Data) error { d.Panes[p.ID].Ref = map[string]string{"pid": "111"}; return nil })
+	r.reg.Update(func(d *Data) error { d.Created[p.ID].Ref = map[string]string{"pid": "111"}; return nil })
 	r.b.Ref = map[string]string{"pid": "222"}
 	_, err := r.tasks.ClosePane("made", false)
 	wantCode(t, err, 6)
@@ -1106,7 +1106,7 @@ func TestFailedStaysFailedWhenTheHarnessExits(t *testing.T) {
 func TestShellBeforeLaunchIsNotExited(t *testing.T) {
 	r := newRig(t)
 	x := r.mustNew(t, nil, NewOpts{})
-	r.reg.Update(func(d *Data) error { d.Tasks[x.ID].Launched = false; return nil })
+	r.reg.Update(func(d *Data) error { taskLease(d, x.ID).Launched = false; return nil })
 	r.pane(x).Process = "zsh" // the login shell, before the harness has started
 	if r.get(t, x.ID).Status != "running" {
 		t.Fatal()
@@ -1318,8 +1318,8 @@ func TestOldRegistryMigratesOnRead(t *testing.T) {
 	r.b.Panes = append(r.b.Panes, worker)
 	r.b.State[worker.ID] = &termtest.Screen{Log: []string{"x"}}
 	d := r.data()
-	if d.Tasks["tcfcdbf"].Round != 1 || !d.Tasks["tcfcdbf"].Launched || d.Version != registryVersion {
-		t.Fatalf("%+v", d.Tasks["tcfcdbf"])
+	if d.TaskView("tcfcdbf").Round != 1 || !taskLease(d, "tcfcdbf").Launched || d.Version != registryVersion {
+		t.Fatalf("%+v", d.TaskView("tcfcdbf"))
 	}
 	if r.get(t, "tcfcdbf").Status != "running" {
 		t.Fatal("an old running task must stay running")
@@ -1455,7 +1455,7 @@ func TestOnlyTheOwnerRecordsAnUnreachableServer(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if g := r.data().Tasks[x.ID]; g.Status != "running" || g.Unreachable != 0 {
+		if g := r.data().TaskView(x.ID); g.Status != "running" || g.Unreachable != 0 {
 			t.Fatalf("%s changed the task: %s, unreachable since %v", who, g.Status, g.Unreachable)
 		}
 	}
@@ -1463,19 +1463,19 @@ func TestOnlyTheOwnerRecordsAnUnreachableServer(t *testing.T) {
 	if len(warned) != 1 || !strings.Contains(warned[0], "cannot check task "+x.ID) {
 		t.Fatalf("warned %q", warned)
 	}
-	r.reg.Update(func(d *Data) error { d.Tasks[x.ID].OwnerRef = map[string]string{"pid": "222"}; return nil })
+	r.reg.Update(func(d *Data) error { taskLease(d, x.ID).OwnerRef = map[string]string{"pid": "222"}; return nil })
 	unchanged(as(r.owner), "the same pane ID on another server")
-	r.reg.Update(func(d *Data) error { d.Tasks[x.ID].OwnerRef = nil; return nil })
+	r.reg.Update(func(d *Data) error { taskLease(d, x.ID).OwnerRef = nil; return nil })
 
 	owner := as(r.owner)
-	if err := owner.Reconcile(); err != nil || r.data().Tasks[x.ID].Unreachable == 0 {
+	if err := owner.Reconcile(); err != nil || r.data().TaskView(x.ID).Unreachable == 0 {
 		t.Fatal("the owner did not record it", err)
 	}
 	f.down = false // another process reaches the server: the owner's record is the owner's to clear
-	if err := as(r.other).Reconcile(); err != nil || r.data().Tasks[x.ID].Unreachable == 0 {
+	if err := as(r.other).Reconcile(); err != nil || r.data().TaskView(x.ID).Unreachable == 0 {
 		t.Fatal("another pane cleared the owner's record", err)
 	}
-	if err := owner.Reconcile(); err != nil || r.data().Tasks[x.ID].Unreachable != 0 {
+	if err := owner.Reconcile(); err != nil || r.data().TaskView(x.ID).Unreachable != 0 {
 		t.Fatal("the owner did not clear it", err)
 	}
 }
@@ -1500,7 +1500,7 @@ func TestReconcileLosesATaskWhoseServerStaysUnreachable(t *testing.T) {
 		if err := ts.Reconcile(); err != nil {
 			t.Fatal(err)
 		}
-		return r.data().Tasks[x.ID].Status // not Get: it reconciles through the rig's answering backend
+		return r.data().TaskView(x.ID).Status // not Get: it reconciles through the rig's answering backend
 	}
 	for i := 0; i < 5; i++ {
 		if s := reconcile(60); s != "running" {
@@ -1508,8 +1508,8 @@ func TestReconcileLosesATaskWhoseServerStaysUnreachable(t *testing.T) {
 		}
 	}
 	f.down = false
-	if s := reconcile(60); s != "running" || r.data().Tasks[x.ID].Unreachable != 0 {
-		t.Fatalf("a server that answers again: %s, unreachable since %v", s, r.data().Tasks[x.ID].Unreachable)
+	if s := reconcile(60); s != "running" || r.data().TaskView(x.ID).Unreachable != 0 {
+		t.Fatalf("a server that answers again: %s, unreachable since %v", s, r.data().TaskView(x.ID).Unreachable)
 	}
 	f.down = true
 	if s := reconcile(1); s != "running" {
@@ -1521,7 +1521,7 @@ func TestReconcileLosesATaskWhoseServerStaysUnreachable(t *testing.T) {
 	if s := reconcile(2); s != "lost" {
 		t.Fatalf("still %s after the server stayed unreachable past %gs", s, unreachableTTL)
 	}
-	if g := r.data().Tasks[x.ID]; !strings.Contains(g.Summary, "server") {
+	if g := r.data().TaskView(x.ID); !strings.Contains(g.Summary, "server") {
 		t.Fatalf("summary %q does not say the server stopped answering", g.Summary)
 	}
 	checks := 0
@@ -1539,9 +1539,11 @@ func TestReconcileLosesATaskWhoseServerStaysUnreachable(t *testing.T) {
 // (review F25).
 func TestFindTellsSeveralFromNone(t *testing.T) {
 	r := newRig(t)
-	tasks := map[string]*Task{"tabc111": {ID: "tabc111"}, "tabc222": {ID: "tabc222"}}
-	_, several := r.tasks.find(tasks, "tabc")
-	_, none := r.tasks.find(tasks, "tzzz")
+	tasks := emptyData()
+	seedTask(tasks, &Task{ID: "tabc111"})
+	seedTask(tasks, &Task{ID: "tabc222"})
+	_, _, several := r.tasks.find(tasks, "tabc")
+	_, _, none := r.tasks.find(tasks, "tzzz")
 	if !errors.Is(several, errSeveral) || errors.Is(none, errSeveral) || !isCode(several, term.CodeUsage) || !isCode(none, term.CodeUsage) {
 		t.Fatalf("several=%v none=%v", several, none)
 	}
@@ -1587,7 +1589,7 @@ func TestClaimOfADeadDelivererIsTakenAtOnce(t *testing.T) {
 	t.Cleanup(func() { live.Process.Kill(); live.Wait() })
 	claim := func(pid int) {
 		r.reg.Update(func(d *Data) error {
-			d.Pending[0].Claimed, d.Pending[0].ClaimPid = r.clock.Now(), pid
+			d.Notices[0].Claimed, d.Notices[0].ClaimPid = r.clock.Now(), pid
 			return nil
 		})
 	}
@@ -1601,7 +1603,7 @@ func TestClaimOfADeadDelivererIsTakenAtOnce(t *testing.T) {
 	r.tasks.Backend = slow
 	r.tasks.Factory = func(string, map[string]string) (term.Backend, error) { return slow, nil }
 	slow.during = func() {
-		if p := r.data().Pending; len(p) != 1 || p[0].ClaimPid != os.Getpid() {
+		if p := r.data().Notices; len(p) != 1 || p[0].ClaimPid != os.Getpid() {
 			t.Errorf("a claim must record its deliverer's pid: %+v", p)
 		}
 	}
@@ -1726,7 +1728,7 @@ func TestNoticeOfAResultTakenWithWaitIsDropped(t *testing.T) {
 	if texts := r.b.Texts(r.owner.ID); len(texts) != 0 {
 		t.Fatalf("typed a result the owner already took: %q", texts)
 	}
-	if n := len(r.data().Pending); n != 0 {
+	if n := len(r.data().Notices); n != 0 {
 		t.Fatalf("%d notices left", n)
 	}
 }
@@ -1740,11 +1742,11 @@ func TestAPendingNoticeBeingTypedDoesNotExpire(t *testing.T) {
 	r.done(t, x, "ok", "finished")
 	r.clock.T += PendingTTL + 1
 	r.reg.Update(func(d *Data) error {
-		d.Pending[0].Claimed, d.Pending[0].ClaimPid = r.clock.T, os.Getpid()
+		d.Notices[0].Claimed, d.Notices[0].ClaimPid = r.clock.T, os.Getpid()
 		return nil
 	})
 	r.tasks.FlushPending()
-	if n := len(r.data().Pending); n != 1 || r.get(t, x.ID).Notify == "expired" {
+	if n := len(r.data().Notices); n != 1 || r.get(t, x.ID).Notify == "expired" {
 		t.Fatalf("a claimed notice expired: pending=%d notify=%s", n, r.get(t, x.ID).Notify)
 	}
 }

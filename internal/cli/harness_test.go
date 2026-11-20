@@ -546,7 +546,7 @@ func TestSpawnWithAPromptAndMsgToYourPaneStartAWatcher(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return d.Panes[partner].Worked
+		return activeLease(d, partner).Worked
 	}
 	if worked() == 0 {
 		t.Fatal("the spawn's prompt was not recorded as work")
@@ -596,7 +596,7 @@ func TestLsMineShowsAnOpenDialog(t *testing.T) {
 	}
 	quiet := strings.TrimSpace(out)
 	if err := harness.NewRegistry("").Update(func(d *harness.Data) error {
-		d.Panes[partner].Dialog = &harness.DialogMark{Fingerprint: "abcd1234", Notified: true}
+		activeLease(d, partner).Dialog = &harness.DialogMark{Fingerprint: "abcd1234", Notified: true}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -615,4 +615,14 @@ func TestLsMineShowsAnOpenDialog(t *testing.T) {
 			t.Fatalf("row %v: dialog %q, want %q", r, got, want)
 		}
 	}
+}
+
+// activeLease is the active lease on a pane: who holds it and its watch marks (a v0.10.4 pane record's).
+func activeLease(d *harness.Data, pane string) *harness.Lease {
+	for _, l := range d.Leases {
+		if l.State == "active" && l.Pane == pane {
+			return l
+		}
+	}
+	return nil
 }

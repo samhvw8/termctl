@@ -31,7 +31,7 @@ func (t *Tasks) Keys(target string, keys []string, force bool) (*Pressed, error)
 	if t.Sender == nil {
 		return nil, term.UsageErr("cannot tell which pane this runs in; key acts only on panes you started with spawn or task new")
 	}
-	b, p, x, err := t.keyTarget(target)
+	b, p, x, xl, err := t.keyTarget(target)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +56,7 @@ func (t *Tasks) Keys(target string, keys []string, force bool) (*Pressed, error)
 	}
 	ops := t.ops(b, t.Sender)
 	if x != nil {
-		ops = t.taskOps(b, t.Sender, x)
+		ops = t.taskOps(b, t.Sender, x, xl)
 	}
 	e := ops.entry("key", p)
 	e.Text = strings.Join(names, " ")
@@ -80,50 +80,50 @@ func (t *Tasks) Keys(target string, keys []string, force bool) (*Pressed, error)
 
 // keyTarget is the worker of a task the caller owns, or a pane the caller started with spawn or task new.
 // Unlike answerTarget, a pane that is not the caller's is a safety refusal (exit 6) that names the raw tool.
-func (t *Tasks) keyTarget(target string) (term.Backend, *term.Pane, *Task, error) {
+func (t *Tasks) keyTarget(target string) (term.Backend, *term.Pane, *Job, *Lease, error) {
 	if err := t.Reconcile(); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	d, err := t.Reg.Read()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	x, err := t.find(d.Tasks, target)
+	x, xl, err := t.find(d, target)
 	if errors.Is(err, errSeveral) {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	if err == nil {
-		if x.Owner != t.Sender.ID || !sameServer(x.OwnerRef, t.callerRef()) {
-			return nil, nil, nil, notYours("the worker of task " + x.ID)
+		if xl.Owner != t.Sender.ID || !sameServer(xl.OwnerRef, t.callerRef()) {
+			return nil, nil, nil, nil, notYours("the worker of task " + x.ID)
 		}
-		if !open(x.Status) || x.Pane == "" {
-			return nil, nil, nil, term.UsageErr("task %s is %s: there is no harness to press keys on", x.ID, x.Status)
+		if !open(x.Status) || xl.Pane == "" {
+			return nil, nil, nil, nil, term.UsageErr("task %s is %s: there is no harness to press keys on", x.ID, x.Status)
 		}
-		b, p, err := t.paneByID(x.Pane, x.Ref)
+		b, p, err := t.paneByID(xl.Pane, xl.Ref)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		if p == nil {
-			return nil, nil, nil, term.UsageErr("task %s: its pane is gone", x.ID)
+			return nil, nil, nil, nil, term.UsageErr("task %s: its pane is gone", x.ID)
 		}
-		return b, p, x, nil
+		return b, p, x, xl, nil
 	}
 	b, p, err := t.paneTarget(d, target)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	if p.IsSelf || t.isSelf(p.ID) {
-		return nil, nil, nil, term.TargetErr("refusing to press keys on your own pane")
+		return nil, nil, nil, nil, term.TargetErr("refusing to press keys on your own pane")
 	}
-	if !t.ownsRecord(d.Panes[p.ID], b.ServerRef()) {
-		return nil, nil, nil, notYours(p.Address())
+	l := t.ownsPane(d, p.ID, b.ServerRef())
+	if l == nil {
+		return nil, nil, nil, nil, notYours(p.Address())
 	}
-	for _, x := range d.Tasks {
-		if x.Pane == p.ID && open(x.Status) && x.Owner == t.Sender.ID && sameServer(x.Ref, b.ServerRef()) {
-			return b, p, x, nil
-		}
+	x = nil
+	if j := d.jobOf(l); j != nil && open(j.Status) && !j.Closed {
+		x = j
 	}
-	return b, p, nil, nil
+	return b, p, x, l, nil
 }
 
 func notYours(what string) error {

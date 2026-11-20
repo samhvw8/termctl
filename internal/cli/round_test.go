@@ -122,7 +122,7 @@ func TestTreeFlagsCloseTreeAdoptAndResumeTree(t *testing.T) {
 		t.Fatal(code)
 	}
 	if err := harness.NewRegistry("").Update(func(d *harness.Data) error {
-		d.Tasks[sub].Progress = &harness.ProgressNote{Text: "half way", At: 1}
+		d.Leases[d.Jobs[sub].Lease].Progress = &harness.ProgressNote{Text: "half way", At: 1}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -158,7 +158,7 @@ func TestCloseAdoptAndRestartNoteCLI(t *testing.T) {
 	id := e.newTask(t, "lead", "/w")
 	var paneID string
 	if err := harness.NewRegistry("").Update(func(d *harness.Data) error {
-		paneID = d.Tasks[id].Pane
+		paneID = d.TaskView(id).Pane
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -191,9 +191,12 @@ func TestCloseAdoptAndRestartNoteCLI(t *testing.T) {
 
 	// When a second open task exists on the same pane, task close --force leaves the pane open and says why.
 	if err := harness.NewRegistry("").Update(func(d *harness.Data) error {
-		d.Tasks["tsecond"] = &harness.Task{
-			ID: "tsecond", Title: "second", Harness: "generic", Pane: paneID,
-			Owner: e.b.Me.ID, Status: "running", Started: 2, Round: 1,
+		d.Jobs["tsecond"] = &harness.Job{
+			ID: "tsecond", Lease: "lsecond", Title: "second", Status: "running", Started: 2, Round: 1,
+		}
+		d.Leases["lsecond"] = &harness.Lease{
+			ID: "lsecond", Job: "tsecond", Harness: "generic", Pane: paneID,
+			Owner: e.b.Me.ID, State: "active", Started: 2,
 		}
 		return nil
 	}); err != nil {

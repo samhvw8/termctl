@@ -40,7 +40,7 @@ func (t *Tasks) Ack(id, note string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	x, ferr := t.find(d.Tasks, id)
+	x, _, ferr := t.find(d, id)
 	if errors.Is(ferr, errSeveral) {
 		return "", ferr
 	}
@@ -51,10 +51,12 @@ func (t *Tasks) Ack(id, note string) (string, error) {
 }
 
 func (t *Tasks) ackTask(id, note string) error {
-	var acked Task
+	var acked Job
+	var ackedLease Lease
 	err := t.Reg.Update(func(d *Data) error {
-		x := d.Tasks[id]
-		if x.Pane == "" || t.Sender.ID != x.Pane || !sameServer(x.Ref, t.callerRef()) {
+		x := d.Jobs[id]
+		l := d.leaseOf(x)
+		if l.Pane == "" || t.Sender.ID != l.Pane || !sameServer(l.Ref, t.callerRef()) {
 			return term.TargetErr("only the worker of task %s (its own pane) can ack it", x.ID)
 		}
 		if !x.Defer {
@@ -64,13 +66,13 @@ func (t *Tasks) ackTask(id, note string) error {
 			return term.UsageErr("task %s was acked already; do not reply again", x.ID)
 		}
 		x.AckedAt, x.AckNote = t.clock().Now(), note
-		acked = *x
+		acked, ackedLease = *x, *l
 		return nil
 	})
 	if err != nil {
 		return err
 	}
-	t.logTask("ack", &acked, acked.Status, note)
+	t.logTask("ack", &acked, &ackedLease, acked.Status, note)
 	return nil
 }
 
@@ -120,8 +122,8 @@ func (t *Tasks) Acked(id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if x := d.Tasks[id]; x != nil {
-		return x.AckedAt != 0, nil
+	if j := d.Jobs[id]; j != nil {
+		return j.AckedAt != 0, nil
 	}
 	found := false
 	err = t.journal().scanBack(func(e Entry) bool {
@@ -154,9 +156,10 @@ func (t *Tasks) WaitAck(id string, timeout float64) error {
 // deferredLeft: a deferred task of the owner still needs the watcher: it runs (its dialogs are denied), or
 // it reported ok and its pane is not closed yet.
 func deferredLeft(d *Data, owner string, ref map[string]string) bool {
-	for _, x := range d.Tasks {
-		if x.Defer && x.Owner == owner && sameServer(x.OwnerRef, ref) && !x.Closed &&
-			(x.Status == "running" || (x.Status == "ready" && x.Owned)) {
+	for _, x := range d.Jobs {
+		l := d.leaseOf(x)
+		if x.Defer && l.Owner == owner && sameServer(l.OwnerRef, ref) && !x.Closed &&
+			(x.Status == "running" || (x.Status == "ready" && createdFor(d, l))) {
 			return true
 		}
 	}
@@ -170,14 +173,15 @@ func (t *Tasks) closeDeferred(owner string, say func(string)) {
 	if err != nil {
 		return
 	}
-	for _, x := range d.Tasks {
-		if !x.Defer || x.Owner != owner || !sameServer(x.OwnerRef, t.SenderRef) || x.Status != "ready" || x.Closed || !x.Owned ||
-			x.Pane == "" || x.Pane == owner || t.isSelf(x.Pane) {
+	for _, x := range d.Jobs {
+		xl := d.leaseOf(x)
+		if !x.Defer || xl.Owner != owner || !sameServer(xl.OwnerRef, t.SenderRef) || x.Status != "ready" || x.Closed || !createdFor(d, xl) ||
+			xl.Pane == "" || xl.Pane == owner || t.isSelf(xl.Pane) {
 			continue
 		}
-		keepPane := paneKeepReason(d, x) != ""
+		keepPane := paneKeepReason(d, x, xl) != ""
 		if !keepPane {
-			b, p, err := t.paneByID(x.Pane, x.Ref)
+			b, p, err := t.paneByID(xl.Pane, xl.Ref)
 			if err != nil {
 				continue // unknown is not gone: try again next round
 			}
@@ -188,24 +192,27 @@ func (t *Tasks) closeDeferred(owner string, say func(string)) {
 				}
 			}
 		}
-		var closed *Task
+		var closed *Job
+		var closedLease Lease
 		if err := t.Reg.Update(func(d *Data) error {
-			c := d.Tasks[x.ID]
+			c := d.Jobs[x.ID]
 			if c == nil || c.Closed {
 				return nil
 			}
-			c.Closed, c.Dialog = true, nil
-			if !keepPane && paneKeepReason(d, c) == "" {
-				delete(d.Panes, c.Pane)
+			cl := d.leaseOf(c)
+			c.Closed, cl.Dialog, cl.Restarted = true, nil, false
+			if !keepPane && paneKeepReason(d, c, cl) == "" && createdFor(d, cl) {
+				delete(d.Created, cl.Pane)
 			}
-			closed = c
+			endLease(cl, t.clock().Now())
+			closed, closedLease = c, *cl
 			return nil
 		}); err != nil {
 			say("record: " + err.Error())
 			continue
 		}
 		if closed != nil {
-			t.logTask("task.close", closed, closed.Status, "deferred job reported ok: its pane was closed")
+			t.logTask("task.close", closed, &closedLease, closed.Status, "deferred job reported ok: its pane was closed")
 			say(fmt.Sprintf("task %s: deferred job reported ok; closed its pane", x.ID))
 		}
 	}
@@ -223,15 +230,16 @@ func (t *Tasks) denyDeferred(sigs []Signal, say func(string)) {
 		if err != nil {
 			return
 		}
-		x := d.Tasks[s.Task]
+		x := d.Jobs[s.Task]
 		if x == nil || !x.Defer || x.Status != "running" || x.Closed {
 			continue
 		}
-		b, p, err := t.paneByID(x.Pane, x.Ref)
+		xl := d.leaseOf(x)
+		b, p, err := t.paneByID(xl.Pane, xl.Ref)
 		if err != nil || p == nil {
 			continue
 		}
-		ops := t.taskOps(b, t.Sender, x)
+		ops := t.taskOps(b, t.Sender, x, xl)
 		res, err := ops.Answer(p, AnswerOpts{Deny: true, Expect: s.Dialog.Fingerprint})
 		if res == nil {
 			if err != nil {
@@ -241,11 +249,12 @@ func (t *Tasks) denyDeferred(sigs []Signal, say func(string)) {
 		}
 		denied := 0
 		if uerr := t.Reg.Update(func(d *Data) error {
-			c := d.Tasks[x.ID]
-			if dialogOnScreen(c, res.Dialog.Fingerprint) {
-				c.Dialog = nil
+			c := d.Jobs[x.ID]
+			cl := d.leaseOf(c)
+			if dialogOnScreen(c, cl, res.Dialog.Fingerprint) {
+				cl.Dialog = nil
 			}
-			c.AnsweredAt = t.clock().Now()
+			cl.AnsweredAt = t.clock().Now()
 			c.Denied++
 			denied = c.Denied
 			return nil
@@ -261,22 +270,24 @@ func (t *Tasks) denyDeferred(sigs []Signal, say func(string)) {
 			say(fmt.Sprintf("task %s: interrupt: %v", x.ID, err))
 		}
 		summary := fmt.Sprintf("denied %d dialogs", denied)
-		var blocked *Task
+		var blocked *Job
+		var blockedLease Lease
 		if err := t.Reg.Update(func(d *Data) error {
-			c := d.Tasks[x.ID]
+			c := d.Jobs[x.ID]
 			if c.Status != "running" {
 				return nil
 			}
-			c.Status, c.Ended, c.Summary, c.Notify, c.Dialog = "blocked", t.clock().Now(), summary, "none", nil
-			c.IdleSince, c.Stall = 0, nil
-			blocked = c
+			cl := d.leaseOf(c)
+			c.Status, c.Ended, c.Summary, c.Notify, cl.Dialog = "blocked", t.clock().Now(), summary, "none", nil
+			cl.IdleSince, cl.Stall = 0, nil
+			blocked, blockedLease = c, *cl
 			return nil
 		}); err != nil {
 			say("record: " + err.Error())
 			continue
 		}
 		if blocked != nil {
-			t.logTask("task.blocked", blocked, "blocked", summary)
+			t.logTask("task.blocked", blocked, &blockedLease, "blocked", summary)
 			say(fmt.Sprintf("task %s: deferred job blocked: %s", x.ID, summary))
 		}
 	}

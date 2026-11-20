@@ -89,7 +89,7 @@ func TestAnswerAPaneTarget(t *testing.T) {
 	_, _, err := r.tasks.Answer(r.other.ID, AnswerOpts{N: 1})
 	wantCode(t, err, term.CodeUsage) // not a pane this caller started
 	r.reg.Update(func(d *Data) error {
-		d.Panes[r.other.ID] = &PaneRecord{Harness: "claude", Owner: r.owner.ID}
+		seedPane(d, r.other.ID, &v2PaneRecord{Harness: "claude", Owner: r.owner.ID})
 		return nil
 	})
 	_, _, err = r.as(r.other).Answer(r.owner.ID, AnswerOpts{N: 1})
@@ -98,7 +98,7 @@ func TestAnswerAPaneTarget(t *testing.T) {
 	r.owner.Process = "claude"
 	r.b.State[r.owner.ID].Dialog = &termtest.Dialog{Body: "rm y", Options: []string{"Yes", "No"}, Selected: 1}
 	r.reg.Update(func(d *Data) error {
-		d.Panes[r.owner.ID] = &PaneRecord{Harness: "claude", Owner: r.owner.ID}
+		seedPane(d, r.owner.ID, &v2PaneRecord{Harness: "claude", Owner: r.owner.ID})
 		return nil
 	})
 	if _, _, err = r.tasks.Answer(r.owner.ID, AnswerOpts{N: 1}); !isCode(err, term.CodeUsage) || !strings.Contains(err.Error(), "your own pane") {
@@ -260,16 +260,16 @@ func TestWatchHoldsANoticeForADraftAndDropsItWhenStale(t *testing.T) {
 		t.Fatal("typed over a draft")
 	}
 	d, _ := r.reg.Read()
-	if len(d.Pending) != 1 || d.Pending[0].Kind != "dialog" {
-		t.Fatal(d.Pending)
+	if len(d.Notices) != 1 || d.Notices[0].Kind != "dialog" {
+		t.Fatal(d.Notices)
 	}
 	dlg.Answer = 1 // answered before the owner was free
 	r.tasks.Watch(WatchOpts{Rounds: 1})
 	r.b.State[r.owner.ID].Input = ""
 	r.tasks.FlushPending()
 	d, _ = r.reg.Read()
-	if len(ownerNotes(r)) != 0 || len(d.Pending) != 0 {
-		t.Fatal("a stale dialog notice was delivered", ownerNotes(r), d.Pending)
+	if len(ownerNotes(r)) != 0 || len(d.Notices) != 0 {
+		t.Fatal("a stale dialog notice was delivered", ownerNotes(r), d.Notices)
 	}
 }
 
@@ -297,8 +297,8 @@ func TestDialogNoticeDroppedUndeliveredIsAnnouncedAgain(t *testing.T) {
 	r.tasks.Watch(WatchOpts{Rounds: 1})
 	r.b.Close(r.owner)
 	r.tasks.FlushPending()
-	if g, _ := r.tasks.Get(x.ID); g.Dialog == nil || g.Dialog.Notified || len(r.data().Pending) != 0 {
-		t.Fatal("dropped as owner-gone, but the dialog is still marked as told", g.Dialog, r.data().Pending)
+	if g, _ := r.tasks.Get(x.ID); g.Dialog == nil || g.Dialog.Notified || len(r.data().Notices) != 0 {
+		t.Fatal("dropped as owner-gone, but the dialog is still marked as told", g.Dialog, r.data().Notices)
 	}
 }
 
@@ -333,7 +333,7 @@ func TestBlockedIsAHintToLookAgain(t *testing.T) {
 		if blocked {
 			r.b.Statuses = map[string]term.ProgramStatus{x.Pane: {State: "blocked"}}
 		}
-		sigs := screenSource{r.tasks}.Signals([]*Task{mustGet(t, r, x.ID)})
+		sigs := screenSource{r.tasks}.Signals([]*Lease{leaseOfTask(t, r, x.ID)})
 		got := len(sigs) == 1 && sigs[0].Kind == "dialog"
 		if got != blocked {
 			t.Fatalf("blocked=%v: %+v", blocked, sigs)
@@ -344,7 +344,7 @@ func TestBlockedIsAHintToLookAgain(t *testing.T) {
 	x := r.mustNew(t, nil, NewOpts{})
 	r.pane(x).Process = "claude"
 	r.b.Statuses = map[string]term.ProgramStatus{x.Pane: {State: "blocked"}}
-	for _, s := range (screenSource{r.tasks}).Signals([]*Task{mustGet(t, r, x.ID)}) {
+	for _, s := range (screenSource{r.tasks}).Signals([]*Lease{leaseOfTask(t, r, x.ID)}) {
 		if s.Kind == "dialog" {
 			t.Fatal(s)
 		}
@@ -465,7 +465,7 @@ func TestStaleReadDoesNotBringAnAnsweredDialogBack(t *testing.T) {
 	r := newRig(t)
 	x, dlg := dialogTask(t, r)
 	fp := readFP(t, r, x)
-	sigs := screenSource{r.tasks}.Signals([]*Task{mustGet(t, r, x.ID)}) // the watcher's capture
+	sigs := screenSource{r.tasks}.Signals([]*Lease{leaseOfTask(t, r, x.ID)}) // the watcher's capture
 	if _, _, err := r.tasks.Answer(x.ID, AnswerOpts{N: 1, Expect: fp}); err != nil || dlg.Answer != 1 {
 		t.Fatal(err)
 	}
@@ -666,10 +666,10 @@ func TestNoticeMarksScreenTextUntrusted(t *testing.T) {
 func TestAnswerChecksTheOwnersServer(t *testing.T) {
 	r := newRig(t)
 	x, dlg := dialogTask(t, r)
-	r.reg.Update(func(d *Data) error { d.Tasks[x.ID].OwnerRef = map[string]string{"pid": "111"}; return nil })
+	r.reg.Update(func(d *Data) error { taskLease(d, x.ID).OwnerRef = map[string]string{"pid": "111"}; return nil })
 	// The caller: the same pane ID on another server. The worker stays reachable on it.
 	r.b.Ref = map[string]string{"pid": "222"}
-	r.reg.Update(func(d *Data) error { d.Tasks[x.ID].Ref = map[string]string{"pid": "222"}; return nil })
+	r.reg.Update(func(d *Data) error { taskLease(d, x.ID).Ref = map[string]string{"pid": "222"}; return nil })
 	_, _, err := r.tasks.Answer(x.ID, AnswerOpts{N: 1})
 	if !isCode(err, term.CodeUsage) || dlg.Answer != 0 {
 		t.Errorf("a same-ID pane on another server answered the dialog: err=%v answer=%d", err, dlg.Answer)
@@ -693,8 +693,8 @@ func TestWaitThenWatchDoesNotReportTwice(t *testing.T) {
 		t.Fatalf("also notified after wait returned it: %q", n)
 	}
 	d, _ := r.reg.Read()
-	if len(d.Pending) != 0 {
-		t.Fatal(d.Pending)
+	if len(d.Notices) != 0 {
+		t.Fatal(d.Notices)
 	}
 }
 
@@ -718,7 +718,7 @@ func TestWaitReadsOnlyMarkedScreensWhileAWatcherRuns(t *testing.T) {
 		t.Fatalf("wait read the worker's screen %d times with a watcher running and no mark", s.captures)
 	}
 	r.b.State[x.Pane].Dialog = &termtest.Dialog{Body: "touch x", Options: []string{"Yes", "No"}, Selected: 1}
-	sigs := screenSource{ts}.Signals([]*Task{mustGet(t, r, x.ID)}) // the watcher's round
+	sigs := screenSource{ts}.Signals([]*Lease{leaseOfTask(t, r, x.ID)}) // the watcher's round
 	ts.apply(sigs, false)
 	if w, err := ts.Wait(x.ID, false, 9); err != nil || w.Dialog == nil {
 		t.Fatal(w, err)
@@ -802,7 +802,7 @@ func TestUnrecognizedAgyDialogIsLoud(t *testing.T) {
 	if len(notes) != 1 || !strings.Contains(notes[0], "not a known permission dialog") || !strings.Contains(notes[0], "1. Gemini 3 Pro [persist]") {
 		t.Fatalf("no loud notice of an unrecognized dialog: %q", notes)
 	}
-	r.reg.Update(func(d *Data) error { d.Tasks[x.ID].Dialog = nil; return nil }) // as if never told
+	r.reg.Update(func(d *Data) error { taskLease(d, x.ID).Dialog = nil; return nil }) // as if never told
 	w, err := ts.Wait(x.ID, false, 10)
 	if err != nil || w.Dialog == nil || !w.Dialog.Unrecognized {
 		t.Fatal("task wait did not return the unrecognized dialog:", w, err)
@@ -849,7 +849,7 @@ func TestAnswerKeepsTheMarkOfANewerDialog(t *testing.T) {
 	if n := len(ownerNotes(r)); n != 2 {
 		t.Fatalf("notices=%d, want A and B", n)
 	}
-	if g := r.data().Tasks[x.ID]; g.Dialog == nil || g.Dialog.Fingerprint != res.Next.Fingerprint || !g.Dialog.Notified {
+	if g := r.data().TaskView(x.ID); g.Dialog == nil || g.Dialog.Fingerprint != res.Next.Fingerprint || !g.Dialog.Notified {
 		t.Fatalf("the answer to A dropped B's mark: %+v", g.Dialog)
 	}
 	r.clock.T += 1 // a later round, after the answer
@@ -1033,8 +1033,8 @@ func TestNoDialogNoticeAfterTheTaskEnds(t *testing.T) {
 		x, _ := dialogTask(t, r)
 		r.b.State[r.owner.ID].Input = "owner typing"
 		r.tasks.Watch(WatchOpts{Rounds: 1})
-		if d := r.data(); len(d.Pending) != 1 || d.Tasks[x.ID].Dialog == nil {
-			t.Fatal("no held notice", d.Pending)
+		if d := r.data(); len(d.Notices) != 1 || taskLease(d, x.ID).Dialog == nil {
+			t.Fatal("no held notice", d.Notices)
 		}
 		switch end {
 		case "lost":
@@ -1053,7 +1053,7 @@ func TestNoDialogNoticeAfterTheTaskEnds(t *testing.T) {
 		}
 		r.b.State[r.owner.ID].Input = ""
 		r.tasks.FlushPending()
-		g := r.data().Tasks[x.ID]
+		g := r.data().TaskView(x.ID)
 		if n := ownerNotes(r); len(n) != 0 {
 			t.Errorf("%s: dialog notice delivered for a %s task: %q", end, g.Status, n)
 		}
@@ -1087,11 +1087,11 @@ func TestOnlyTheOwnerWaitsForATask(t *testing.T) {
 	if w, err := r.as(r.other).Wait(x.ID, false, 4); !isCode(err, term.CodeUsage) {
 		t.Fatal("a non-owner's task wait:", w, err)
 	}
-	r.reg.Update(func(d *Data) error { d.Tasks[x.ID].OwnerRef = map[string]string{"pid": "222"}; return nil })
+	r.reg.Update(func(d *Data) error { taskLease(d, x.ID).OwnerRef = map[string]string{"pid": "222"}; return nil })
 	if w, err := r.tasks.Wait(x.ID, false, 4); !isCode(err, term.CodeUsage) {
 		t.Fatal("the same pane ID on another server waited:", w, err)
 	}
-	r.reg.Update(func(d *Data) error { d.Tasks[x.ID].OwnerRef = nil; return nil })
+	r.reg.Update(func(d *Data) error { taskLease(d, x.ID).OwnerRef = nil; return nil })
 	if w, err := r.tasks.Wait(x.ID, false, 4); err != nil || w.Dialog == nil {
 		t.Fatal("the owner's wait:", w, err)
 	}
@@ -1105,8 +1105,8 @@ func TestDialogAnsweredDuringAnEarlierNoticeIsNotAnnounced(t *testing.T) {
 	b, _ := dialogTask(t, r)
 	r.b.State[r.owner.ID].Input = "owner typing"
 	r.tasks.Watch(WatchOpts{Rounds: 1})
-	if d := r.data(); len(d.Pending) != 2 {
-		t.Fatal("two held notices expected:", d.Pending)
+	if d := r.data(); len(d.Notices) != 2 {
+		t.Fatal("two held notices expected:", d.Notices)
 	}
 	r.b.State[r.owner.ID].Input = ""
 	slow := &slowSend{Fake: r.b, clock: r.clock}
@@ -1114,7 +1114,7 @@ func TestDialogAnsweredDuringAnEarlierNoticeIsNotAnnounced(t *testing.T) {
 	ts.Backend = slow
 	ts.Factory = func(string, map[string]string) (term.Backend, error) { return slow, nil }
 	slow.during = func() { // the first notice is on its way; both dialogs are answered meanwhile
-		r.reg.Update(func(d *Data) error { d.Tasks[a.ID].Dialog, d.Tasks[b.ID].Dialog = nil, nil; return nil })
+		r.reg.Update(func(d *Data) error { taskLease(d, a.ID).Dialog, taskLease(d, b.ID).Dialog = nil, nil; return nil })
 	}
 	if n, err := ts.FlushPending(); err != nil || n != 1 {
 		t.Fatal(n, err)
@@ -1122,8 +1122,8 @@ func TestDialogAnsweredDuringAnEarlierNoticeIsNotAnnounced(t *testing.T) {
 	if n := ownerNotes(r); len(n) != 1 {
 		t.Fatalf("a dialog answered before its notice went out was announced: %q", n)
 	}
-	if d := r.data(); len(d.Pending) != 0 {
-		t.Fatal("the stale notice stays queued:", d.Pending)
+	if d := r.data(); len(d.Notices) != 0 {
+		t.Fatal("the stale notice stays queued:", d.Notices)
 	}
 }
 
@@ -1144,7 +1144,7 @@ func TestTallRequestIsReadFromSafeHistory(t *testing.T) {
 		if err != nil || d == nil {
 			t.Fatal(err)
 		}
-		sigs := screenSource{r.tasks}.Signals([]*Task{mustGet(t, r, x.ID)})
+		sigs := screenSource{r.tasks}.Signals([]*Lease{leaseOfTask(t, r, x.ID)})
 		if len(sigs) != 1 || sigs[0].Dialog == nil || sigs[0].Dialog.Fingerprint != d.Fingerprint {
 			t.Fatalf("history %v: the watcher and the answer read different dialogs: %+v %+v", history, sigs, d)
 		}
@@ -1196,7 +1196,7 @@ func TestPartlyHiddenAgyRequestIsNeverApproved(t *testing.T) {
 		if len(notes) != 1 || !strings.Contains(notes[0], hiddenNote) || strings.Contains(notes[0], "harness-ops answer "+x.ID) {
 			t.Fatalf("%s: the notice must say the request is partly hidden and suggest no answer: %q", file, notes)
 		}
-		r.reg.Update(func(d *Data) error { d.Tasks[x.ID].Dialog = nil; return nil }) // as if never told
+		r.reg.Update(func(d *Data) error { taskLease(d, x.ID).Dialog = nil; return nil }) // as if never told
 		w, err := ts.Wait(x.ID, false, 10)
 		if err != nil || w.Dialog == nil || !w.Dialog.Hidden {
 			t.Fatalf("%s: task wait: %+v %v", file, w, err)
@@ -1233,7 +1233,7 @@ func TestAnswerAndDenyASpawnedPane(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec := r.data().Panes[p.ID]; rec == nil || rec.Owner != r.owner.ID || rec.OwnerRef["pid"] != "111" {
+	if rec := paneLease(r.data(), p.ID); rec == nil || rec.Owner != r.owner.ID || rec.OwnerRef["pid"] != "111" {
 		t.Fatalf("the spawn's record must name its owner and the owner's server: %+v", rec)
 	}
 	p.Process = "claude"

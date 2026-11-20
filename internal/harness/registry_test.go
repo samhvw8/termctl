@@ -20,7 +20,7 @@ import (
 func TestReadOfMissingRegistryCreatesNothing(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "none")
 	d, err := NewRegistry(root).Read()
-	if err != nil || len(d.Tasks) != 0 {
+	if err != nil || len(d.Leases) != 0 {
 		t.Fatal(d, err)
 	}
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
@@ -30,9 +30,9 @@ func TestReadOfMissingRegistryCreatesNothing(t *testing.T) {
 
 func TestUpdatePersists(t *testing.T) {
 	root := t.TempDir()
-	NewRegistry(root).Update(func(d *Data) error { d.Tasks["a"] = &Task{ID: "a"}; return nil })
+	NewRegistry(root).Update(func(d *Data) error { d.Leases["a"] = &Lease{ID: "a"}; return nil })
 	d, _ := NewRegistry(root).Read()
-	if d.Tasks["a"] == nil {
+	if d.Leases["a"] == nil {
 		t.Fatal()
 	}
 }
@@ -40,9 +40,9 @@ func TestUpdatePersists(t *testing.T) {
 func TestFailedUpdateWritesNothing(t *testing.T) {
 	r := NewRegistry(t.TempDir())
 	want := errors.New("x")
-	err := r.Update(func(d *Data) error { d.Tasks["a"] = &Task{}; return want })
+	err := r.Update(func(d *Data) error { d.Leases["a"] = &Lease{}; return want })
 	d, _ := r.Read()
-	if err != want || len(d.Tasks) != 0 {
+	if err != want || len(d.Leases) != 0 {
 		t.Fatal(err, d)
 	}
 }
@@ -64,7 +64,7 @@ func TestFailedWriteClosesItsTempFile(t *testing.T) {
 		}
 		return errors.New("disk full")
 	})
-	if err := r.Update(func(d *Data) error { d.Tasks["a"] = &Task{ID: "a"}; return nil }); err == nil {
+	if err := r.Update(func(d *Data) error { d.Leases["a"] = &Lease{ID: "a"}; return nil }); err == nil {
 		t.Fatal("a failed sync must fail the update")
 	}
 	if temp == nil {
@@ -86,7 +86,7 @@ func TestWriteSyncsTheDirectoryAfterTheRename(t *testing.T) {
 	stubSync(t, func(f *os.File) error {
 		if f.Name() == r.Root {
 			d, err := r.Read()
-			if err != nil || d.Tasks["a"] == nil {
+			if err != nil || d.Leases["a"] == nil {
 				t.Errorf("the directory was synced before the rename: %v", err)
 			}
 		}
@@ -97,7 +97,7 @@ func TestWriteSyncsTheDirectoryAfterTheRename(t *testing.T) {
 		}
 		return err
 	})
-	if err := r.Update(func(d *Data) error { d.Tasks["a"] = &Task{ID: "a"}; return nil }); err != nil {
+	if err := r.Update(func(d *Data) error { d.Leases["a"] = &Lease{ID: "a"}; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if len(synced) != 2 || synced[1] != r.Root {
@@ -129,11 +129,11 @@ func TestWriterHelper(t *testing.T) {
 	name, n := os.Getenv("REG_WRITER_NAME"), 60
 	for i := 0; i < n; i++ {
 		err := r.Update(func(d *Data) error {
-			if d.Tasks["c"] == nil {
-				d.Tasks["c"] = &Task{ID: "c"}
+			if d.Leases["c"] == nil {
+				d.Leases["c"] = &Lease{ID: "c"}
 			}
-			d.Tasks["c"].Depth++
-			d.Tasks[fmt.Sprintf("%s-%d", name, i)] = &Task{}
+			d.Leases["c"].Depth++
+			d.Leases[fmt.Sprintf("%s-%d", name, i)] = &Lease{}
 			return nil
 		})
 		if err != nil {
@@ -163,8 +163,8 @@ func TestTwoWritersLoseNothing(t *testing.T) {
 	if err := json.Unmarshal(raw, &d); err != nil {
 		t.Fatal(err)
 	}
-	if d.Tasks["c"].Depth != 120 || len(d.Tasks) != 121 {
-		t.Fatal(strconv.Itoa(d.Tasks["c"].Depth), len(d.Tasks))
+	if d.Leases["c"].Depth != 120 || len(d.Leases) != 121 {
+		t.Fatal(strconv.Itoa(d.Leases["c"].Depth), len(d.Leases))
 	}
 }
 
@@ -275,16 +275,17 @@ func TestRegistryLockHasADeadline(t *testing.T) {
 }
 
 // A registry written by a newer binary keeps the fields this one does not know: they are read, kept and
-// written back unchanged at every level, so an older binary's rewrite never drops a newer one's data
-// (round-6 review R1).
+// written back unchanged at every level (data, creation record, lease, job, scope, notice and dialog mark),
+// so an older binary's rewrite never drops a newer one's data (round-6 review R1; TestV3UnknownFieldsSurviveRewrite).
 func TestUnknownRegistryFieldsSurviveARewrite(t *testing.T) {
 	r := NewRegistry(t.TempDir())
 	code := 3
 	if err := r.Update(func(d *Data) error {
-		d.Tasks["a"] = &Task{ID: "a", Title: "x", Pane: "%1", Status: "running", ExitCode: &code,
-			Dialog: &DialogMark{Fingerprint: "f", Question: "q", Since: 1}}
-		d.Panes["%1"] = &PaneRecord{Harness: "claude", Label: "a"}
-		d.Pending = append(d.Pending, &Pending{Task: "a", Owner: "%0", Text: "t", Created: 1})
+		d.Jobs["a"] = &Job{ID: "a", Lease: "la", Title: "x", Status: "running", ExitCode: &code}
+		d.Leases["la"] = &Lease{ID: "la", Pane: "%1", Job: "a", State: "active", Dialog: &DialogMark{Fingerprint: "f", Question: "q", Since: 1}}
+		d.Created["%1"] = &CreatedPane{Harness: "claude", Label: "a", ForLease: "la"}
+		d.Scopes["s1"] = &Scope{ID: "s1", Name: "backend", Project: "/w"}
+		d.Notices = append(d.Notices, &Notice{ID: "n1", Lease: "la", Owner: "%0", Text: "t", Kind: "result", Created: 1})
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -296,11 +297,14 @@ func TestUnknownRegistryFieldsSurviveARewrite(t *testing.T) {
 	}
 	future := map[string]any{"n": 1.5, "list": []any{"x", 2.0}, "obj": map[string]any{"k": "v"}}
 	doc["future_top"] = future
-	task := doc["tasks"].(map[string]any)["a"].(map[string]any)
-	task["future_task"] = future
-	task["dialog"].(map[string]any)["future_dialog"] = "d"
-	doc["panes"].(map[string]any)["%1"].(map[string]any)["future_pane"] = true
-	doc["pending"].([]any)[0].(map[string]any)["future_pending"] = 7.0
+	job := doc["jobs"].(map[string]any)["a"].(map[string]any)
+	job["future_job"] = future
+	lease := doc["leases"].(map[string]any)["la"].(map[string]any)
+	lease["future_lease"] = future
+	lease["dialog"].(map[string]any)["future_dialog"] = "d"
+	doc["created"].(map[string]any)["%1"].(map[string]any)["future_pane"] = true
+	doc["scopes"].(map[string]any)["s1"].(map[string]any)["future_scope"] = "s"
+	doc["notices"].([]any)[0].(map[string]any)["future_pending"] = 7.0
 	raw, _ = json.Marshal(doc)
 	if err := os.WriteFile(r.Path, raw, 0o644); err != nil {
 		t.Fatal(err)
@@ -321,15 +325,15 @@ func TestUnknownRegistryFieldsSurviveARewrite(t *testing.T) {
 	}
 	// A real change keeps them too, and a known field still wins over nothing.
 	if err := r.Update(func(d *Data) error {
-		d.Tasks["a"].Title = "y"
-		d.Pending[0].Claimed = 2
+		d.Jobs["a"].Title = "y"
+		d.Notices[0].Claimed = 2
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 	got := reread()
-	task["title"] = "y"
-	doc["pending"].([]any)[0].(map[string]any)["claimed"] = 2.0
+	job["title"] = "y"
+	doc["notices"].([]any)[0].(map[string]any)["claimed"] = 2.0
 	if !reflect.DeepEqual(got, doc) {
 		t.Fatalf("an update dropped or changed unknown fields:\nwant %v\ngot  %v", doc, got)
 	}
