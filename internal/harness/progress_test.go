@@ -278,3 +278,22 @@ func TestHeldStallNoticeIsDroppedWhenTheWorkerMovesOn(t *testing.T) {
 		t.Fatalf("a stale stall notice went out: %q", n)
 	}
 }
+
+// A lead idle while its sub-task works is waiting, not stalled; once the sub-task is stalled itself, the
+// lead's stall notice goes and names it (2026-11-19: a lead flagged twice while its worker built).
+func TestALeadWaitingOnAWorkingSubTaskIsNotStalled(t *testing.T) {
+	r := newRig(t)
+	lead := r.mustNew(t, nil, NewOpts{Title: "port", SubDepth: 1})
+	r.pane(lead).Process = "claude"
+	sub := r.mustNew(t, r.as(r.pane(lead)), NewOpts{Title: "build"})
+	watchFor(r, stallRounds*2)
+	if n := stallNotes(r); len(n) != 0 {
+		t.Fatalf("a lead waiting on a working sub-task was called stalled: %q", n)
+	}
+	r.reg.Update(func(d *Data) error { d.Tasks[sub.ID].Stall = &StallMark{At: r.clock.T}; return nil })
+	watchFor(r, stallRounds)
+	n := stallNotes(r)
+	if len(n) != 1 || !strings.Contains(n[0], sub.ID) {
+		t.Fatalf("want one lead stall naming %s, got %q", sub.ID, n)
+	}
+}

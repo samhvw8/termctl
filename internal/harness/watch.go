@@ -427,6 +427,14 @@ func trackIdle(d *Data, x *Task, s Signal, now float64) {
 		}
 		return
 	}
+	// A lead that waits on a working sub-task is not stalled (2026-11-19: a lead flagged twice while its
+	// worker built). Its idle stretch starts again once no sub-task works. A sub-task that is stalled itself
+	// does not cover for it: then the lead's notice names it.
+	working, stalled := childWork(d, x.ID)
+	if working {
+		x.IdleSince = now
+		return
+	}
 	since := x.IdleSince
 	if x.Progress != nil && x.Progress.At > since {
 		since = x.Progress.At
@@ -435,9 +443,29 @@ func trackIdle(d *Data, x *Task, s Signal, now float64) {
 		return
 	}
 	x.Stall = &StallMark{At: now}
-	d.Pending = append(d.Pending, &Pending{Task: x.ID, Owner: x.Owner, OwnerRef: x.OwnerRef, Tag: dialogTag(x), Kind: "stall", Created: now,
-		Text: fmt.Sprintf("task %s (%s) looks stalled: idle for %d min without task done or progress. read it: harness-ops read %s",
-			x.ID, x.Title, int(stallAfter/60), x.ID)})
+	text := fmt.Sprintf("task %s (%s) looks stalled: idle for %d min without task done or progress. read it: harness-ops read %s",
+		x.ID, x.Title, int(stallAfter/60), x.ID)
+	if len(stalled) > 0 {
+		text += "; its sub-tasks look stalled too: " + strings.Join(stalled, ", ")
+	}
+	d.Pending = append(d.Pending, &Pending{Task: x.ID, Owner: x.Owner, OwnerRef: x.OwnerRef, Tag: dialogTag(x), Kind: "stall", Created: now, Text: text})
+}
+
+// childWork: whether a running, not closed sub-task of id is not marked stalled (so its parent waits on it),
+// and the IDs of the running sub-tasks that are.
+func childWork(d *Data, id string) (working bool, stalled []string) {
+	for _, c := range d.Tasks {
+		if c.Parent != id || c.Status != "running" || c.Closed {
+			continue
+		}
+		if c.Stall != nil {
+			stalled = append(stalled, c.ID)
+		} else {
+			working = true
+		}
+	}
+	sort.Strings(stalled)
+	return working, stalled
 }
 
 // applyPane records a signal of a pane no running task holds on the pane's record, as apply does on a task.
