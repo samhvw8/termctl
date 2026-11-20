@@ -96,6 +96,9 @@ func (t *Tasks) keyTarget(target string) (term.Backend, *term.Pane, *Job, *Lease
 		if xl.Owner != t.Sender.ID || !sameServer(xl.OwnerRef, t.callerRef()) {
 			return nil, nil, nil, nil, notYours("the worker of task " + x.ID)
 		}
+		if x.Closed {
+			return nil, nil, nil, nil, term.UsageErr("task %s is closed", x.ID)
+		}
 		if !open(x.Status) || xl.Pane == "" {
 			return nil, nil, nil, nil, term.UsageErr("task %s is %s: there is no harness to press keys on", x.ID, x.Status)
 		}

@@ -637,23 +637,49 @@ func TestStalePaneNoticeIsDroppedAndAGonePaneLosesItsMark(t *testing.T) {
 }
 
 // While a running task holds a pane, its dialog is the task's (task wait returns it, task ls shows it); a
-// mark the pane's record kept from before goes.
+// mark the pane's bare lease kept from before goes. And reopening a ready task clears any mark it took while idle.
 func TestARunningTaskTakesThePaneMark(t *testing.T) {
 	r := newRig(t)
-	x, dlg := dialogTask(t, r)
-	fp := readFP(t, r, x)
-	r.reg.Update(func(d *Data) error {
-		paneLease(d, x.Pane).Dialog = &DialogMark{Fingerprint: "0ld0ld00", Notified: true}
+	p := spawned(t, r)
+	if err := r.reg.Update(func(d *Data) error {
+		paneLease(d, p.ID).Dialog = &DialogMark{Fingerprint: "0ld0ld00", Notified: true}
 		return nil
-	})
-	r.tasks.Watch(WatchOpts{Rounds: 1})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	x := r.mustNew(t, nil, NewOpts{Reuse: p.ID})
+	r.pane(x).Process = "claude"
+	dlg := &termtest.Dialog{Body: "touch x", Options: []string{"Yes", "No"}, Selected: 1}
+	r.b.State[x.Pane].Dialog = dlg
+	fp := readFP(t, r, x)
+	if err := r.tasks.Watch(WatchOpts{Rounds: 1}); err != nil {
+		t.Fatal(err)
+	}
 	d := r.data()
-	// One mark per pane now: the pane's mark is the task's, and it is the dialog on screen, not the old one.
-	if paneLease(d, x.Pane) != taskLease(d, x.ID) || taskLease(d, x.ID).Dialog == nil || taskLease(d, x.ID).Dialog.Fingerprint != fp {
-		t.Fatalf("pane mark %+v, task mark %+v", paneLease(d, x.Pane).Dialog, taskLease(d, x.ID).Dialog)
+	// One active lease on the pane now: the task's lease owns the new dialog mark, not the old bare lease's.
+	tl := taskLease(d, x.ID)
+	if paneLease(d, x.Pane) != tl || tl.Dialog == nil || tl.Dialog.Fingerprint != fp {
+		t.Fatalf("pane mark %+v, task mark %+v", paneLease(d, x.Pane).Dialog, tl.Dialog)
 	}
 	if notes := ownerNotes(r); len(notes) != 1 || !strings.Contains(notes[0], "task "+x.ID) {
 		t.Fatalf("%q", notes)
+	}
+
+	// Transition 2: while ready (not running), the pane collects a mark via Watch; Send clears it on reopen.
+	r.done(t, x, "ok", "x")
+	r.clock.T += 5
+	if err := r.tasks.Watch(WatchOpts{Rounds: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if tl := taskLease(r.data(), x.ID); tl.Dialog == nil || tl.Dialog.Fingerprint != fp {
+		t.Fatalf("expected idle task lease to record pane dialog, got %+v", tl.Dialog)
+	}
+	r.b.State[x.Pane].Dialog = nil
+	if err := r.tasks.Send(x.ID, "next round", true); err != nil {
+		t.Fatal(err)
+	}
+	if tl := taskLease(r.data(), x.ID); tl.Dialog != nil {
+		t.Fatalf("Send left stale dialog mark on reopened task lease: %+v", tl.Dialog)
 	}
 	_ = dlg
 }

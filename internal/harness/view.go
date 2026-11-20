@@ -134,10 +134,17 @@ func endLease(l *Lease, now float64) {
 	}
 }
 
-// createdFor: the pane was created for this lease (spawn, or task new without --reuse), on the lease's server.
+// createdFor: the pane was created for this lease (spawn, or task new without --reuse), on the lease's
+// server, and the lease has not been ended or superseded by an active lease on the pane.
 func createdFor(d *Data, l *Lease) bool {
+	if l == nil || l.Pane == "" || l.State == "ended" {
+		return false
+	}
+	if l.State != "active" && activeLeaseForPane(d, l.Pane, l.Ref) != nil {
+		return false
+	}
 	c := d.Created[l.Pane]
-	return l.Pane != "" && c != nil && c.ForLease == l.ID && sameServer(c.Ref, l.Ref)
+	return c != nil && c.ForLease == l.ID && sameServer(c.Ref, l.Ref)
 }
 
 // paneHeld: a running task holds the lease's pane, so a dialog on it is that task's.

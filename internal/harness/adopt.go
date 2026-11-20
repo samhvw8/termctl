@@ -317,7 +317,9 @@ func (t *Tasks) adoptPane(me *term.Pane, b term.Backend, p *term.Pane) (*Adopted
 	// Whoever held the pane before: the lead that started it, or that held it last.
 	oldOwner, oldRef, label := "", map[string]string(nil), p.Label
 	if prev := activeLeaseForPane(d, p.ID, ref); prev != nil {
-		label = prev.Label
+		if prev.Label != "" {
+			label = prev.Label
+		}
 		if prev.Owner != me.ID {
 			oldOwner, oldRef = prev.Owner, prev.OwnerRef
 		}

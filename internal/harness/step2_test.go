@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -67,13 +68,22 @@ func TestChildWorkOnLeasesPreventsStallOnWaitingLead(t *testing.T) {
 	d.Leases["llead"].Owner = "fake:9"
 	d.Leases["lc1"].Stall = nil
 	sig := Signal{Task: "tlead", Lease: "llead", Pane: "fake:5", Kind: "clear", Idle: true, At: 1000}
-	trackIdle(d, leadJob, d.Leases["llead"], sig, 1000)
-	trackIdle(d, leadJob, d.Leases["llead"], sig, 1000+stallAfter+10)
-	if d.Leases["llead"].Stall != nil {
-		t.Fatal("lead stalled while a child lease was working")
+	if trackIdle(d, leadJob, d.Leases["llead"], sig, 1000) {
+		t.Fatal("waiting lead with working child should report changed=false")
+	}
+	if trackIdle(d, leadJob, d.Leases["llead"], sig, 1000+stallAfter+10) {
+		t.Fatal("repeat waiting tick should report changed=false (no no-op registry rewrite)")
+	}
+	if d.Leases["llead"].Stall != nil || d.Leases["llead"].IdleSince != 0 {
+		t.Fatalf("lead stamped IdleSince or Stall while child worked: IdleSince=%v Stall=%+v", d.Leases["llead"].IdleSince, d.Leases["llead"].Stall)
 	}
 	d.Leases["lc1"].Stall = &StallMark{At: 1700}
-	trackIdle(d, leadJob, d.Leases["llead"], sig, 1000+2*stallAfter+20)
+	sigAfter := sig
+	sigAfter.At = 1710
+	if !trackIdle(d, leadJob, d.Leases["llead"], sigAfter, 1710) {
+		t.Fatal("first idle tick after all children stalled should start IdleSince")
+	}
+	trackIdle(d, leadJob, d.Leases["llead"], sigAfter, 1710+stallAfter+10)
 	if d.Leases["llead"].Stall == nil {
 		t.Fatal("lead did not stall once all running child leases stalled")
 	}
@@ -508,5 +518,253 @@ func TestApplyOnReportsChangedOnlyOnRealMutation(t *testing.T) {
 	}
 	if !r.tasks.applyOn(d, []Signal{{Lease: lid, Pane: p.ID, Kind: "clear"}}, true, r.clock.T+6) {
 		t.Fatal("pane clear after dialog should report changed=true")
+	}
+}
+
+func TestCreatedForIgnoresEndedAndSupersededLeases(t *testing.T) {
+	// F1: if t1 created P, t2 reused P on the same clock tick and was closed (restoring an active bare lease),
+	// closing t1 later must NOT treat ended l1 as createdFor and must NOT kill P out from under the bare lease.
+	r := newRig(t)
+	t1 := r.mustNew(t, nil, NewOpts{})
+	r.done(t, t1, "ok", "first")
+	if _, err := r.tasks.Accept(t1.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	t2 := r.mustNew(t, nil, NewOpts{Reuse: t1.Pane})
+	r.done(t, t2, "ok", "second")
+	if _, err := r.tasks.Close(t2.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	bare := activeLeaseForPane(r.data(), t1.Pane, r.b.ServerRef())
+	if bare == nil || bare.Job != "" {
+		t.Fatalf("expected active bare lease after closing reused t2, got %+v", bare)
+	}
+	if _, kept, err := r.tasks.CloseWithNote(t1.ID, false); err != nil || kept == "" {
+		t.Fatalf("expected CloseWithNote(%s) to keep pane open; kept=%q err=%v", t1.ID, kept, err)
+	}
+	if r.b.Has("close", t1.Pane) {
+		t.Fatalf("killed live pane %s owned by active bare lease %s", t1.Pane, bare.ID)
+	}
+	if cur := r.data().Leases[bare.ID]; cur == nil || cur.State != "active" {
+		t.Fatalf("expected bare lease %s to remain active, got %+v", bare.ID, cur)
+	}
+
+	// deferredLeft must also ignore a deferred task whose lease was superseded (ended).
+	d := r.data()
+	if err := r.reg.Update(func(d *Data) error {
+		d.Jobs["tdef"] = &Job{ID: "tdef", Lease: "ldef", Status: "ready", Defer: true}
+		d.Leases["ldef"] = &Lease{ID: "ldef", Job: "tdef", Owner: r.owner.ID, OwnerRef: r.b.ServerRef(), Pane: "fake:55", Ref: r.b.ServerRef(), State: "ended"}
+		d.Created["fake:55"] = &CreatedPane{Ref: r.b.ServerRef(), ForLease: "ldef"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	d = r.data()
+	if createdFor(d, d.Leases["ldef"]) {
+		t.Fatal("createdFor returned true for ended lease")
+	}
+	if deferredLeft(d, r.owner.ID, r.b.ServerRef()) {
+		t.Fatal("deferredLeft returned true for superseded deferred task")
+	}
+}
+
+func TestExitHookUsesPathNameWhenExecutableMatchesPath(t *testing.T) {
+	r := newRig(t)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	link := filepath.Join(dir, "harness-ops")
+	if err := os.Symlink(exe, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	got := r.tasks.exitHook("t1")
+	if !strings.HasSuffix(got, "harness-ops task exited t1") {
+		t.Fatalf("expected exitHook to use PATH command 'harness-ops', got %q", got)
+	}
+
+	// When PATH has no matching harness-ops binary, fall back to the resolved executable path.
+	t.Setenv("PATH", t.TempDir())
+	got = r.tasks.exitHook("t1")
+	want := term.ShellQuote(exe) + " task exited t1"
+	if !strings.HasSuffix(got, want) {
+		t.Fatalf("expected fallback %q, got %q", want, got)
+	}
+}
+
+func TestAnswerAndKeysRefuseClosedTaskByID(t *testing.T) {
+	r := newRig(t)
+	p := spawned(t, r)
+	x := r.mustNew(t, nil, NewOpts{Reuse: p.ID})
+	r.pane(x).Process = "claude"
+	r.done(t, x, "ok", "done")
+	if _, err := r.tasks.Close(x.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	r.b.State[p.ID].Dialog = &termtest.Dialog{Body: "touch x", Options: []string{"Yes", "No"}, Selected: 1}
+	fp := "01234567"
+	if err := r.reg.Update(func(d *Data) error {
+		d.Leases[paneLease(d, p.ID).ID].Dialog = &DialogMark{Fingerprint: fp, Notified: true}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	eventsBefore := len(r.b.Events)
+	_, _, err := r.tasks.Answer(x.ID, AnswerOpts{N: 1, Expect: fp})
+	wantCode(t, err, 2)
+	if !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("expected closed error from Answer, got %v", err)
+	}
+	_, err = r.tasks.Keys(x.ID, []string{"escape"}, false)
+	wantCode(t, err, 2)
+	if !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("expected closed error from Keys, got %v", err)
+	}
+	if len(r.b.Events) != eventsBefore {
+		t.Fatalf("expected no keys/answer events on closed task, got %+v", r.b.Events[eventsBefore:])
+	}
+	if bare := activeLeaseForPane(r.data(), p.ID, r.b.ServerRef()); bare == nil || bare.Dialog == nil {
+		t.Fatalf("expected bare lease dialog mark untouched, got %+v", bare)
+	}
+}
+
+func TestMergeV2ReusedPaneIDOnNewServerOrCreationTimeGetsNewBareLease(t *testing.T) {
+	oldLID := derivedID("l", "v2:pane:tmux:%1", func(string) bool { return false })
+	base := func() *Data {
+		d := emptyData()
+		d.Leases[oldLID] = &Lease{
+			ID:      oldLID,
+			Owner:   "tmux:%0",
+			Pane:    "tmux:%1",
+			Ref:     map[string]string{"pid": "111"},
+			State:   "ended",
+			Started: 1000,
+			Ended:   1100,
+		}
+		return d
+	}
+
+	// New server PID reusing tmux:%1 must get a fresh active bare lease and CreatedPane link.
+	d1 := base()
+	panes := map[string]*v2PaneRecord{
+		"tmux:%1": {Owner: "tmux:%0", Ref: map[string]string{"pid": "222"}, Harness: "claude", Label: "w", Cwd: "/w", Created: 1000},
+	}
+	mergeV2(d1, nil, panes, nil)
+	al := activeLeaseForPane(d1, "tmux:%1", map[string]string{"pid": "222"})
+	if al == nil || al.ID == oldLID || d1.Created["tmux:%1"] == nil || d1.Created["tmux:%1"].ForLease != al.ID {
+		t.Fatalf("expected new active bare lease on new server, got al=%+v created=%+v", al, d1.Created["tmux:%1"])
+	}
+
+	// Same server PID reusing tmux:%1 with a newer Created timestamp must also get a new active bare lease.
+	d2 := base()
+	panesSame := map[string]*v2PaneRecord{
+		"tmux:%1": {Owner: "tmux:%0", Ref: map[string]string{"pid": "111"}, Harness: "claude", Label: "w2", Cwd: "/w", Created: 2000},
+	}
+	mergeV2(d2, nil, panesSame, nil)
+	al2 := activeLeaseForPane(d2, "tmux:%1", map[string]string{"pid": "111"})
+	if al2 == nil || al2.ID == oldLID {
+		t.Fatalf("expected new active bare lease on newer pane creation time, got %+v", al2)
+	}
+
+	// Re-merging the exact same ended record (same server and Created) still does not resurrect it.
+	d3 := base()
+	panesOld := map[string]*v2PaneRecord{
+		"tmux:%1": {Owner: "tmux:%0", Ref: map[string]string{"pid": "111"}, Harness: "claude", Label: "w", Cwd: "/w", Created: 1000},
+	}
+	mergeV2(d3, nil, panesOld, nil)
+	if al3 := activeLeaseForPane(d3, "tmux:%1", map[string]string{"pid": "111"}); al3 != nil {
+		t.Fatalf("did not expect ended record re-merge to resurrect active lease: %+v", al3)
+	}
+}
+
+func TestTaskCloseExitedReusePaneAndAdoptPanePreserveLabel(t *testing.T) {
+	r := newRig(t)
+	p, err := r.tasks.Spawn("generic", "tab", "/w", SpawnOpts{Command: "c", Label: "helper", Timeout: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t1 := r.mustNew(t, nil, NewOpts{Reuse: p.ID})
+	if _, err := r.tasks.Exited(t1.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.tasks.Close(t1.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if r.b.Has("close", p.ID) {
+		t.Fatalf("closed spawned pane %s when closing exited reused task %s", p.ID, t1.ID)
+	}
+	bare := activeLeaseForPane(r.data(), p.ID, r.b.ServerRef())
+	if bare == nil || bare.Job != "" {
+		t.Fatalf("expected active bare lease restored after closing exited reuse task, got %+v", bare)
+	}
+	if bare.Label != "helper" {
+		t.Fatalf("expected restored bare lease label %q, got %q", "helper", bare.Label)
+	}
+	if bare.Root != bare.ID {
+		t.Fatalf("expected restored bare lease Root == own ID (%q), got %q", bare.ID, bare.Root)
+	}
+
+	// adoptPane on a pane whose prior active lease had Label == "" keeps p.Label.
+	p2, err := r.tasks.Spawn("generic", "tab", "/w", SpawnOpts{Command: "c", Label: "keeper", Timeout: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reg.Update(func(d *Data) error {
+		paneLease(d, p2.ID).Label = ""
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ad, err := r.tasks.Adopt(p2.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if al := r.data().Leases[r.data().Jobs[ad.Task.ID].Lease]; al == nil || al.Label != "keeper" {
+		t.Fatalf("expected adopted lease to keep pane label %q, got %+v", "keeper", al)
+	}
+}
+
+func TestForceClosePaneClearsDialogMarkAndReconcileChecksServerOnCreatedDelete(t *testing.T) {
+	// Part A: ClosePane(..., true) clears Dialog mark so TaskView of closed task does not carry stale dialog.
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{})
+	if err := r.reg.Update(func(d *Data) error {
+		taskLease(d, x.ID).Dialog = &DialogMark{Fingerprint: "aaaa1111", Notified: true}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.tasks.ClosePane(x.Pane, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.data().TaskView(x.ID); got.Dialog != nil {
+		t.Fatalf("expected ClosePane --force to clear Dialog mark on closed task, got %+v", got.Dialog)
+	}
+
+	// Part B: Reconcile marking a lost task from an old server must not delete d.Created for a new server's pane.
+	r2 := newRig(t)
+	oldRef := map[string]string{"pid": "111"}
+	newRef := map[string]string{"pid": "222"}
+	r2.b.Ref = newRef
+	r2.tasks.SenderRef = newRef
+	if err := r2.reg.Update(func(d *Data) error {
+		d.Jobs["told"] = &Job{ID: "told", Lease: "lold", Status: "running", Started: 1000}
+		d.Leases["lold"] = &Lease{ID: "lold", Job: "told", Owner: r2.owner.ID, OwnerRef: newRef, Pane: "fake:99", Ref: oldRef, State: "active", Launched: true, Started: 1000}
+		d.Created["fake:99"] = &CreatedPane{Ref: newRef, Harness: "claude", Label: "fresh", Cwd: "/w", ForLease: "lnew", CreatedAt: 2000}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r2.tasks.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	d := r2.data()
+	if d.Jobs["told"].Status != "lost" {
+		t.Fatalf("expected old-server task marked lost, got %s", d.Jobs["told"].Status)
+	}
+	if d.Created["fake:99"] == nil || !sameServer(d.Created["fake:99"].Ref, newRef) {
+		t.Fatalf("Reconcile deleted new server's CreatedPane record: %+v", d.Created["fake:99"])
 	}
 }

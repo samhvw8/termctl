@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -339,7 +340,9 @@ func (t *Tasks) Reconcile() error {
 				l.State, l.Ended = "lost", now
 			}
 			if l.Pane != "" {
-				delete(d.Created, l.Pane)
+				if c := d.Created[l.Pane]; c != nil && sameServer(c.Ref, l.Ref) {
+					delete(d.Created, l.Pane)
+				}
 			}
 		}
 		for _, id := range lost {
@@ -740,11 +743,41 @@ func (t *Tasks) exitHook(id string) string {
 	if err != nil {
 		return ""
 	}
+	bin := exitHookBinary(exe, exec.LookPath)
 	env := ""
 	if d := os.Getenv("TERMCTL_STATE_DIR"); d != "" {
 		env = "env TERMCTL_STATE_DIR=" + term.ShellQuote(d) + " "
 	}
-	return env + term.ShellQuote(exe) + " task exited " + id
+	return env + term.ShellQuote(bin) + " task exited " + id
+}
+
+// exitHookBinary returns "harness-ops" when PATH's harness-ops resolves to the same binary as exe (such as
+// via mise's "latest" symlink), so surviving worker panes keep working after upgrades; otherwise exe.
+func exitHookBinary(exe string, lookPath func(string) (string, error)) string {
+	p, err := lookPath("harness-ops")
+	if err != nil || p == "" {
+		return exe
+	}
+	if sameBinary(exe, p) {
+		return "harness-ops"
+	}
+	return exe
+}
+
+func sameBinary(a, b string) bool {
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	if errA == nil && errB == nil {
+		if ra == rb {
+			return true
+		}
+		if sa, e1 := os.Stat(ra); e1 == nil {
+			if sb, e2 := os.Stat(rb); e2 == nil {
+				return os.SameFile(sa, sb)
+			}
+		}
+	}
+	return a == b
 }
 
 func (t *Tasks) record(d *Data, p *term.Pane, harness, label, cwd string, ref map[string]string, lease string) {
@@ -947,12 +980,13 @@ func (t *Tasks) ClosePane(target string, force bool) (*term.Pane, error) {
 		delete(d.Created, p.ID)
 		for _, l := range d.Leases { // the pane is gone: its supervision ends
 			if l.Pane == p.ID && sameServer(l.Ref, ref) {
+				l.Dialog, l.Restarted = nil, false
 				endLease(l, now)
 			}
 		}
 		for _, j := range d.Jobs {
 			if jl := d.leaseOf(j); jl.Pane == p.ID && sameServer(jl.Ref, ref) && !settled(j.Status) && !j.Closed {
-				j.Closed, jl.Restarted = true, false
+				j.Closed = true
 				if j.Status == "running" {
 					j.Status, j.Ended, j.Summary = "failed", now, "its pane was closed with --force"
 				}
@@ -1697,7 +1731,8 @@ func paneKeepReason(d *Data, j *Job, l *Lease) string {
 	if l.Pane == "" {
 		return ""
 	}
-	if !createdFor(d, l) {
+	c := d.Created[l.Pane]
+	if c == nil || c.ForLease != l.ID || !sameServer(c.Ref, l.Ref) {
 		return "it was not created for this task"
 	}
 	if other, _ := otherTaskOnPane(d, j, l); other != nil {
@@ -1705,6 +1740,9 @@ func paneKeepReason(d *Data, j *Job, l *Lease) string {
 			return fmt.Sprintf("task %s (%s) holds it", other.ID, other.Status)
 		}
 		return fmt.Sprintf("newer task %s (%s) is on it", other.ID, other.Status)
+	}
+	if !createdFor(d, l) {
+		return "another session holds it"
 	}
 	return ""
 }
@@ -1752,7 +1790,7 @@ func (t *Tasks) CloseWithNote(id string, force bool) (*Task, string, error) {
 		if c.Status == "running" {
 			c.Status, c.Ended, c.Summary = "failed", now, "closed by its owner before it finished"
 		}
-		wasActive := l.State == "active"
+		wasLive := l.State == "active" || l.State == "exited"
 		if kept == "" && l.Pane != "" {
 			delete(d.Created, l.Pane)
 			endLease(l, now)
@@ -1765,9 +1803,18 @@ func (t *Tasks) CloseWithNote(id string, force bool) (*Task, string, error) {
 			endLease(l, now)
 			// A pane harness-ops created that this task reused (or adopted) stays open, and stays its lead's:
 			// a bare lease takes over, so ls --mine, answer and key go on working on it.
-			if cp := d.Created[l.Pane]; wasActive && cp != nil && sameServer(cp.Ref, l.Ref) && activeLeaseForPane(d, l.Pane, l.Ref) == nil {
-				bare := &Lease{ID: newLeaseID(d), Owner: l.Owner, OwnerRef: l.OwnerRef, Pane: l.Pane, Ref: l.Ref, Harness: l.Harness,
-					Label: l.Label, Cwd: l.Cwd, Project: l.Project, Parent: l.Parent, Root: l.Root, Depth: l.Depth, SubDepth: l.SubDepth,
+			if cp := d.Created[l.Pane]; wasLive && cp != nil && sameServer(cp.Ref, l.Ref) && activeLeaseForPane(d, l.Pane, l.Ref) == nil {
+				lid := newLeaseID(d)
+				label := l.Label
+				if label == "" {
+					label = cp.Label
+				}
+				root := l.Root
+				if root == "" || root == l.ID {
+					root = lid
+				}
+				bare := &Lease{ID: lid, Owner: l.Owner, OwnerRef: l.OwnerRef, Pane: l.Pane, Ref: l.Ref, Harness: l.Harness,
+					Label: label, Cwd: l.Cwd, Project: l.Project, Parent: l.Parent, Root: root, Depth: l.Depth, SubDepth: l.SubDepth,
 					TreeMax: l.TreeMax, State: "active", Launched: true, Started: now}
 				d.Leases[bare.ID] = bare
 			}

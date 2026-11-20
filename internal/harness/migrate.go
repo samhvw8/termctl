@@ -372,7 +372,7 @@ func mergeV2(d *Data, tasks map[string]*v2Task, panes map[string]*v2PaneRecord, 
 		}
 		lid := derivedID("l", "v2:pane:"+pid, func(lid string) bool {
 			l := d.Leases[lid]
-			return l != nil && (l.Job != "" || l.Pane != pid)
+			return l != nil && (l.Job != "" || l.Scope != "" || l.Pane != pid || !refsMatch(l.Ref, rec.Ref) || l.Started != rec.Created)
 		})
 		if d.Leases[lid] != nil { // the same record merged before, and since ended
 			continue

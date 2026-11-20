@@ -249,6 +249,9 @@ func (t *Tasks) answerTarget(target string) (term.Backend, *term.Pane, *Job, *Le
 		if xl.Owner != t.Sender.ID || !sameServer(xl.OwnerRef, t.callerRef()) { // a pane ID is reused on another server
 			return nil, nil, nil, nil, term.TargetErr("only the owner of task %s can answer its dialogs", x.ID)
 		}
+		if x.Closed {
+			return nil, nil, nil, nil, term.UsageErr("task %s is closed", x.ID)
+		}
 		if !open(x.Status) || xl.Pane == "" {
 			return nil, nil, nil, nil, term.UsageErr("task %s is %s: there is no harness to answer", x.ID, x.Status)
 		}

@@ -447,6 +447,17 @@ func trackIdle(d *Data, j *Job, l *Lease, s Signal, now float64) bool {
 		}
 		return false
 	}
+	// A lead that waits on a working sub-task is not stalled (2026-11-19: a lead flagged twice while its
+	// worker built). Its idle stretch starts again once no sub-task works. A sub-task that is stalled itself
+	// does not cover for it: then the lead's notice names it.
+	working, stalled := childWork(d, l.ID)
+	if working {
+		if l.IdleSince != 0 || l.Stall != nil {
+			l.IdleSince, l.Stall = 0, nil
+			return true
+		}
+		return false
+	}
 	if l.IdleSince == 0 {
 		v := now
 		if s.At > 0 {
@@ -454,17 +465,6 @@ func trackIdle(d *Data, j *Job, l *Lease, s Signal, now float64) bool {
 		}
 		l.IdleSince = v
 		return v != 0
-	}
-	// A lead that waits on a working sub-task is not stalled (2026-11-19: a lead flagged twice while its
-	// worker built). Its idle stretch starts again once no sub-task works. A sub-task that is stalled itself
-	// does not cover for it: then the lead's notice names it.
-	working, stalled := childWork(d, l.ID)
-	if working {
-		if l.IdleSince != now {
-			l.IdleSince = now
-			return true
-		}
-		return false
 	}
 	since := l.IdleSince
 	if l.Progress != nil && l.Progress.At > since {
