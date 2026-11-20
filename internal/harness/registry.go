@@ -73,7 +73,9 @@ type Task struct {
 	TreeMax  int    `json:"tree_max,omitempty"`
 	// Orphaned is when the owner was told that this task ended while sub-tasks of it still run (once).
 	Orphaned float64 `json:"orphaned,omitempty"`
-	Unknown  Unknown `json:"-"`
+	// Restarted is set by Reconcile when an exited task's pane is running its harness again.
+	Restarted bool    `json:"restarted,omitempty"`
+	Unknown   Unknown `json:"-"`
 }
 
 // ProgressNote is a worker's latest progress line on its task.

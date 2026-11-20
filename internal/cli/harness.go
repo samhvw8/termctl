@@ -348,6 +348,9 @@ func (a *App) printTaskRow(t *harness.Task, indent string) {
 	if t.Dialog != nil {
 		extra += " [dialog " + t.Dialog.Fingerprint + "]"
 	}
+	if t.Status == "exited" && t.Restarted {
+		extra += " [harness back; task adopt " + t.Pane + "]"
+	}
 	if m := harness.AckMarks(t); m != "" {
 		extra += " " + m
 	}
@@ -1071,11 +1074,15 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 			fmt.Fprintln(a.Out, string(data))
 			return nil
 		}
+		restarted := ""
+		if t.Status == "exited" && t.Restarted {
+			restarted = fmt.Sprintf("harness is back in %s; run harness-ops task adopt %s", t.Pane, t.Pane)
+		}
 		for _, kv := range [][2]string{{"id", t.ID}, {"status", t.Status}, {"round", fmt.Sprint(t.Round)}, {"title", t.Title}, {"harness", t.Harness}, {"reviews", t.ReviewOf}, {"pane", t.Pane}, {"owner", t.Owner},
 			{"cwd", t.Cwd}, {"brief", t.Brief}, {"depth", fmt.Sprint(t.Depth)}, {"parent", t.Parent}, {"notify", t.Notify}, {"summary", t.Summary},
-			{"progress", a.progressLine(t)}, {"stalled", a.stallLine(t)}, {"root", t.Root}, {"role", role(t)}, {"deferred", deferLine(t)},
+			{"progress", a.progressLine(t)}, {"stalled", a.stallLine(t)}, {"restarted", restarted}, {"root", t.Root}, {"role", role(t)}, {"deferred", deferLine(t)},
 			{"started", when(t.Started)}, {"ended", when(t.Ended)}} {
-			if (kv[0] == "parent" || kv[0] == "progress" || kv[0] == "stalled" || kv[0] == "root" || kv[0] == "role" || kv[0] == "deferred") && kv[1] == "" {
+			if (kv[0] == "parent" || kv[0] == "progress" || kv[0] == "stalled" || kv[0] == "restarted" || kv[0] == "root" || kv[0] == "role" || kv[0] == "deferred") && kv[1] == "" {
 				continue
 			}
 			fmt.Fprintf(a.Out, "%-9s %s\n", kv[0]+":", kv[1])
@@ -1190,6 +1197,8 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 		switch {
 		case res.New:
 			fmt.Fprintf(a.Out, "adopted %s as task %s; it was told to report to you with task done\n", res.Task.Pane, res.Task.ID)
+		case res.OldOwner == res.Task.Owner:
+			fmt.Fprintf(a.Out, "reopened task %s (round %d); it reports to you now\n", res.Task.ID, res.Task.Round)
 		default:
 			fmt.Fprintf(a.Out, "adopted task %s from %s; it reports to you now\n", res.Task.ID, orDash(res.OldOwner))
 		}
@@ -1220,13 +1229,13 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 			}
 			return err
 		}
-		t, err := tasks.Close(id, p.bools["--force"])
+		t, kept, err := tasks.CloseWithNote(id, p.bools["--force"])
 		if err != nil {
 			return err
 		}
 		suffix := ""
-		if !t.Owned {
-			suffix = " (pane left open: it was not created for this task)"
+		if kept != "" {
+			suffix = " (pane left open: " + kept + ")"
 		}
 		fmt.Fprintf(a.Out, "closed task %s%s\n", t.ID, suffix)
 	}

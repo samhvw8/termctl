@@ -521,7 +521,7 @@ func TestRoundFieldsAreOmittedWhenEmptyAndUnknownFieldsSurvive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{"defer", "acked_at", "ack_note", "denied", "root", "sub_depth", "tree_max", "orphaned", "escalated"} {
+	for _, k := range []string{"defer", "acked_at", "ack_note", "denied", "root", "sub_depth", "tree_max", "orphaned", "escalated", "restarted"} {
 		if strings.Contains(string(data), `"`+k+`"`) {
 			t.Fatalf("%s written when empty: %s", k, data)
 		}
@@ -705,5 +705,167 @@ func TestDeferredTaskSendDoesNotRenamePane(t *testing.T) {
 	}
 	if after != before || r.pane(x).Title != wantTitle {
 		t.Fatalf("task send changed title or fired SetTitle: before=%d after=%d title=%q", before, after, r.pane(x).Title)
+	}
+}
+
+// Closing a task (with or without --force) must never close a pane that another open task holds, or
+// where a newer task exists on that pane; it closes only the record and reports why the pane stayed open.
+func TestCloseLeavesPaneOpenWhenAnotherOrNewerTaskExists(t *testing.T) {
+	// 1. An exited owned task whose pane is held by a second open task: close --force keeps the pane and its PaneRecord.
+	r := newRig(t)
+	t1 := r.mustNew(t, nil, NewOpts{Title: "old"})
+	r.pane(t1).Process = "zsh"
+	if g := r.get(t, t1.ID); g.Status != "exited" {
+		t.Fatal(g.Status)
+	}
+	r.pane(t1).Process = "fakeagent"
+	r.clock.T += 10
+	t2 := r.mustNew(t, nil, NewOpts{Reuse: t1.Pane, Title: "adopted"})
+	res, kept, err := r.tasks.CloseWithNote(t1.ID, true)
+	if err != nil || !res.Closed || kept == "" || !strings.Contains(kept, t2.ID) {
+		t.Fatalf("res=%+v kept=%q err=%v", res, kept, err)
+	}
+	if r.b.Has("close", t1.Pane) {
+		t.Fatal("closed a pane held by another open task")
+	}
+	if r.data().Panes[t1.Pane] == nil {
+		t.Fatal("deleted the PaneRecord of a live held pane")
+	}
+
+	// 2. Even after the newer task is settled and closed, closing the older task still leaves the pane open.
+	r.done(t, t2, "ok", "done")
+	if _, err := r.tasks.Accept(t2.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	r = newRig(t)
+	a := r.mustNew(t, nil, NewOpts{Title: "first"})
+	r.pane(a).Process = "zsh"
+	r.get(t, a.ID)
+	r.clock.T += 10
+	r.pane(a).Process = "fakeagent"
+	b := r.mustNew(t, nil, NewOpts{Reuse: a.Pane, Title: "second"})
+	r.done(t, b, "ok", "done")
+	if _, err := r.tasks.Accept(b.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	_, kept, err = r.tasks.CloseWithNote(a.ID, true)
+	if err != nil || !strings.Contains(kept, b.ID) || r.b.Has("close", a.Pane) {
+		t.Fatalf("kept=%q closed=%v err=%v", kept, r.b.Has("close", a.Pane), err)
+	}
+
+	// 3. Closing the newest (and only open) task on an owned pane still closes the pane.
+	r = newRig(t)
+	only := r.mustNew(t, nil, NewOpts{})
+	r.done(t, only, "ok", "ok")
+	if _, err := r.tasks.Accept(only.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	_, kept, err = r.tasks.CloseWithNote(only.ID, false)
+	if err != nil || kept != "" || !r.b.Has("close", only.Pane) {
+		t.Fatalf("kept=%q closed=%v err=%v", kept, r.b.Has("close", only.Pane), err)
+	}
+}
+
+// Adopting a pane whose latest task is exited or lost (while the pane lives) reopens that task record
+// (running, new owner, round+1, journaled) instead of making a second record. A pane with no task, or
+// whose latest task is done/closed, keeps creating a new record.
+func TestAdoptReopensExitedOrLostTaskOnLivePane(t *testing.T) {
+	// 1. Exited task from another owner: refused without --force while old owner lives; with --force it reopens.
+	r := newRig(t)
+	x := r.mustNew(t, r.as(r.other), NewOpts{Title: "lead"})
+	r.pane(x).Process = "zsh"
+	if g := r.get(t, x.ID); g.Status != "exited" {
+		t.Fatal(g.Status)
+	}
+	r.pane(x).Process = "claude"
+	r.pane(x).Title = "stale-title"
+	_, err := r.tasks.Adopt(x.Pane, false)
+	wantCode(t, err, 6)
+	res, err := r.tasks.Adopt(x.Pane, true)
+	if err != nil || res.New || res.Task.ID != x.ID {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+	if got := r.pane(x).Title; got != "WORKER · "+x.ID+" · lead" {
+		t.Fatalf("reopened pane title %q, want WORKER · %s · lead", got, x.ID)
+	}
+	g := r.get(t, x.ID)
+	if g.Status != "running" || g.Owner != r.owner.ID || g.Round != 2 || g.Ended != 0 || g.ExitCode != nil || g.Restarted {
+		t.Fatalf("reopened: %+v", g)
+	}
+	if len(r.data().Tasks) != 1 {
+		t.Fatalf("created second task: %d", len(r.data().Tasks))
+	}
+	if ev := journalEvents(t, r, Filter{Task: x.ID}); !termtest.Contains(ev, "task.adopt:running:") {
+		t.Fatalf("%q", ev)
+	}
+	// Stale exited pending notice was dropped rather than forwarded; only the adopt notice went to old owner.
+	if texts := r.b.Texts(r.other.ID); len(texts) != 1 || !strings.Contains(texts[0], "was adopted") {
+		t.Fatalf("old owner texts: %q", texts)
+	}
+
+	// 2. Exited task owned by the caller itself: reopens without --force.
+	r = newRig(t)
+	mine := r.mustNew(t, nil, NewOpts{})
+	r.pane(mine).Process = "zsh"
+	r.get(t, mine.ID)
+	r.pane(mine).Process = "claude"
+	res, err = r.tasks.Adopt(mine.Pane, false)
+	if err != nil || res.New || res.Task.ID != mine.ID || res.Task.Round != 2 || res.Task.Status != "running" {
+		t.Fatalf("self reopen: %+v %v", res, err)
+	}
+
+	// 3. Lost task whose pane still lives (and PaneRecord was deleted when lost): reopens and restores PaneRecord.
+	r = newRig(t)
+	lost := r.mustNew(t, nil, NewOpts{})
+	if err := r.reg.Update(func(d *Data) error {
+		d.Tasks[lost.ID].Status = "lost"
+		d.Tasks[lost.ID].Ended = r.clock.T
+		d.Tasks[lost.ID].Summary = "its server has not answered"
+		delete(d.Panes, lost.Pane)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res, err = r.tasks.Adopt(lost.Pane, false)
+	if err != nil || res.New || res.Task.ID != lost.ID || res.Task.Status != "running" || res.Task.Round != 2 || res.Task.Summary != "" {
+		t.Fatalf("lost reopen: %+v %v", res, err)
+	}
+	if rec := r.data().Panes[lost.Pane]; rec == nil || rec.Owner != r.owner.ID {
+		t.Fatalf("pane record not restored: %+v", rec)
+	}
+
+	// 4. A pane whose latest task is done (accepted) keeps today's behaviour: creates a new task record.
+	r.done(t, res.Task, "ok", "finished")
+	if _, err := r.tasks.Accept(res.Task.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	r.clock.T += 10
+	res2, err := r.tasks.Adopt(lost.Pane, false)
+	if err != nil || !res2.New || res2.Task.ID == lost.ID {
+		t.Fatalf("done pane should create new task: %+v %v", res2, err)
+	}
+}
+
+// Reconcile marks an exited task Restarted when its harness process is running again in the same pane,
+// and clears the mark when a shell returns or another task takes the pane.
+func TestReconcileNotesWhenExitedHarnessIsBack(t *testing.T) {
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{Harness: "claude", Command: "claude"})
+	p := r.pane(x)
+	p.Process = "zsh"
+	if g := r.get(t, x.ID); g.Status != "exited" || g.Restarted {
+		t.Fatalf("before restart: %+v", g)
+	}
+	p.Process = "vim" // a non-harness program does not count
+	if g := r.get(t, x.ID); g.Restarted {
+		t.Fatalf("unrelated program marked restarted: %+v", g)
+	}
+	p.Process = "claude"
+	if g := r.get(t, x.ID); g.Status != "exited" || !g.Restarted {
+		t.Fatalf("restarted claude not noted: %+v", g)
+	}
+	p.Process = "zsh"
+	if g := r.get(t, x.ID); g.Restarted {
+		t.Fatalf("mark did not clear back on shell: %+v", g)
 	}
 }

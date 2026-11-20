@@ -175,14 +175,17 @@ func (t *Tasks) closeDeferred(owner string, say func(string)) {
 			x.Pane == "" || x.Pane == owner || t.isSelf(x.Pane) {
 			continue
 		}
-		b, p, err := t.paneByID(x.Pane, x.Ref)
-		if err != nil {
-			continue // unknown is not gone: try again next round
-		}
-		if p != nil {
-			if err := b.Close(p); err != nil {
-				say(fmt.Sprintf("task %s: could not close its pane: %v", x.ID, err))
-				continue
+		keepPane := paneKeepReason(d, x) != ""
+		if !keepPane {
+			b, p, err := t.paneByID(x.Pane, x.Ref)
+			if err != nil {
+				continue // unknown is not gone: try again next round
+			}
+			if p != nil {
+				if err := b.Close(p); err != nil {
+					say(fmt.Sprintf("task %s: could not close its pane: %v", x.ID, err))
+					continue
+				}
 			}
 		}
 		var closed *Task
@@ -192,7 +195,9 @@ func (t *Tasks) closeDeferred(owner string, say func(string)) {
 				return nil
 			}
 			c.Closed, c.Dialog = true, nil
-			delete(d.Panes, c.Pane)
+			if !keepPane && paneKeepReason(d, c) == "" {
+				delete(d.Panes, c.Pane)
+			}
 			closed = c
 			return nil
 		}); err != nil {

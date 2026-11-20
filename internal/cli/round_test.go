@@ -149,3 +149,58 @@ func TestTreeFlagsCloseTreeAdoptAndResumeTree(t *testing.T) {
 		t.Fatal(code)
 	}
 }
+
+// CLI coverage for close leaving a held pane open, adopt reopening an exited task, and task ls/show
+// noting when an exited task's harness is back in its pane.
+func TestCloseAdoptAndRestartNoteCLI(t *testing.T) {
+	e := newEnv(t)
+	e.app.Factory = func(string, map[string]string) (term.Backend, error) { return e.b, nil }
+	id := e.newTask(t, "lead", "/w")
+	var paneID string
+	if err := harness.NewRegistry("").Update(func(d *harness.Data) error {
+		paneID = d.Tasks[id].Pane
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range e.b.Panes {
+		if p.ID == paneID {
+			p.Process = "zsh"
+		}
+	}
+	if code, out, _ := e.run("task", "ls"); code != 0 || !strings.Contains(out, "exited") || strings.Contains(out, "harness back") {
+		t.Fatalf("task ls exited:\n%s", out)
+	}
+	for _, p := range e.b.Panes {
+		if p.ID == paneID {
+			p.Process = "generic" // fake test task harness is generic; non-shell means back
+		}
+	}
+	if code, out, _ := e.run("task", "ls"); code != 0 || !strings.Contains(out, "[harness back; task adopt "+paneID+"]") {
+		t.Fatalf("task ls restarted:\n%s", out)
+	}
+	if code, out, _ := e.run("task", "show", id); code != 0 || !strings.Contains(out, "restarted:") {
+		t.Fatalf("task show restarted:\n%s", out)
+	}
+
+	// task adopt reopens the existing exited task (same ID, round 2).
+	code, out, stderr := e.run("task", "adopt", paneID)
+	if code != 0 || !strings.Contains(out, "reopened task "+id+" (round 2)") {
+		t.Fatalf("task adopt reopen: code=%d out=%q err=%q", code, out, stderr)
+	}
+
+	// When a second open task exists on the same pane, task close --force leaves the pane open and says why.
+	if err := harness.NewRegistry("").Update(func(d *harness.Data) error {
+		d.Tasks["tsecond"] = &harness.Task{
+			ID: "tsecond", Title: "second", Harness: "generic", Pane: paneID,
+			Owner: e.b.Me.ID, Status: "running", Started: 2, Round: 1,
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, out, stderr = e.run("task", "close", "--force", id)
+	if code != 0 || !strings.Contains(out, "(pane left open: task tsecond (running) holds it)") || e.b.Has("close", paneID) {
+		t.Fatalf("task close held pane: code=%d out=%q err=%q closed=%v", code, out, stderr, e.b.Has("close", paneID))
+	}
+}

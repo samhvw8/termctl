@@ -3,7 +3,7 @@ type: Architecture
 title: Tasks and pane safety
 description: How harness-ops tracks a job given to another harness session, tells its owner of a permission dialog, and what stops it closing or spawning the wrong thing.
 tags: [architecture, harness, tasks, safety]
-generated: { by: claude-code/opus-5.5, at: '2026-11-18T12:00:00Z' }
+generated: { by: antigravity/gemini-4-hydrogen, at: '2026-11-20T04:13:00Z' }
 ---
 
 # Overview
@@ -27,7 +27,7 @@ The lead owns "done". The worker's session has the files loaded, so it is the ri
 | failed, blocked | worker's `task done` | Waiting for the lead. The session stays open. |
 | failed | `task new`, when the start fails | The harness never got idle: its timeout (120 s), or since v0.7.1 a startup prompt such as the folder-trust question, after about 2 s (exit 5), or the brief stayed on the input line (exit 5; exit 4 before v0.7.2). That brief may still have gone in: `read` the pane first, and close the task rather than reuse a pane whose worker is at work. The pane stays open: once the user has answered, `task new --reuse PANE` gives it a new task. |
 | done | owner's `task accept` | Only this makes a task done. Only a ready task can be accepted, so a failure is never recorded as done. |
-| exited | exit hook, or reconcile | The pane is alive and the harness is gone. The owner is told. |
+| exited | exit hook, or reconcile | The pane is alive and the harness is gone. The owner is told. If Reconcile later sees the task's harness running again in the pane (with no newer task), it sets `restarted` (`omitempty`), `task ls` notes `[harness back; task adopt <pane>]`, and `task show` prints `restarted:`. |
 | lost | reconcile | The pane is gone, or the task never got a pane within 10 minutes. |
 
 `task send` on a ready, failed or blocked task returns it to `running` and adds one to `round`. The worker's next `task done` returns it to `ready`.
@@ -77,12 +77,13 @@ Tests: `TestDepthLimit`, `TestSubDepthTreeMaxAndTheRoleCard`, `TestTreeMaxCounts
 
 `harness-ops task adopt (ID | PANE) [--force]`, run by the new owner (code: `internal/harness/adopt.go`).
 
-- **A task.** `owner` and `owner_ref` become the caller's, `parent` the caller's own task (if any), and `root`, `depth`, `sub_depth` and `tree_max` are recomputed under it; the tasks under the adopted one stay under it, with their depth shifted and their caps narrowed to fit. The task's pane record follows, and a result still pending for the old owner goes to the new one. Refused: the caller's own pane (exit 2), a task that is the caller's already or above the caller's own task (exit 2), a closed or settled task (exit 2), a leaf caller or a subtree that would pass the depth ceiling (exit 6), and a task whose old owner pane is alive, unless `--force` (exit 6). A server that does not answer counts as alive.
-- **A pane with no task.** A running task record is made for it, as `reserve` makes one (the caller's cap, depth and tree checks), with `launched` set and `owned` false (closing it leaves the pane open); the caller gets the pane record. Nothing is typed but one message: `You now report to <caller>. When this work is done, run: harness-ops task done <id> --status ok|failed|blocked --summary ...`. A pane that holds a running task is that task's case: refused while its owner is alive, unless `--force`.
-- **Close safety.** A pane adopted with no task gets a pane record marked `adopted` (so its owner can answer its dialogs). `close` never counts such a record as a pane harness-ops created, so it needs `--force` even after the task ends; until v0.10.2 it did not (test: `TestAnAdoptedHandStartedPaneIsNeverClosableWithoutForce`).
-- Journal event `task.adopt`; the old owner, if alive, gets one notice (kind `adopt`).
+- **A task.** `owner` and `owner_ref` become the caller's, `parent` the caller's own task (if any), and `root`, `depth`, `sub_depth` and `tree_max` are recomputed under it; the tasks under the adopted one stay under it, with their depth shifted and their caps narrowed to fit. The task's pane record follows, and a result still pending for the old owner goes to the new one. Refused: the caller's own pane (exit 2), a task that is the caller's already (when not reopening) or above the caller's own task (exit 2), a closed or settled task (other than reopening `lost` while its pane lives) (exit 2), a leaf caller or a subtree that would pass the depth ceiling (exit 6), and a task whose old owner pane is alive, unless `--force` (exit 6). A server that does not answer counts as alive.
+- **An exited or lost task (live pane).** `task adopt` of a pane whose latest task on it is `exited` or `lost` while the pane lives (or by that task's ID) reopens that record (`status` `running`, `owner` and `owner_ref` = caller, `round` + 1, stale pending notices dropped, `PaneRecord` restored if lost, `task.adopt` journaled) instead of creating a second record. A different live old owner still needs `--force`; the same owner reopens without `--force`.
+- **A pane with no task.** A running task record is made for it, as `reserve` makes one (the caller's cap, depth and tree checks), with `launched` set and `owned` false (closing it leaves the pane open); the caller gets the pane record. Nothing is typed but one message: `You now report to <caller>. When this work is done, run: harness-ops task done <id> --status ok|failed|blocked --summary ...`. Panes whose latest task is `done`, `failed` or `closed` follow this path. A pane that holds a running task is that task's case: refused while its owner is alive, unless `--force`.
+- **Close safety.** A pane adopted with no task gets a pane record marked `adopted` (so its owner can answer its dialogs). `close` never counts such a record as a pane harness-ops created, so it needs `--force` even after the task ends; until v0.10.2 it did not (test: `TestAnAdoptedHandStartedPaneIsNeverClosableWithoutForce`). `task close` (with or without `--force`) also never closes a pane that another unclosed, unsettled task holds, or where a newer task exists on that pane (even if settled or closed): a pane is closed only when the task being closed is the newest task on that pane. Otherwise `task close` closes the record only, keeps `PaneRecord`, and prints why the pane stayed open (`(pane left open: ...)`).
+- Journal event `task.adopt`; the old owner, if alive and different, gets one notice (kind `adopt`).
 
-Tests: `TestAdoptATask`, `TestAdoptKeepsTheSubtreeAndRecomputesTheTree`, `TestAdoptAPaneWithNoTask`.
+Tests: `TestAdoptATask`, `TestAdoptKeepsTheSubtreeAndRecomputesTheTree`, `TestAdoptAPaneWithNoTask`, `TestCloseLeavesPaneOpenWhenAnotherOrNewerTaskExists`, `TestAdoptReopensExitedOrLostTaskOnLivePane`, `TestReconcileNotesWhenExitedHarnessIsBack`.
 
 # Surviving tabs
 

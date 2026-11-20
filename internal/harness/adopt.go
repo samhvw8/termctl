@@ -36,24 +36,60 @@ func (t *Tasks) Adopt(target string, force bool) (*Adopted, error) {
 	if errors.Is(ferr, errSeveral) {
 		return nil, ferr
 	}
+	var b term.Backend
+	var p *term.Pane
 	if ferr != nil {
-		b, p, err := t.paneTarget(d, target)
+		b, p, err = t.paneTarget(d, target)
 		if err != nil {
 			return nil, err
 		}
 		if p.IsSelf || t.isSelf(p.ID) {
 			return nil, term.TargetErr("refusing to adopt your own pane")
 		}
-		for _, y := range d.Tasks {
-			if open(y.Status) && !y.Closed && y.Pane == p.ID && sameServer(y.Ref, b.ServerRef()) {
-				x = y
-			}
-		}
+		x = taskToAdoptOnPane(d, p.ID, b.ServerRef())
 		if x == nil {
 			return t.adoptPane(me, b, p)
 		}
 	}
-	return t.adoptTask(me, x, force)
+	return t.adoptTask(me, x, b, p, force)
+}
+
+// taskToAdoptOnPane picks the task a pane holds for task adopt: an open unclosed task first, else the
+// latest task on the pane if it is exited or lost (while the pane lives) so adopt reopens it instead of
+// creating a second record.
+func taskToAdoptOnPane(d *Data, paneID string, ref map[string]string) *Task {
+	var openHit, latest *Task
+	for _, y := range d.Tasks {
+		if y.Pane != paneID || !sameServer(y.Ref, ref) {
+			continue
+		}
+		if open(y.Status) && !y.Closed && newerTask(y, openHit) {
+			openHit = y
+		}
+		if newerTask(y, latest) {
+			latest = y
+		}
+	}
+	if openHit != nil {
+		return openHit
+	}
+	if latest != nil && !latest.Closed && (latest.Status == "exited" || latest.Status == "lost") {
+		return latest
+	}
+	return nil
+}
+
+func newerTask(a, b *Task) bool {
+	if b == nil {
+		return true
+	}
+	if a.Started != b.Started {
+		return a.Started > b.Started
+	}
+	if a.Ended != b.Ended {
+		return a.Ended > b.Ended
+	}
+	return a.ID > b.ID
 }
 
 // ownerAlive: the task's owner pane is there. A server that does not answer counts as alive: unknown is not gone.
@@ -75,17 +111,31 @@ func heldBy(d *Data, pane string) *Task {
 	return nil
 }
 
-func (t *Tasks) adoptTask(me *term.Pane, x *Task, force bool) (*Adopted, error) {
+func (t *Tasks) adoptTask(me *term.Pane, x *Task, b term.Backend, p *term.Pane, force bool) (*Adopted, error) {
 	if t.isSelf(x.Pane) {
 		return nil, term.TargetErr("refusing to adopt your own pane (task %s)", x.ID)
 	}
-	if t.owns(x) {
+	reopen := !x.Closed && (x.Status == "exited" || x.Status == "lost")
+	if !reopen && t.owns(x) {
 		return nil, term.UsageErr("task %s is yours already", x.ID)
 	}
-	if x.Closed || settled(x.Status) {
+	if x.Closed || (settled(x.Status) && !reopen) {
 		return nil, term.UsageErr("task %s is %s; there is nothing to adopt", x.ID, map[bool]string{true: "closed", false: x.Status}[x.Closed])
 	}
-	alive := t.ownerAlive(x.Owner, x.OwnerRef)
+	if reopen && p == nil {
+		if x.Pane == "" {
+			return nil, term.UsageErr("task %s is %s; there is nothing to adopt", x.ID, x.Status)
+		}
+		var err error
+		b, p, err = t.paneByID(x.Pane, x.Ref)
+		if err != nil {
+			return nil, err
+		}
+		if p == nil {
+			return nil, term.UsageErr("task %s is %s; there is nothing to adopt", x.ID, x.Status)
+		}
+	}
+	alive := !t.owns(x) && t.ownerAlive(x.Owner, x.OwnerRef)
 	if alive && !force {
 		return nil, term.Errf(term.CodeGuard, "task %s belongs to %s, which is still there; ask it, or use --force", x.ID, x.Owner)
 	}
@@ -93,7 +143,7 @@ func (t *Tasks) adoptTask(me *term.Pane, x *Task, force bool) (*Adopted, error) 
 	if err != nil {
 		return nil, err
 	}
-	old, oldRef := x.Owner, x.OwnerRef
+	old, oldRef, wasStatus := x.Owner, x.OwnerRef, x.Status
 	var out Task
 	type titleUpdate struct {
 		pane  string
@@ -103,6 +153,14 @@ func (t *Tasks) adoptTask(me *term.Pane, x *Task, force bool) (*Adopted, error) 
 	var renames []titleUpdate
 	err = t.Reg.Update(func(d *Data) error {
 		c := d.Tasks[x.ID]
+		if c == nil || c.Closed {
+			return term.UsageErr("task %s is closed; there is nothing to adopt", x.ID)
+		}
+		if reopen {
+			if other := otherTaskOnPane(d, c); other != nil {
+				return term.UsageErr("pane %s already holds task %s (%s); adopt the pane or that task instead", c.Pane, other.ID, other.Status)
+			}
+		}
 		parent := heldBy(d, me.ID)
 		seen := map[string]bool{}
 		for y := parent; y != nil && !seen[y.ID]; y = d.Tasks[y.Parent] { // the caller's own task under the adopted one
@@ -140,6 +198,15 @@ func (t *Tasks) adoptTask(me *term.Pane, x *Task, force bool) (*Adopted, error) 
 		sub = min(sub, maxDepth-depth)
 		shift := depth - c.Depth
 		c.Owner, c.OwnerRef, c.Depth, c.Root, c.SubDepth, c.TreeMax = me.ID, t.SenderRef, depth, root, sub, treeMax
+		if reopen {
+			c.Status, c.Ended, c.Summary, c.Notify, c.Seen = "running", 0, "", "none", false
+			c.ExitCode, c.Dialog, c.IdleSince, c.Stall, c.Progress = nil, nil, 0, nil, nil
+			c.Unreachable, c.Orphaned, c.Restarted, c.Launched = 0, 0, false, true
+			c.Round++
+			if b != nil {
+				c.Ref = b.ServerRef()
+			}
+		}
 		if c.Pane != "" {
 			renames = append(renames, titleUpdate{c.Pane, c.Ref, paneTitle(c)})
 		}
@@ -161,10 +228,42 @@ func (t *Tasks) adoptTask(me *term.Pane, x *Task, force bool) (*Adopted, error) 
 		}
 		if rec := d.Panes[c.Pane]; rec != nil {
 			rec.Owner, rec.OwnerRef = me.ID, t.SenderRef
+			if b != nil {
+				rec.Ref = b.ServerRef()
+			}
+		} else if reopen && c.Pane != "" {
+			label, cwd, h := c.ID, c.Cwd, c.Harness
+			if p != nil {
+				if p.Label != "" {
+					label = p.Label
+				}
+				if cwd == "" {
+					cwd = p.Folder
+				}
+				if h == "" {
+					h = HarnessName(p)
+				}
+			}
+			var ref map[string]string
+			if b != nil {
+				ref = b.ServerRef()
+			}
+			d.Panes[c.Pane] = &PaneRecord{Harness: h, Label: label, Cwd: cwd, Ref: ref, Owner: me.ID, OwnerRef: t.SenderRef,
+				Created: t.clock().Now(), Adopted: !c.Owned}
 		}
-		for _, p := range d.Pending { // a result held for the old owner goes to the new one
-			if p.Task == c.ID && p.Owner == old {
-				p.Owner, p.OwnerRef = me.ID, t.SenderRef
+		if reopen {
+			keep := d.Pending[:0]
+			for _, q := range d.Pending {
+				if q.Task != c.ID {
+					keep = append(keep, q)
+				}
+			}
+			d.Pending = keep
+		} else {
+			for _, q := range d.Pending { // a result held for the old owner goes to the new one
+				if q.Task == c.ID && q.Owner == old {
+					q.Owner, q.OwnerRef = me.ID, t.SenderRef
+				}
 			}
 		}
 		if alive {
@@ -186,7 +285,15 @@ func (t *Tasks) adoptTask(me *term.Pane, x *Task, force bool) (*Adopted, error) 
 			}
 		}
 	}
-	t.logTask("task.adopt", &out, out.Status, "adopted from "+old)
+	note := "adopted from " + old
+	if reopen {
+		if old == "" || old == me.ID {
+			note = "reopened from " + wasStatus
+		} else {
+			note = "reopened from " + wasStatus + ", adopted from " + old
+		}
+	}
+	t.logTask("task.adopt", &out, out.Status, note)
 	if _, err := t.FlushPending(); err != nil {
 		Warn(fmt.Sprintf("could not deliver notices: %v", err))
 	}

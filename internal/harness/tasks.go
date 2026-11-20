@@ -263,14 +263,36 @@ func (t *Tasks) warnDownOnce(x *Task, cause error) {
 // answer changes nothing until it has not answered for unreachableTTL; then it is gone for good, and its
 // tasks are lost. Only a task's owner records that: other processes leave the task alone and warn once. "cannot check" is warned once when a task's server stops answering, not on every call.
 func (t *Tasks) Reconcile() error {
+	memo := t.memo == nil
+	if memo {
+		t.startMemo()
+		defer t.stopMemo()
+	}
 	d, err := t.Reg.Read()
 	if err != nil {
 		return err
 	}
 	var lost, exited, back []string
 	down := map[string]error{} // tasks whose server does not answer, and the first time or past the TTL
+	restarted := map[string]bool{}
 	now := t.clock().Now()
 	for _, x := range d.Tasks {
+		if x.Status == "exited" && !x.Closed && x.Pane != "" {
+			if otherTaskOnPane(d, x) != nil {
+				if x.Restarted {
+					restarted[x.ID] = false
+				}
+				continue
+			}
+			_, p, err := t.paneByID(x.Pane, x.Ref)
+			if err != nil {
+				continue
+			}
+			if want := p != nil && harnessBack(x, p); want != x.Restarted {
+				restarted[x.ID] = want
+			}
+			continue
+		}
 		if !open(x.Status) {
 			continue
 		}
@@ -304,7 +326,7 @@ func (t *Tasks) Reconcile() error {
 			exited = append(exited, x.ID)
 		}
 	}
-	if len(lost)+len(exited)+len(back)+len(down) == 0 {
+	if len(lost)+len(exited)+len(back)+len(down)+len(restarted) == 0 {
 		return nil
 	}
 	return t.Reg.Update(func(d *Data) error {
@@ -322,6 +344,11 @@ func (t *Tasks) Reconcile() error {
 		}
 		for _, id := range exited {
 			t.markExited(d, id, nil)
+		}
+		for id, want := range restarted {
+			if x := d.Tasks[id]; x != nil && x.Status == "exited" && !x.Closed {
+				x.Restarted = want
+			}
 		}
 		for _, id := range back {
 			if x := d.Tasks[id]; x != nil && x.Unreachable != 0 {
@@ -344,13 +371,24 @@ func (t *Tasks) Reconcile() error {
 	})
 }
 
+// harnessBack reports whether pane p is running task x's harness again after x was marked exited.
+func harnessBack(x *Task, p *term.Pane) bool {
+	if p == nil || p.Process == "" || isShell(p.Process) {
+		return false
+	}
+	if x.Harness == "" || x.Harness == "generic" {
+		return true
+	}
+	return HarnessName(p) == x.Harness
+}
+
 // markExited records that the harness is gone from a live pane, and queues the owner's notice.
 func (t *Tasks) markExited(d *Data, id string, code *int) {
 	x := d.Tasks[id]
 	if x == nil || !open(x.Status) {
 		return
 	}
-	x.Status, x.Ended, x.ExitCode, x.Notify, x.Dialog = "exited", t.clock().Now(), code, "pending", nil
+	x.Status, x.Ended, x.ExitCode, x.Notify, x.Dialog, x.Restarted = "exited", t.clock().Now(), code, "pending", nil, false
 	why := "the harness exited"
 	if code != nil {
 		why = fmt.Sprintf("the harness exited with status %d", *code)
@@ -833,8 +871,10 @@ func (t *Tasks) ClosePane(target string, force bool) (*term.Pane, error) {
 	}
 	var task *Task
 	for _, x := range d.Tasks {
-		if !settled(x.Status) && !x.Closed && x.Pane == p.ID {
-			task = x
+		if !settled(x.Status) && !x.Closed && x.Pane == p.ID && sameServer(x.Ref, t.Backend.ServerRef()) {
+			if task == nil || newerTask(x, task) {
+				task = x
+			}
 		}
 	}
 	if !force {
@@ -870,8 +910,8 @@ func (t *Tasks) ClosePane(target string, force bool) (*term.Pane, error) {
 	return p, t.Reg.Update(func(d *Data) error {
 		delete(d.Panes, p.ID)
 		for _, x := range d.Tasks {
-			if x.Pane == p.ID && !settled(x.Status) && !x.Closed {
-				x.Closed = true
+			if x.Pane == p.ID && sameServer(x.Ref, t.Backend.ServerRef()) && !settled(x.Status) && !x.Closed {
+				x.Closed, x.Restarted = true, false
 				if x.Status == "running" {
 					x.Status, x.Ended, x.Summary = "failed", t.clock().Now(), "its pane was closed with --force"
 				}
@@ -1561,46 +1601,104 @@ func (t *Tasks) deliver(p Pending) string {
 	return "delivered"
 }
 
-// Close closes a task's pane. A pane the task did not create is left open.
+// otherTaskOnPane returns another task on x's pane (same server) that still holds it (not closed, not
+// settled) or was started after x; open holders come before newer settled/closed tasks.
+func otherTaskOnPane(d *Data, x *Task) *Task {
+	if x.Pane == "" {
+		return nil
+	}
+	var openOther, newer *Task
+	for _, y := range d.Tasks {
+		if y.ID == x.ID || y.Pane != x.Pane || !sameServer(y.Ref, x.Ref) {
+			continue
+		}
+		if !y.Closed && !settled(y.Status) && (openOther == nil || newerTask(y, openOther)) {
+			openOther = y
+		}
+		if y.Started > x.Started && (newer == nil || newerTask(y, newer)) {
+			newer = y
+		}
+	}
+	if openOther != nil {
+		return openOther
+	}
+	return newer
+}
+
+// paneKeepReason reports why closing task x must leave its pane open, or "" when x may close it.
+func paneKeepReason(d *Data, x *Task) string {
+	if x.Pane == "" {
+		return ""
+	}
+	if !x.Owned {
+		return "it was not created for this task"
+	}
+	if other := otherTaskOnPane(d, x); other != nil {
+		if !other.Closed && !settled(other.Status) {
+			return fmt.Sprintf("task %s (%s) holds it", other.ID, other.Status)
+		}
+		return fmt.Sprintf("newer task %s (%s) is on it", other.ID, other.Status)
+	}
+	return ""
+}
+
+// Close closes a task's pane. A pane the task did not create, or that another open or newer task holds, is
+// left open.
 func (t *Tasks) Close(id string, force bool) (*Task, error) {
+	res, _, err := t.CloseWithNote(id, force)
+	return res, err
+}
+
+// CloseWithNote closes a task and returns why its pane stayed open, or "" when it closed (or had none).
+func (t *Tasks) CloseWithNote(id string, force bool) (*Task, string, error) {
 	x, err := t.Get(id)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if t.isSelf(x.Pane) {
-		return nil, term.TargetErr("refusing to close your own pane")
+		return nil, "", term.TargetErr("refusing to close your own pane")
 	}
 	if !settled(x.Status) && !force {
-		return nil, term.Errf(term.CodeGuard, "task %s is %s, not accepted; use task accept, or --force", x.ID, x.Status)
+		return nil, "", term.Errf(term.CodeGuard, "task %s is %s, not accepted; use task accept, or --force", x.ID, x.Status)
 	}
-	if x.Owned && x.Pane != "" {
+	d, err := t.Reg.Read()
+	if err != nil {
+		return nil, "", err
+	}
+	kept := paneKeepReason(d, x)
+	if kept == "" && x.Pane != "" {
 		b, p, err := t.paneByID(x.Pane, x.Ref)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if p != nil {
 			if err := b.Close(p); err != nil {
-				return nil, err
+				return nil, "", err
 			}
 		}
 	}
 	var result *Task
 	err = t.Reg.Update(func(d *Data) error {
 		c := d.Tasks[x.ID]
-		c.Closed, c.Dialog = true, nil
+		kept = paneKeepReason(d, c)
+		c.Closed, c.Dialog, c.Restarted = true, nil, false
 		if c.Status == "running" {
 			c.Status, c.Ended, c.Summary = "failed", t.clock().Now(), "closed by its owner before it finished"
 		}
-		if c.Owned {
+		if kept == "" && c.Pane != "" {
 			delete(d.Panes, c.Pane)
 		}
 		result = c
 		return nil
 	})
 	if err == nil {
-		t.logTask("task.close", result, result.Status, "")
+		note := ""
+		if kept != "" && result.Pane != "" {
+			note = "pane left open: " + kept
+		}
+		t.logTask("task.close", result, result.Status, note)
 	}
-	return result, err
+	return result, kept, err
 }
 
 // Accept is the lead's verdict: only it makes a task done.
