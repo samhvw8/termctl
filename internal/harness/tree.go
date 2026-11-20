@@ -93,6 +93,30 @@ func place(d *Data, x, parent *Task, sub, treeMax, maxDepth int) error {
 }
 
 // roleCard is the capability card in a task's brief footer.
+// roleName is a task's role as a pane shows it: what the person looking at the terminal needs to tell apart.
+func roleName(x *Task) string {
+	switch {
+	case x.ReviewOf != "":
+		return "REVIEWER"
+	case x.Defer:
+		return "DEFERRED"
+	case x.SubDepth >= 2:
+		return "LEAD OF LEADS"
+	case x.SubDepth == 1:
+		return "LEAD"
+	}
+	return "WORKER"
+}
+
+// paneTitle names a task's pane: role, ID and title, so a tab or a badge says what it is at a glance.
+func paneTitle(x *Task) string {
+	s := roleName(x) + " · " + x.ID
+	if x.Title != "" {
+		s += " · " + x.Title
+	}
+	return s
+}
+
 func roleCard(x *Task, running int) string {
 	if x.SubDepth < 1 {
 		return "Role: leaf (do not start tasks)."

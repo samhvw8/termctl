@@ -297,3 +297,26 @@ func TestALeadWaitingOnAWorkingSubTaskIsNotStalled(t *testing.T) {
 		t.Fatalf("want one lead stall naming %s, got %q", sub.ID, n)
 	}
 }
+
+// A task's pane is named by its role, ID and title, so a person can tell a worker from a lead.
+func TestPaneTitleNamesTheRole(t *testing.T) {
+	for _, c := range []struct {
+		x    Task
+		want string
+	}{
+		{Task{ID: "t1", Title: "port"}, "WORKER · t1 · port"},
+		{Task{ID: "t2", Title: "f062", SubDepth: 1}, "LEAD · t2 · f062"},
+		{Task{ID: "t3", SubDepth: 2}, "LEAD OF LEADS · t3"},
+		{Task{ID: "t4", Defer: true}, "DEFERRED · t4"},
+		{Task{ID: "t5", ReviewOf: "t1", SubDepth: 1}, "REVIEWER · t5"},
+	} {
+		if got := paneTitle(&c.x); got != c.want {
+			t.Errorf("%+v: %q, want %q", c.x, got, c.want)
+		}
+	}
+	r := newRig(t)
+	x := r.mustNew(t, nil, NewOpts{Title: "port", SubDepth: 1})
+	if got := r.pane(x).Title; got != "LEAD · "+x.ID+" · port" {
+		t.Fatalf("the pane was spawned with title %q", got)
+	}
+}

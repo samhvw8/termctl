@@ -313,6 +313,16 @@ func (b *ITerm2Backend) SpawnAt(at *Pane, where, cmd, cwd, title string) (*Pane,
 		set("Custom Directory", "Yes")
 		set("Working Directory", cwd)
 	}
+	if title != "" {
+		// The session name shows in the pane's title bar and in notifications; the badge is large text in the
+		// pane's corner that the program inside cannot overwrite (Claude Code and agy set their own titles).
+		set("Name", title)
+		badge := title // role and ID only: the badge is large, the full title is in the session name
+		if parts := strings.SplitN(title, " · ", 3); len(parts) == 3 {
+			badge = parts[0] + " · " + parts[1]
+		}
+		set("Badge Text", badge)
+	}
 	want := selfNative()
 	if at != nil {
 		want = at.Native
