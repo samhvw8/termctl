@@ -98,8 +98,6 @@ func roleName(x *Task) string {
 	switch {
 	case x.ReviewOf != "":
 		return "REVIEWER"
-	case x.Defer:
-		return "DEFERRED"
 	case x.SubDepth >= 2:
 		return "LEAD OF LEADS"
 	case x.SubDepth == 1:
@@ -108,9 +106,13 @@ func roleName(x *Task) string {
 	return "WORKER"
 }
 
-// paneTitle names a task's pane: role, ID and title, so a tab or a badge says what it is at a glance.
+// paneTitle names a task's pane: role, ID and title, so a tab or a badge says what it is at a glance. A
+// deferred task stands alone (it reports to no one), so it carries no role: its ID and title only.
 func paneTitle(x *Task) string {
 	s := roleName(x) + " · " + x.ID
+	if x.Defer {
+		s = x.ID
+	}
 	if x.Title != "" {
 		s += " · " + x.Title
 	}

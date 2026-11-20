@@ -307,7 +307,7 @@ func TestPaneTitleNamesTheRole(t *testing.T) {
 		{Task{ID: "t1", Title: "port"}, "WORKER · t1 · port"},
 		{Task{ID: "t2", Title: "f062", SubDepth: 1}, "LEAD · t2 · f062"},
 		{Task{ID: "t3", SubDepth: 2}, "LEAD OF LEADS · t3"},
-		{Task{ID: "t4", Defer: true}, "DEFERRED · t4"},
+		{Task{ID: "t4", Title: "cleanup", Defer: true, SubDepth: 1}, "t4 · cleanup"},
 		{Task{ID: "t5", ReviewOf: "t1", SubDepth: 1}, "REVIEWER · t5"},
 	} {
 		if got := paneTitle(&c.x); got != c.want {
