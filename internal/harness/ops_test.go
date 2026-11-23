@@ -60,11 +60,26 @@ func TestMsgRefusesDraft(t *testing.T) {
 	}
 }
 
-func TestMsgForceIgnoresDraft(t *testing.T) {
+// msg --force wipes a draft with ctrl-u before it types: a joined draft garbles the message.
+func TestMsgForceWipesDraftThenSends(t *testing.T) {
 	r := newOps(t)
 	r.b.State[r.t.ID].Input = "half typed"
-	if _, err := r.ops.Msg(r.t, "hello", MsgOpts{Force: true}); err != nil || len(typed(r)) != 2 {
-		t.Fatal(err, typed(r))
+	if _, err := r.ops.Msg(r.t, "hello", MsgOpts{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(typed(r), []string{"key:ctrl-u", "text:" + tag + " hello", "key:enter"}) {
+		t.Fatal(typed(r))
+	}
+}
+
+// With no draft, --force types nothing extra.
+func TestMsgForceWithoutDraftSendsNoCtrlU(t *testing.T) {
+	r := newOps(t)
+	if _, err := r.ops.Msg(r.t, "hello", MsgOpts{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(typed(r), []string{"text:" + tag + " hello", "key:enter"}) {
+		t.Fatal(typed(r))
 	}
 }
 

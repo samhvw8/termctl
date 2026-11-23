@@ -117,7 +117,7 @@ No match, several matches, or your own pane exits 2 and lists candidates. It nev
 
 - `msg` and `slash` refuse (exit 4) when the target's input line holds a draft, unless `--force`.
 - A calibrated harness (claude, omp, agy) whose input line cannot be read also refuses. Others warn and proceed.
-- `slash --force` wipes the draft with ctrl-u: a slash command must be the whole line.
+- `--force` wipes the draft with ctrl-u, then sends (`msg`, `send`, `task send`, `slash`). It never joins a draft to the message. When the input line cannot be read, it warns and sends.
 - `msg --clear-first` sends `/clear` alone, waits for idle, re-checks the input line, then sends.
 - A message over 800 characters or with line breaks goes to a file in `~/.local/state/termctl/projects/<project>/`. Every message and task event is a line of the journal: `harness-ops log` and `harness-ops resume` read it back.
 - Put options before the target; everything after the target is message text. Use `--` to send text starting with a flag.

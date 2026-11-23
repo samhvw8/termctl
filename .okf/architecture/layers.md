@@ -33,4 +33,6 @@ The `agent-ops` skill (named `agent-msg` until 2026-11-10) calls `harness-ops` d
 
 Step 4 is the fix for the original failure, where the message joined `/clear` on one line.
 
+Without `--clear-first`, `msg --force` (and `task send --force`) also wipes a draft with ctrl-u before it types. Before 2026-11-23 it typed after the draft, and the receiver got the draft and the message as one garbled line.
+
 [^agent-ops]: agent-ops rules that the tool keeps

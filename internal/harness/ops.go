@@ -575,7 +575,7 @@ func (o *Ops) Msg(p *term.Pane, text string, opts MsgOpts) (Sent, error) {
 		if err := o.AssertCleared(p, prof); err != nil { // even with --force
 			return Sent{}, err
 		}
-	} else if err := o.CheckDraft(p, prof, opts.Force); err != nil {
+	} else if err := o.assertAlone(p, prof, opts.Force); err != nil { // --force wipes a draft, never joins it
 		return Sent{}, err
 	}
 	busy, err := o.busy(p, prof)
