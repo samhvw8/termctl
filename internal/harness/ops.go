@@ -19,9 +19,10 @@ const (
 	settle         = 0.5 // let the screen react to what we sent before judging it
 	submitSettle   = 0.7 // how long a TUI gets to take a submitted line off its input
 	submitRetries  = 3
-	submitConfirm  = 1.0 // the first empty input line must look empty again this much later, unless the harness went busy
-	startStable    = 3.0 // a starting harness must hold a stable screen this long: late startup banners redraw it
-	interruptLook  = 2.0 // how long a stopped harness gets to put a queued message back on its input line
+	submitConfirm  = 1.0  // the first empty input line must look empty again this much later, unless the harness went busy
+	typedLook      = 10.0 // how long typed text gets to show on the input line before Enter
+	startStable    = 3.0  // a starting harness must hold a stable screen this long: late startup banners redraw it
+	interruptLook  = 2.0  // how long a stopped harness gets to put a queued message back on its input line
 	poll           = 0.25
 	DefaultTimeout = 120.0
 	captureLines   = 200
@@ -226,7 +227,9 @@ func (o *Ops) submit(p *term.Pane, line string, prof *Profile, from string, star
 		if err := o.Backend.SendText(p, line); err != nil {
 			return false, err
 		}
-		o.Clock.Sleep(enterDelay)
+		if err := o.awaitTyped(p, prof, line); err != nil {
+			return true, err
+		}
 		if err := o.Backend.SendKey(p, "enter"); err != nil {
 			return true, err
 		}
@@ -269,9 +272,53 @@ func (o *Ops) submit(p *term.Pane, line string, prof *Profile, from string, star
 				p.Address(), enters+1, term.Cut(line, 80))
 		}
 		enters++
+		if prof.InputEndsBlank != nil && prof.InputEndsBlank(lines) {
+			// An Enter taken in with the text, as part of the paste, became a new line: remove it, or the
+			// next Enter can add another.
+			if err := o.Backend.SendKey(p, "backspace"); err != nil {
+				return true, err
+			}
+			o.Clock.Sleep(enterDelay)
+		}
 		if err := o.Backend.SendKey(p, "enter"); err != nil {
 			return true, err
 		}
+	}
+}
+
+// awaitTyped waits until the end of the typed text shows on the input line, and only then lets Enter go.
+// A TUI whose event loop is busy (Claude Code in the first second of a turn) takes the text and an Enter
+// sent 0.4 s later in one read, as one paste, and the Enter becomes a new line; its screen meanwhile still
+// shows the empty input line from before, which read as a submitted line (2026-11-27: a notice sat
+// unsent on the superagent's input line for 37 minutes, and the sender was told it went). A profile that
+// is not calibrated may draw a line its reader cannot see: when it reads none, Enter goes as before. After
+// typedLook Enter goes anyway, with a warning; the check after Enter still decides the result.
+func (o *Ops) awaitTyped(p *term.Pane, prof *Profile, line string) error {
+	o.Clock.Sleep(enterDelay)
+	if prof.ReadInput == nil {
+		return nil
+	}
+	tail := []rune(unspaced(line))
+	if len(tail) > 24 {
+		tail = tail[len(tail)-24:]
+	}
+	for waited := enterDelay; ; waited += poll {
+		lines, err := o.Backend.Capture(p, screenLines(p))
+		if err != nil {
+			return err
+		}
+		d := prof.ReadInput(lines)
+		if d != nil && (strings.Contains(unspaced(*d), string(tail)) || strings.Contains(*d, "[Pasted text")) {
+			return nil
+		}
+		if d == nil && !prof.Calibrated {
+			return nil
+		}
+		if waited >= typedLook {
+			Warn(fmt.Sprintf("the typed text did not show on the input line of %s (%s) within %gs; Enter pressed anyway", p.Address(), prof.Name, typedLook))
+			return nil
+		}
+		o.Clock.Sleep(poll)
 	}
 }
 

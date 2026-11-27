@@ -82,13 +82,17 @@ type Fake struct {
 	DropEnters    int // this many Enters are ignored, as a TUI does when text is still pasting
 	// LateInput: after typing, this many captures still show an empty input line, and an Enter sent
 	// meanwhile is lost, as Claude Code does while it is still starting (2026-11-19, task t93a651).
-	LateInput    int
-	Ref          map[string]string
-	Spawned      []string
-	BackendName  string                        // Name() when set; default "fake"
-	Statuses     map[string]term.ProgramStatus // a pane's program status
-	StatusCalls  int
-	CostlyStatus bool // the status read costs a process, as on Rex and hc: the watcher reads it once per round
+	LateInput int
+	// PasteEnter: an Enter that arrives while typed text is not yet taken in (LateInput) joins the paste
+	// as a new line instead of being lost, as Claude Code does when its event loop is busy (2026-11-27).
+	PasteEnter    bool
+	NewlineEnters int // this many Enters become a new line on the input line, as an Enter taken in with a paste
+	Ref           map[string]string
+	Spawned       []string
+	BackendName   string                        // Name() when set; default "fake"
+	Statuses      map[string]term.ProgramStatus // a pane's program status
+	StatusCalls   int
+	CostlyStatus  bool // the status read costs a process, as on Rex and hc: the watcher reads it once per round
 	// History makes the fake a term.SafeHistory: a pane with Rows shows that many lines, and a Capture of
 	// more reads the lines above them, as tmux's scrollback.
 	History bool
@@ -205,7 +209,15 @@ func (f *Fake) SendKey(p *term.Pane, key string) error {
 			f.DropEnters--
 			return nil
 		}
-		if st.hidden > 0 { // not taken in yet: the Enter is lost
+		if f.NewlineEnters > 0 {
+			f.NewlineEnters--
+			st.Input += "\n"
+			return nil
+		}
+		if st.hidden > 0 { // not taken in yet: the Enter is lost, or joins the paste as a new line
+			if f.PasteEnter {
+				st.Input += "\n"
+			}
 			return nil
 		}
 		line := st.Input
@@ -219,6 +231,10 @@ func (f *Fake) SendKey(p *term.Pane, key string) error {
 		}
 	case "ctrl-u":
 		st.Input = ""
+	case "backspace":
+		if n := len(st.Input); n > 0 {
+			st.Input = st.Input[:n-1]
+		}
 	case "escape", "ctrl-c":
 		if st.Queued != "" {
 			st.Input, st.Queued = st.Queued, ""
@@ -268,7 +284,12 @@ func (f *Fake) capture(p *term.Pane) []string {
 	}
 	if p.Process == "fakeagent" || p.Process == "claude" { // spawned panes pass every profile's input-line check
 		rule := strings.Repeat("─", 40)
-		screen = append(screen, rule, "❯ "+input, rule, "╰─")
+		in := strings.Split(input, "\n")
+		screen = append(screen, rule, "❯ "+in[0])
+		for _, ln := range in[1:] {
+			screen = append(screen, "  "+ln)
+		}
+		screen = append(screen, rule, "╰─")
 	}
 	return append(screen, "> "+input)
 }

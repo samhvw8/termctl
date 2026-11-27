@@ -59,6 +59,15 @@ func boxText(lines []string, top, bottom int, mark string) string {
 	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
+// claudeInputEndsBlank: the box holds text, and its last line is empty (the cursor on a new line).
+func claudeInputEndsBlank(lines []string) bool {
+	top, bottom, ok := claudeBox(lines)
+	if !ok || bottom-top < 3 {
+		return false
+	}
+	return strings.TrimSpace(lines[bottom-1]) == "" && boxText(lines, top, bottom, "❯") != ""
+}
+
 func claudeInput(lines []string) *string {
 	top, bottom, ok := claudeBox(lines)
 	if !ok {
@@ -189,6 +198,8 @@ type Profile struct {
 	// ReadScrollbackDialog reads a dialog from the screen and the scrollback above it, for a request taller
 	// than the pane; nil for a harness that keeps no dialog there (agy draws on the alternate screen).
 	ReadScrollbackDialog func([]string) *Dialog
+	// InputEndsBlank reports an input box whose last line is empty below text: an Enter became a new line.
+	InputEndsBlank func([]string) bool
 }
 
 // IsBusy looks for a busy pattern near the bottom of the screen.
@@ -235,6 +246,7 @@ var Profiles = func() map[string]*Profile {
 		`--allowedTools Read Grep Glob 'Bash(git status *)' 'Bash(git diff *)' 'Bash(git log *)' 'Bash(git show *)' 'Bash(harness-ops task done *)'`
 	claude.BusyPatterns = []*regexp.Regexp{regexp.MustCompile(`(?i)esc to interrupt`), claudeWorking}
 	claude.ReadDialog = unlessInput(claudeReadDialog, claudeInput) // Claude Code 2.1.326: "Do you want to proceed?", "❯ 1. Yes"
+	claude.InputEndsBlank = claudeInputEndsBlank
 	claude.ReadScrollbackDialog = claudeReadScrollbackDialog
 
 	omp := simple("omp")

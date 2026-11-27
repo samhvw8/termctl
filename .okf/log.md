@@ -1,5 +1,8 @@
 # Update Log
 
+## 2026-11-27
+* **Fix**: a typed line gets its Enter only after the text shows on the input line, and an Enter that became a new line is taken back with backspace before the next Enter. A notice to a Claude Code session that had just started a turn sat unsent for 37 minutes with a new line under it, while the sender was told it went: the busy TUI took text and Enter as one paste, and its stale screen read as an empty input line. Reported by Sam with a screenshot. Tests fail on the old code; checked on real Claude Code in iTerm2. See [message flow](architecture/layers.md#enter-after-the-text-shows). Runs: nothing new; a send takes about 0.25 s more while the text renders.
+
 ## 2026-11-23
 * **Release**: v0.12.1 — `msg --force` (alias `send`) and `task send --force` wipe a draft with ctrl-u before they type, instead of joining it to the message. Verified: `mise run check` with e2e. Runs: nothing new.
 * **Fix**: `msg --force` (alias `send`) and `task send --force` wipe a draft with ctrl-u before they type, as `slash --force` does. Before, the message was typed after the draft and both went as one line. A draft that ctrl-u cannot empty exits 4 with nothing typed. Tests: `TestMsgForceWipesDraftThenSends` (failed before the fix), `TestMsgForceWithoutDraftSendsNoCtrlU`. See [layers](architecture/layers.md#message-flow). Runs: nothing new.

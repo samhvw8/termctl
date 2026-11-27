@@ -180,8 +180,8 @@ func TestSubmitLooksAgainWhenTheTextShowsLate(t *testing.T) {
 	if in := r.b.State[r.t.ID].Input; in != "" {
 		t.Fatalf("the text stayed on the input line: %q", in)
 	}
-	if got := typed(r); len(got) != 3 || got[1] != "key:enter" || got[2] != "key:enter" {
-		t.Fatalf("expected a second Enter once the text showed: %v", got)
+	if got := typed(r); len(got) != 2 || got[1] != "key:enter" {
+		t.Fatalf("expected one Enter, pressed once the text showed: %v", got)
 	}
 }
 
@@ -229,8 +229,16 @@ func TestSubmitFirstTrustsABusyHarnessAtOnce(t *testing.T) {
 	if err := r.ops.SubmitFirst(r.t, "hello", &busy); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.b.Captures(r.t.ID); got != 1 {
-		t.Fatalf("expected one look, got %d", got)
+	looks := 0
+	for _, e := range r.b.Events {
+		if e.Kind == "key" {
+			looks = 0
+		} else if e.Kind == "capture" {
+			looks++
+		}
+	}
+	if looks != 1 {
+		t.Fatalf("expected one look after Enter, got %d", looks)
 	}
 }
 
@@ -292,5 +300,43 @@ func TestStartupWaitsForAStableScreenOf3s(t *testing.T) {
 	}
 	if c.typedAt < 3.0 {
 		t.Fatalf("typed at %.2f s, before %g s of stable screen", c.typedAt, startStable)
+	}
+}
+
+// A busy Claude Code took the text and the Enter 0.4 s later in one read, as a paste: the Enter became a new
+// line, and its screen still showed the empty input line from before, which read as sent (2026-11-27, a
+// notice unsent for 37 minutes on the superagent's input line). Enter waits for the text to show.
+func TestSubmitWaitsForTheTextBeforeEnter(t *testing.T) {
+	r := newOps(t)
+	r.t.Process = "claude"
+	r.b.LateInput, r.b.PasteEnter = 3, true
+	if err := r.ops.Submit(r.t, "[agent-ops from t2ce8d7] PROGRESS round 4", Profiles["claude"]); err != nil {
+		t.Fatal(err)
+	}
+	if in := r.b.State[r.t.ID].Input; in != "" {
+		t.Fatalf("the text stayed on the input line: %q", in)
+	}
+	if got := typed(r); len(got) != 2 || got[1] != "key:enter" {
+		t.Fatalf("keys: %v", got)
+	}
+}
+
+// An Enter that became a new line is taken back with backspace before the next Enter: another Enter on
+// that line could add a second new line.
+func TestSubmitRemovesANewLineBeforeTheNextEnter(t *testing.T) {
+	r := newOps(t)
+	r.t.Process = "claude"
+	r.b.NewlineEnters = 1
+	if err := r.ops.Submit(r.t, "hello", Profiles["claude"]); err != nil {
+		t.Fatal(err)
+	}
+	if in := r.b.State[r.t.ID].Input; in != "" {
+		t.Fatalf("the text stayed on the input line: %q", in)
+	}
+	if got := strings.Join(typed(r), " "); got != "text:hello key:enter key:backspace key:enter" {
+		t.Fatalf("keys: %s", got)
+	}
+	if claudeInputEndsBlank([]string{strings.Repeat("─", 40), "❯ ", strings.Repeat("─", 40)}) {
+		t.Fatal("an empty box read as ending blank")
 	}
 }
