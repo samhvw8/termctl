@@ -3,7 +3,7 @@ type: Playbook
 title: Cut a release
 description: Tag main; GitHub Actions tests, builds four archives and publishes the release.
 tags: [playbook, release]
-generated: { by: process:okf-update, at: '2026-11-20T04:55:00Z' }
+generated: { by: claude-code/opus-5.5, at: '2026-11-27T12:25:00Z' }
 ---
 
 # Steps
@@ -13,6 +13,7 @@ generated: { by: process:okf-update, at: '2026-11-20T04:55:00Z' }
 3. Push the tag: `git push origin v1.2.3`.
 4. Watch the run: `gh run watch`. The `release` workflow runs the tests on Linux, builds, and publishes.
 5. Check the install in an empty data directory: `MISE_DATA_DIR=$(mktemp -d) mise exec github:samhvw8/termctl@1.2.3 -- termctl --version`.
+6. Update the local install: `MISE_USE_VERSIONS_HOST=0 mise up github:samhvw8/termctl`. Without the variable, mise reads its version list from a shared versions server that lags new tags, and reports the old version as up to date (seen for v0.13.0 on 2026-11-27; `mise cache clear` does not help).
 
 To test the workflow without publishing, run `gh workflow run release.yml`. It runs the tests and the build, and skips the publish step.
 
