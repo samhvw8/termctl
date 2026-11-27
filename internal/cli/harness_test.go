@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -625,4 +627,34 @@ func activeLease(d *harness.Data, pane string) *harness.Lease {
 		}
 	}
 	return nil
+}
+
+// --accept-trust needs the user's roots file: none, or an empty one, refuses the start (exit 6) before any pane opens.
+func TestAcceptTrustNeedsTheUsersRootsFile(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "trust-roots")
+	t.Setenv("TERMCTL_TRUST_FILE", file)
+	for _, content := range []string{"", "# nothing yet\n"} {
+		if content != "" {
+			if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		e := newEnv(t)
+		for _, args := range [][]string{
+			{"spawn", "claude", "--accept-trust", "--cwd", "/w"},
+			{"task", "new", "claude", "--title", "x", "--brief", "y", "--cwd", "/w", "--accept-trust"},
+		} {
+			code, _, stderr := e.run(args...)
+			if code != term.CodeGuard || !strings.Contains(stderr, file) || len(e.b.Spawned) != 0 {
+				t.Fatalf("%q: %d %s %v", args, code, stderr, e.b.Spawned)
+			}
+		}
+	}
+	if err := os.WriteFile(file, []byte("~\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := newEnv(t).run("spawn", "claude", "--accept-trust"); code != term.CodeUsage || !strings.Contains(stderr, "too broad") {
+		t.Fatal(code, stderr)
+	}
 }

@@ -572,8 +572,9 @@ type NewOpts struct {
 	Timeout                                                      float64
 	ReviewOf                                                     string
 	Blind                                                        bool
-	Defer                                                        bool // a deferred job: ack once, no notice, closed on ok
-	SubDepth, TreeMax                                            int  // levels below it may start (0: a leaf); running tasks in its tree (0: inherit)
+	Defer                                                        bool        // a deferred job: ack once, no notice, closed on ok
+	SubDepth, TreeMax                                            int         // levels below it may start (0: a leaf); running tasks in its tree (0: inherit)
+	Trust                                                        *TrustRoots // --accept-trust: answer a folder-trust prompt under these roots
 }
 
 func holdsTask(d *Data, paneID string) bool {
@@ -844,7 +845,7 @@ func (t *Tasks) start(ops *Ops, owner *term.Pane, o NewOpts, j *Job, l *Lease, b
 	if pane == nil {
 		ref := t.Backend.ServerRef()
 		pane, err = ops.Spawn(o.Harness, o.Where, o.Cwd, SpawnOpts{
-			Label: id, Title: paneTitle(j, l), Command: o.Command, Timeout: o.Timeout, Owned: t.owned(),
+			Label: id, Title: paneTitle(j, l), Command: o.Command, Timeout: o.Timeout, Owned: t.owned(), Trust: o.Trust,
 			Wrap: func(cmd string) string { return SurvivingCommand(cmd, t.exitHook(id)) },
 			OnCreated: func(p *term.Pane) error {
 				if t.spawnHook != nil {

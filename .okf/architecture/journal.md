@@ -41,6 +41,7 @@ Before the journal, harness-ops kept its history in three places, and none of th
 | `close` | `Tasks.ClosePane` | `status: forced` with `--force` |
 | `key` | `Tasks.Keys` (`harness-ops key`) | the keys pressed, canonical names, space-separated; `scope` when sent to an attached Scope |
 | `answer`, `deny` | `Ops.Answer` (`answer`, `deny`; on a task, Scope, or started pane) | the dialog's question, choice made (`1. Yes` or `Esc`), fingerprint in `status`, and `scope` when on an attached Scope |
+| `trust` | `Ops.acceptTrust` (`spawn`, `task new` with `--accept-trust`) | `Yes, I trust this folder: <folder> (root <pattern>)`, with `error` when the keys did not take |
 | `scope.attach`, `scope.adopt` | `Tasks.Attach` | `scope` ID, `project`, `to` pane, `text` (`about`), and `status` (`live` or `takeover from <old owner>`) |
 | `scope.detach` | `Tasks.Detach` | `scope` ID, `project`, `to` pane, `status` (`unbound` or `dropped`) |
 | `scope.report` | `Tasks.Report` (`harness-ops report`) | one-line report `text`, `scope` ID, `from` worker pane, `to` lead |

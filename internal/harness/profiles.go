@@ -198,6 +198,9 @@ type Profile struct {
 	// ReadScrollbackDialog reads a dialog from the screen and the scrollback above it, for a request taller
 	// than the pane; nil for a harness that keeps no dialog there (agy draws on the alternate screen).
 	ReadScrollbackDialog func([]string) *Dialog
+	// ReadTrust reads the folder-trust prompt a harness shows at its first start in a folder; nil for a
+	// harness whose prompt was never captured, so --accept-trust leaves it to the user.
+	ReadTrust func([]string) *TrustScreen
 	// InputEndsBlank reports an input box whose last line is empty below text: an Enter became a new line.
 	InputEndsBlank func([]string) bool
 }
@@ -246,6 +249,7 @@ var Profiles = func() map[string]*Profile {
 		`--allowedTools Read Grep Glob 'Bash(git status *)' 'Bash(git diff *)' 'Bash(git log *)' 'Bash(git show *)' 'Bash(harness-ops task done *)'`
 	claude.BusyPatterns = []*regexp.Regexp{regexp.MustCompile(`(?i)esc to interrupt`), claudeWorking}
 	claude.ReadDialog = unlessInput(claudeReadDialog, claudeInput) // Claude Code 2.1.326: "Do you want to proceed?", "❯ 1. Yes"
+	claude.ReadTrust = readClaudeTrust
 	claude.InputEndsBlank = claudeInputEndsBlank
 	claude.ReadScrollbackDialog = claudeReadScrollbackDialog
 

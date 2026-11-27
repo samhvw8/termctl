@@ -475,6 +475,22 @@ func (o *Ops) waitIdle(p *term.Pane, timeout float64, prof *Profile, starting bo
 	}
 }
 
+// waitStarted waits for a starting harness to get idle. With trust roots, a folder-trust prompt that stops
+// the wait is answered once (acceptTrust) and the wait starts again; any other prompt still ends it.
+func (o *Ops) waitStarted(p *term.Pane, timeout float64, prof *Profile, cwd string, trust *TrustRoots) error {
+	err := o.waitIdle(p, timeout, prof, true)
+	if err == nil || trust == nil || prof.ReadTrust == nil || !hasCode(err, term.CodeTimeout) {
+		return err
+	}
+	if s, rerr := o.readTrust(p, prof); rerr != nil || s == nil {
+		return err
+	}
+	if err := o.acceptTrust(p, prof, cwd, trust); err != nil {
+		return err
+	}
+	return o.waitIdle(p, timeout, prof, true)
+}
+
 // screenTail is the last lines of a screen for an error message.
 func screenTail(lines []string) string {
 	tail := lines
@@ -699,6 +715,9 @@ type SpawnOpts struct {
 	OnCreated                                 func(*term.Pane) error
 	Wrap                                      func(string) string   // final form of the command; nil leaves it as is
 	Owned                                     func(*term.Pane) bool // panes the caller started, for --where auto; may be nil
+	// Trust: --accept-trust. A folder-trust prompt at startup is answered when the folder is under one of
+	// these roots; nil leaves every such prompt to the user.
+	Trust *TrustRoots
 }
 
 // hcEnvReset removes what a Herdr core started from an agent session passes on to everything it runs.
@@ -774,7 +793,7 @@ func (o *Ops) Spawn(harness, where, cwd string, opts SpawnOpts) (*term.Pane, err
 	e := o.entry("spawn", p)
 	e.Harness = harness
 	defer func() { o.Journal.Record(e) }()
-	if err := o.waitIdle(p, opts.Timeout, prof, true); err != nil {
+	if err := o.waitStarted(p, opts.Timeout, prof, cwd, opts.Trust); err != nil {
 		e.Error = err.Error()
 		return p, err
 	}

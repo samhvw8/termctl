@@ -27,7 +27,37 @@ type Screen struct {
 	Busy   int
 	Log    []string
 	Dialog *Dialog
+	Trust  *Trust
 	hidden int // captures left before typed text shows (LateInput)
+}
+
+// Trust is Claude Code's folder-trust prompt, drawn in place of the input box at startup (real screen of
+// 2026-11-18): "No, exit" selected, "Yes, I trust this folder" below it.
+type Trust struct {
+	Yes      bool // the selection is on "Yes, I trust this folder"
+	Accepted bool // Enter on Yes: the prompt is gone, the input line shows
+	Exited   bool // Enter on No, or Esc
+	Lag      int  // this many captures after an arrow key still show the old selection
+	shownYes bool
+	wait     int
+}
+
+// Waiting reports whether the prompt is on screen.
+func (t *Trust) Waiting() bool { return t != nil && !t.Accepted && !t.Exited }
+
+func (t *Trust) lines() []string {
+	if t.wait > 0 {
+		t.wait--
+	} else {
+		t.shownYes = t.Yes
+	}
+	no, yes := " ❯ No, exit", "   Yes, I trust this folder"
+	if t.shownYes {
+		no, yes = "   No, exit", " ❯ Yes, I trust this folder"
+	}
+	return []string{" Quick safety check: Is this a project you created or one you trust?",
+		" Claude Code'll be able to read, edit, and execute files here.", "", " Security guide", "",
+		no, yes, "", " Enter to confirm · Esc to cancel"}
 }
 
 // Dialog is a Claude Code permission dialog drawn in place of the input box until it is answered.
@@ -190,6 +220,17 @@ func (f *Fake) SendText(p *term.Pane, text string) error {
 func (f *Fake) SendKey(p *term.Pane, key string) error {
 	st := f.State[p.ID]
 	f.Events = append(f.Events, Event{Kind: "key", Pane: p.ID, Text: key, Busy: st.Busy})
+	if tr := st.Trust; tr.Waiting() {
+		switch key {
+		case "up", "down":
+			tr.Yes, tr.wait = key == "down", tr.Lag
+		case "enter":
+			tr.Accepted, tr.Exited = tr.Yes, !tr.Yes
+		case "escape":
+			tr.Exited = true
+		}
+		return nil
+	}
 	if d := st.Dialog; d.Waiting() {
 		switch {
 		case key == "up" && !d.NoArrows && d.Selected > 1:
@@ -271,6 +312,9 @@ func (f *Fake) capture(p *term.Pane) []string {
 	if st.hidden > 0 {
 		st.hidden--
 		input = ""
+	}
+	if tr := st.Trust; tr.Waiting() {
+		return append(screen, tr.lines()...)
 	}
 	if d := st.Dialog; d.Waiting() {
 		if d.HideFirst > 0 {

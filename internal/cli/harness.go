@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,7 +33,9 @@ Talk to coding-agent panes. Put options before the target: everything after the 
   clear [--force] [--timeout S] TARGET        /clear alone, then wait for idle
   wait-idle [--timeout S] TARGET
   spawn HARNESS [--where auto|tab|split|window] [--cwd D] [--prompt T | --prompt-file F] [--label L] [--command CMD] [--timeout S]
-                                              refused (exit 6) from a leaf task (--sub-depth 0)
+        [--accept-trust]                      refused (exit 6) from a leaf task (--sub-depth 0). --accept-trust (spawn and task new):
+                                              answer Claude Code's folder-trust prompt at startup when the folder is under a root
+                                              in ~/.config/termctl/trust-roots (the user's file; none: exit 6); otherwise it stays
   attach TARGET [--name SLUG] [--about TEXT] [--stall DUR] [--sub-depth K] [--tree-max M] [--notify] [--force]
                                               attach an existing pane as a durable Scope (silent by default; 0 task slots)
   detach TARGET [--keep] [--notify]           end supervision of a scope or pane without closing it (drops unless --keep)
@@ -58,7 +61,7 @@ Talk to coding-agent panes. Put options before the target: everything after the 
                                               TARGET: the pane, scope, lease, or task ID. A [persist] choice needs --persist
   deny TARGET --expect FP                     cancel the dialog FP with Esc; never presses Enter
   task new HARNESS --title T (--brief TEXT | --brief-file F) [--cwd D] [--where W] [--reuse TARGET] [--command CMD] [--max N] [--timeout S]
-           [--sub-depth K] [--tree-max M] [--defer [--wait-ack [S]]]
+           [--sub-depth K] [--tree-max M] [--defer [--wait-ack [S]]] [--accept-trust]
                                               --sub-depth K: levels below the task may start (default 0: a leaf, whose own task
                                               new exits 6); a sub-task may only narrow K and M. --tree-max M: running tasks in the
                                               tree (default 12 at the root, inherited). TERMCTL_MAX_DEPTH (default 4) caps the depth.
@@ -649,7 +652,7 @@ func (a *App) harness(argv []string) error {
 		fmt.Fprintf(a.Out, "idle: %s\n", pane.Address())
 		return nil
 	case "spawn":
-		p, err := parseArgs(rest, nil, []string{"--where", "--cwd", "--prompt", "--prompt-file", "--label", "--command", "--timeout"}, -1)
+		p, err := parseArgs(rest, []string{"--accept-trust"}, []string{"--where", "--cwd", "--prompt", "--prompt-file", "--label", "--command", "--timeout"}, -1)
 		if err != nil {
 			return err
 		}
@@ -675,7 +678,11 @@ func (a *App) harness(argv []string) error {
 		if err != nil {
 			return err
 		}
-		pane, err := tasks.Spawn(p.pos[0], where, cwdOr(p.vals["--cwd"]), harness.SpawnOpts{Prompt: p.vals["--prompt"], PromptFile: p.vals["--prompt-file"], Label: p.vals["--label"], Command: p.vals["--command"], Timeout: timeout})
+		trust, err := trustRoots(p.bools["--accept-trust"])
+		if err != nil {
+			return err
+		}
+		pane, err := tasks.Spawn(p.pos[0], where, cwdOr(p.vals["--cwd"]), harness.SpawnOpts{Prompt: p.vals["--prompt"], PromptFile: p.vals["--prompt-file"], Label: p.vals["--label"], Command: p.vals["--command"], Timeout: timeout, Trust: trust})
 		if err != nil {
 			return err
 		}
@@ -768,6 +775,35 @@ func (a *App) harness(argv []string) error {
 		return err
 	}
 	return term.UsageErr("unknown command '%s'", cmd)
+}
+
+// trustRootsFile is the user's list of folders whose trust prompt --accept-trust may answer:
+// $TERMCTL_TRUST_FILE, else $XDG_CONFIG_HOME/termctl/trust-roots, else ~/.config/termctl/trust-roots.
+func trustRootsFile() string {
+	if f := os.Getenv("TERMCTL_TRUST_FILE"); f != "" {
+		return f
+	}
+	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
+		return filepath.Join(x, "termctl", "trust-roots")
+	}
+	return filepath.Join(harness.ExpandHome("~"), ".config", "termctl", "trust-roots")
+}
+
+// trustRoots loads the roots for --accept-trust; without the flag it reads nothing. A missing or empty file
+// refuses the flag (exit 6): the grant is the user's to write.
+func trustRoots(accept bool) (*harness.TrustRoots, error) {
+	if !accept {
+		return nil, nil
+	}
+	file := trustRootsFile()
+	t, err := harness.LoadTrustRoots(file, harness.ExpandHome("~"))
+	if err != nil {
+		return nil, err
+	}
+	if t == nil || len(t.Roots) == 0 {
+		return nil, term.Errf(term.CodeGuard, "--accept-trust needs trust roots: the user writes the folders whose trust prompt may be answered, one absolute pattern per line (* matches within one folder name), to %s", file)
+	}
+	return t, nil
 }
 
 func cwdOr(cwd string) string {
@@ -993,7 +1029,7 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 	case "new":
 		rest = optionalValue(rest, "--wait-ack", "30", []string{"--title", "--brief", "--brief-file", "--cwd", "--where", "--reuse", "--command",
 			"--max", "--timeout", "--sub-depth", "--tree-max", "--backend", "-L"}, false)
-		bools = []string{"--defer"}
+		bools = []string{"--defer", "--accept-trust"}
 		vals = []string{"--title", "--brief", "--brief-file", "--cwd", "--where", "--reuse", "--command", "--max", "--timeout", "--wait-ack", "--sub-depth", "--tree-max"}
 	case "ls":
 		bools = []string{"--all", "--tree", "--json"}
@@ -1073,9 +1109,13 @@ func (a *App) task(rest, tail []string, dashed bool, o *Options) error {
 		if waitAck && !p.bools["--defer"] {
 			return term.UsageErr("--wait-ack goes with --defer")
 		}
+		trust, err := trustRoots(p.bools["--accept-trust"])
+		if err != nil {
+			return err
+		}
 		t, err := tasks.New(harness.NewOpts{Harness: p.pos[0], Title: p.vals["--title"], Brief: p.vals["--brief"], BriefFile: p.vals["--brief-file"],
 			Cwd: cwdOr(p.vals["--cwd"]), Where: p.vals["--where"], Reuse: p.vals["--reuse"], Command: p.vals["--command"], MaxTasks: maxTasks, Timeout: timeout,
-			Defer: p.bools["--defer"], SubDepth: subDepth, TreeMax: treeMax})
+			Defer: p.bools["--defer"], SubDepth: subDepth, TreeMax: treeMax, Trust: trust})
 		if err != nil {
 			return err
 		}
